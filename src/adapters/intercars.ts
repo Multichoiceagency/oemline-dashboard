@@ -67,7 +67,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
   private accessToken: string | null = null;
   private tokenExpiresAt = 0;
 
-  constructor(apiUrl: string, apiKey: string, timeout = 5000) {
+  constructor(apiUrl: string, apiKey: string, timeout = 10000) {
     super(apiUrl, apiKey, timeout);
 
     // apiKey is a JSON string of InterCars credentials
