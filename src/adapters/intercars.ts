@@ -151,12 +151,17 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
   /**
    * Direct fetch with long timeout for sync operations (bypasses circuit breaker).
    */
-  private async syncFetch(url: string, headers: Record<string, string>): Promise<Response> {
+  private async syncFetch(url: string, headers: Record<string, string>, opts?: { method?: string; body?: string }): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 60_000); // 60s for sync ops
 
     try {
-      return await fetch(url, { headers, signal: controller.signal });
+      return await fetch(url, {
+        method: opts?.method ?? "GET",
+        headers,
+        body: opts?.body,
+        signal: controller.signal,
+      });
     } finally {
       clearTimeout(timer);
     }
@@ -273,151 +278,144 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
   }
 
   /**
-   * Catalog sync: browse category tree, then fetch products per category.
-   * Uses long timeout and direct fetch (bypasses circuit breaker).
+   * InterCars "sync" fetches pricing and stock for products already in our DB.
+   *
+   * InterCars is NOT a catalog source — TecDoc provides the catalog.
+   * InterCars provides pricing and stock for products we can map to IC SKUs.
+   *
+   * Strategy:
+   * 1. Load products from DB that have article numbers
+   * 2. Use inventory/quote to get pricing and stock in batches of 30
+   * 3. Yield updated items with price/stock data
    */
-  async *syncCatalog(cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
+  async *syncCatalog(_cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
     try {
-      const headers = await this.authHeaders();
+      const { prisma } = await import("../lib/prisma.js");
 
-      // Get all top-level categories
-      const catUrl = `${this.apiUrl}/catalog/category`;
-      logger.info({ supplier: this.code, url: catUrl }, "Fetching InterCars catalog categories");
-
-      const catResponse = await this.syncFetch(catUrl, headers);
-
-      if (!catResponse.ok) {
-        const text = await catResponse.text().catch(() => "");
-        logger.error(
-          { status: catResponse.status, supplier: this.code, body: text.slice(0, 500) },
-          "InterCars catalog/category failed"
-        );
-        return;
-      }
-
-      const categoriesRaw = await catResponse.json();
-
-      // Log raw response structure for debugging
-      const rawKeys = typeof categoriesRaw === "object" && categoriesRaw !== null
-        ? Object.keys(categoriesRaw as Record<string, unknown>).slice(0, 10)
-        : [];
-      const isArray = Array.isArray(categoriesRaw);
-      logger.info(
-        { supplier: this.code, isArray, rawKeys, rawLength: isArray ? (categoriesRaw as unknown[]).length : 0 },
-        "InterCars catalog/category raw response"
-      );
-
-      // Try multiple response formats
-      let categories: CatalogCategory[] = [];
-      if (isArray) {
-        categories = categoriesRaw as CatalogCategory[];
-      } else if (categoriesRaw && typeof categoriesRaw === "object") {
-        const raw = categoriesRaw as Record<string, unknown>;
-        categories = (raw.categories ?? raw.data ?? raw.items ?? raw.result ?? []) as CatalogCategory[];
-      }
-
-      // Flatten category tree to get all category IDs (both parents and leaves)
-      const categoryIds = this.flattenCategories(categories);
+      // Get products from DB that need pricing (all active products)
+      const products = await prisma.productMap.findMany({
+        where: { status: "active" },
+        select: { sku: true, articleNo: true, ean: true, brand: { select: { name: true } } },
+        take: 10000,
+        orderBy: { updatedAt: "asc" },
+      });
 
       logger.info(
-        { supplier: this.code, categoryCount: categoryIds.length, firstCategories: categories.slice(0, 3).map(c => ({ id: c.id, name: c.name })) },
-        "InterCars catalog categories loaded"
+        { supplier: this.code, productCount: products.length },
+        "InterCars pricing sync starting"
       );
 
-      if (categoryIds.length === 0) {
-        logger.warn({ supplier: this.code }, "InterCars returned 0 categories");
-        return;
-      }
+      if (products.length === 0) return;
 
-      let startIdx = cursor ? parseInt(cursor, 10) : 0;
-      if (isNaN(startIdx)) startIdx = 0;
+      const BATCH_SIZE = 30; // InterCars API limit per request
+      let totalUpdated = 0;
+      let batchNum = 0;
 
-      let totalProducts = 0;
+      for (let i = 0; i < products.length; i += BATCH_SIZE) {
+        const batch = products.slice(i, i + BATCH_SIZE);
+        batchNum++;
 
-      for (let i = startIdx; i < categoryIds.length; i++) {
-        const categoryId = categoryIds[i];
-        let pageNumber = 0;
-        const pageSize = 50;
+        try {
+          const headers = await this.authHeaders();
+          headers["Content-Type"] = "application/json";
 
-        while (true) {
-          try {
-            const prodUrl = `${this.apiUrl}/catalog/products?categoryId=${encodeURIComponent(categoryId)}&pageNumber=${pageNumber}&pageSize=${pageSize}`;
-            const prodResponse = await this.syncFetch(prodUrl, headers);
+          // Build quote request using article numbers as SKUs
+          const lines = batch
+            .filter((p) => p.articleNo)
+            .map((p) => ({ sku: p.articleNo, quantity: 1 }));
 
-            if (!prodResponse.ok) {
-              if (prodResponse.status === 401) {
-                // Token expired, refresh
-                this.accessToken = null;
-                const newHeaders = await this.authHeaders();
-                Object.assign(headers, newHeaders);
-                continue; // retry with new token
+          if (lines.length === 0) continue;
+
+          const quoteUrl = `${this.apiUrl}/inventory/quote`;
+          const response = await this.syncFetch(quoteUrl, headers, {
+            method: "POST",
+            body: JSON.stringify({ lines }),
+          });
+
+          if (!response.ok) {
+            if (response.status === 401) {
+              this.accessToken = null;
+              // Retry once with new token
+              const newHeaders = await this.authHeaders();
+              newHeaders["Content-Type"] = "application/json";
+              const retry = await this.syncFetch(quoteUrl, newHeaders, {
+                method: "POST",
+                body: JSON.stringify({ lines }),
+              });
+              if (!retry.ok) continue;
+              const retryData = await retry.json();
+              const retryItems = this.processQuoteResponse(retryData, batch);
+              if (retryItems.length > 0) {
+                yield retryItems;
+                totalUpdated += retryItems.length;
               }
-              break;
+              continue;
             }
-
-            const prodData = (await prodResponse.json()) as {
-              products?: CatalogProduct[];
-              items?: CatalogProduct[];
-              totalPages?: number;
-            };
-
-            const products = prodData.products ?? prodData.items ?? [];
-            if (products.length === 0) break;
-
-            const items: SupplierCatalogItem[] = products.map((p) => ({
-              sku: p.sku ?? p.index ?? p.articleNumber ?? "",
-              brand: p.brand ?? "",
-              articleNo: p.articleNumber ?? "",
-              ean: p.ean ?? null,
-              tecdocId: p.tecdoc ?? null,
-              oem: null,
-              description: p.description ?? "",
-            }));
-
-            yield items;
-            totalProducts += items.length;
-
-            if (products.length < pageSize) break;
-            if (prodData.totalPages != null && pageNumber >= prodData.totalPages - 1) break;
-
-            pageNumber++;
-
-            // Small delay to avoid rate limiting
-            await new Promise((r) => setTimeout(r, 100));
-          } catch (err) {
-            logger.error({ err, supplier: this.code, categoryId, pageNumber }, "InterCars catalog page failed");
-            break;
+            continue;
           }
-        }
 
-        // Log progress every 20 categories
-        if (i % 20 === 0 || i === categoryIds.length - 1) {
-          logger.info(
-            { supplier: this.code, categoryIndex: i, totalCategories: categoryIds.length, totalProducts },
-            "InterCars sync progress"
-          );
+          const data = await response.json();
+          const items = this.processQuoteResponse(data, batch);
+
+          if (items.length > 0) {
+            yield items;
+            totalUpdated += items.length;
+          }
+
+          // Log progress every 10 batches
+          if (batchNum % 10 === 0) {
+            logger.info(
+              { supplier: this.code, batch: batchNum, totalBatches: Math.ceil(products.length / BATCH_SIZE), totalUpdated },
+              "InterCars pricing sync progress"
+            );
+          }
+
+          await new Promise((r) => setTimeout(r, 100));
+        } catch (err) {
+          logger.warn({ err, supplier: this.code, batch: batchNum }, "InterCars quote batch failed");
         }
       }
 
-      logger.info({ supplier: this.code, totalProducts }, "InterCars catalog sync completed");
+      logger.info({ supplier: this.code, totalUpdated }, "InterCars pricing sync completed");
     } catch (err) {
-      logger.error({ err, supplier: this.code }, "InterCars catalog sync failed");
+      logger.error({ err, supplier: this.code }, "InterCars pricing sync failed");
     }
   }
 
-  private flattenCategories(categories: CatalogCategory[]): string[] {
-    const ids: string[] = [];
+  private processQuoteResponse(
+    data: unknown,
+    batch: Array<{ sku: string; articleNo: string; ean: string | null; brand: { name: string } | null }>
+  ): SupplierCatalogItem[] {
+    const items: SupplierCatalogItem[] = [];
+    const responseItems = Array.isArray(data) ? data : ((data as Record<string, unknown>)?.lines ?? (data as Record<string, unknown>)?.items ?? []) as Array<{
+      sku?: string;
+      price?: { listPriceNet?: number; customerPriceNet?: number; currencyCode?: string };
+      lines?: Array<{ availability?: number }>;
+      name?: string;
+      description?: string;
+      eans?: string[];
+    }>;
 
-    for (const cat of categories) {
-      if (cat.id) {
-        // Add all categories, not just leaves
-        ids.push(cat.id);
-        if (cat.children && cat.children.length > 0) {
-          ids.push(...this.flattenCategories(cat.children));
-        }
-      }
+    for (const item of responseItems) {
+      if (!item.sku) continue;
+      const original = batch.find((b) => b.articleNo === item.sku);
+      if (!original) continue;
+
+      const price = item.price?.customerPriceNet ?? item.price?.listPriceNet ?? null;
+      const _stock = item.lines?.reduce((sum: number, l: { availability?: number }) => sum + (l.availability ?? 0), 0) ?? null;
+
+      items.push({
+        sku: original.sku,
+        brand: original.brand?.name ?? "",
+        articleNo: original.articleNo,
+        ean: original.ean ?? (item.eans?.[0] ?? null),
+        tecdocId: null,
+        oem: null,
+        description: item.name ?? item.description ?? "",
+      });
     }
 
-    return ids;
+    return items;
   }
+
 }
