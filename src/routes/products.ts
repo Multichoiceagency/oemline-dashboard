@@ -11,6 +11,8 @@ const listQuerySchema = z.object({
   brandId: z.coerce.number().int().optional(),
   supplier: z.string().optional(),
   brand: z.string().optional(),
+  hasImage: z.enum(["true", "false"]).optional(),
+  hasPrice: z.enum(["true", "false"]).optional(),
 });
 
 const createSchema = z.object({
@@ -145,7 +147,7 @@ export async function productRoutes(app: FastifyInstance) {
   // List products with search & filters
   app.get("/products", async (request) => {
     const query = listQuerySchema.parse(request.query);
-    const { page, limit, q, supplierId, brandId, supplier, brand } = query;
+    const { page, limit, q, supplierId, brandId, supplier, brand, hasImage, hasPrice } = query;
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = {};
@@ -159,6 +161,18 @@ export async function productRoutes(app: FastifyInstance) {
 
     if (brand) {
       where.brand = { code: brand };
+    }
+
+    if (hasImage === "true") {
+      where.imageUrl = { not: null };
+    } else if (hasImage === "false") {
+      where.imageUrl = null;
+    }
+
+    if (hasPrice === "true") {
+      where.price = { not: null };
+    } else if (hasPrice === "false") {
+      where.price = null;
     }
 
     if (q) {

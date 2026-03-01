@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useApi } from "@/lib/hooks";
-import { getCategories, updateCategory } from "@/lib/api";
+import { getCategories, updateCategory, syncTecDocCategories } from "@/lib/api";
 import type { Category } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,7 @@ import {
   Loader2,
   ArrowLeft,
   Pencil,
+  RefreshCw,
 } from "lucide-react";
 
 export default function CategoriesPage() {
@@ -57,6 +58,22 @@ export default function CategoriesPage() {
   const [editCategory, setEditCategory] = useState<Category | null>(null);
   const [editForm, setEditForm] = useState({ name: "", code: "" });
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ created: number; updated: number; linked: number; total: number } | null>(null);
+
+  const handleSyncCategories = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const result = await syncTecDocCategories();
+      setSyncResult(result);
+      refetch();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Category sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const handleSearch = () => {
     setSearchQuery(searchInput);
@@ -124,11 +141,28 @@ export default function CategoriesPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-3xl font-bold tracking-tight">Categories</h2>
-        <p className="text-muted-foreground">
-          Product categories and assembly groups from TecDoc
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Categories</h2>
+          <p className="text-muted-foreground">
+            Product categories and assembly groups from TecDoc
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {syncResult && (
+            <Badge variant="secondary" className="text-xs">
+              {syncResult.created} created, {syncResult.updated} updated, {syncResult.linked} linked
+            </Badge>
+          )}
+          <Button onClick={handleSyncCategories} disabled={syncing}>
+            {syncing ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            Sync from TecDoc
+          </Button>
+        </div>
       </div>
 
       {/* Search */}

@@ -68,6 +68,8 @@ export default function ProductsPage() {
   const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [supplierFilter, setSupplierFilter] = useState("all");
+  const [imageFilter, setImageFilter] = useState("all");
+  const [priceFilter, setPriceFilter] = useState("all");
   const [searchInput, setSearchInput] = useState("");
 
   const { data, loading, refetch } = useApi(
@@ -77,8 +79,10 @@ export default function ProductsPage() {
         limit: 50,
         q: searchQuery || undefined,
         supplier: supplierFilter !== "all" ? supplierFilter : undefined,
+        hasImage: imageFilter !== "all" ? imageFilter : undefined,
+        hasPrice: priceFilter !== "all" ? priceFilter : undefined,
       }),
-    [page, searchQuery, supplierFilter]
+    [page, searchQuery, supplierFilter, imageFilter, priceFilter]
   );
 
   const { data: suppliersData } = useApi(
@@ -359,6 +363,38 @@ export default function ProductsPage() {
                     {s.name}
                   </SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={imageFilter}
+              onValueChange={(v) => {
+                setImageFilter(v);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger className="w-[160px]">
+                <SelectValue placeholder="Images" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All images</SelectItem>
+                <SelectItem value="true">Has image</SelectItem>
+                <SelectItem value="false">No image</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={priceFilter}
+              onValueChange={(v) => {
+                setPriceFilter(v);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger className="w-[160px]">
+                <SelectValue placeholder="Price" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All prices</SelectItem>
+                <SelectItem value="true">Has price</SelectItem>
+                <SelectItem value="false">No price</SelectItem>
               </SelectContent>
             </Select>
           </div>

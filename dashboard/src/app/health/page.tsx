@@ -115,9 +115,9 @@ export default function HealthPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {Object.values(data.queues).reduce((sum, d) => sum + d, 0)}
+                  {Object.values(data.queues).reduce((sum, q) => sum + (typeof q === "number" ? q : (q.waiting + q.active)), 0)}
                 </div>
-                <p className="text-xs text-muted-foreground">Total pending jobs</p>
+                <p className="text-xs text-muted-foreground">Total active + pending jobs</p>
               </CardContent>
             </Card>
           </div>
@@ -175,22 +175,41 @@ export default function HealthPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Queue</TableHead>
-                    <TableHead>Pending Jobs</TableHead>
+                    <TableHead>Active</TableHead>
+                    <TableHead>Waiting</TableHead>
+                    <TableHead>Completed</TableHead>
+                    <TableHead>Failed</TableHead>
                     <TableHead>Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {Object.entries(data.queues).map(([queue, depth]) => (
-                    <TableRow key={queue}>
-                      <TableCell className="font-medium capitalize">{queue}</TableCell>
-                      <TableCell className="font-mono">{depth}</TableCell>
-                      <TableCell>
-                        <Badge variant={depth > 10 ? "warning" : depth > 0 ? "secondary" : "success"}>
-                          {depth === 0 ? "Idle" : depth > 10 ? "Busy" : "Processing"}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {Object.entries(data.queues).map(([queue, info]) => {
+                    const q = typeof info === "number"
+                      ? { waiting: info, active: 0, completed: 0, failed: 0 }
+                      : info;
+                    const isActive = q.active > 0;
+                    const hasPending = q.waiting > 0;
+                    return (
+                      <TableRow key={queue}>
+                        <TableCell className="font-medium capitalize">{queue}</TableCell>
+                        <TableCell className="font-mono">{q.active}</TableCell>
+                        <TableCell className="font-mono">{q.waiting}</TableCell>
+                        <TableCell className="font-mono text-muted-foreground">{q.completed}</TableCell>
+                        <TableCell className="font-mono">
+                          {q.failed > 0 ? (
+                            <span className="text-destructive">{q.failed}</span>
+                          ) : (
+                            q.failed
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={isActive ? "secondary" : hasPending ? "warning" : q.failed > 0 ? "destructive" : "success"}>
+                            {isActive ? "Processing" : hasPending ? "Queued" : "Idle"}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </CardContent>

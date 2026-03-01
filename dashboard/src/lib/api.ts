@@ -45,7 +45,7 @@ export interface HealthResponse {
   timestamp: string;
   checks: Record<string, string>;
   circuits: Record<string, { state: string; failures: number }>;
-  queues: Record<string, number>;
+  queues: Record<string, { waiting: number; active: number; completed: number; failed: number }>;
 }
 export const getHealth = () => apiFetch<HealthResponse>("/health");
 
@@ -344,6 +344,8 @@ export const getProducts = (params?: {
   q?: string;
   supplier?: string;
   brand?: string;
+  hasImage?: string;
+  hasPrice?: string;
 }) => {
   const qs = new URLSearchParams();
   if (params) {
@@ -509,6 +511,11 @@ export const updateCategory = (id: number, data: { name?: string; code?: string;
   apiFetch<Category>(`/api/categories/${id}`, {
     method: "PATCH",
     body: JSON.stringify(data),
+  });
+
+export const syncTecDocCategories = () =>
+  apiFetch<{ created: number; updated: number; linked: number; total: number }>("/api/categories/sync-tecdoc", {
+    method: "POST",
   });
 
 // File Uploads
