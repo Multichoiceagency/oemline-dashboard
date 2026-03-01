@@ -12,6 +12,7 @@ import {
   BarChart3,
   GitCompare,
   Activity,
+  Code2,
   Moon,
   Sun,
 } from "lucide-react";
@@ -27,6 +28,7 @@ const navItems = [
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/overrides", label: "Overrides", icon: GitCompare },
   { href: "/health", label: "System Health", icon: Activity },
+  { href: "/api-reference", label: "API Reference", icon: Code2 },
 ];
 
 export function Sidebar() {

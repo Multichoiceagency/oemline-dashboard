@@ -1,6 +1,7 @@
 import type { SupplierAdapter } from "./base.js";
 import { IntercarsAdapter } from "./intercars.js";
 import { PartsPointAdapter } from "./partspoint.js";
+import { TecDocAdapter } from "./tecdoc.js";
 import { prisma } from "../lib/prisma.js";
 import { decryptCredentials } from "../lib/crypto.js";
 import { logger } from "../lib/logger.js";
@@ -10,6 +11,7 @@ type AdapterConstructor = new (apiUrl: string, apiKey: string, timeout?: number)
 const ADAPTER_MAP: Record<string, AdapterConstructor> = {
   intercars: IntercarsAdapter,
   partspoint: PartsPointAdapter,
+  tecdoc: TecDocAdapter,
 };
 
 const adapterCache = new Map<string, { adapter: SupplierAdapter; updatedAt: Date }>();
