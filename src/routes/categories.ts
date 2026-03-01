@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { decryptCredentials } from "../lib/crypto.js";
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -106,7 +107,13 @@ export async function categoryRoutes(app: FastifyInstance) {
 
     let creds: { apiKey: string; providerId?: number; articleCountry?: string } = { apiKey: "" };
     try {
-      creds = JSON.parse(supplier.credentials as string);
+      let raw = supplier.credentials as string;
+      try {
+        raw = decryptCredentials(raw);
+      } catch {
+        // Fallback: credentials stored as plaintext
+      }
+      creds = JSON.parse(raw);
     } catch {
       return reply.code(500).send({ error: "Invalid TecDoc credentials" });
     }
