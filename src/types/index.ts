@@ -71,4 +71,5 @@ export interface SupplierCatalogItem {
   price?: number | null;
   currency?: string | null;
   stock?: number | null;
+  tecdocGroupId?: number | null;
 }

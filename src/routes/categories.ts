@@ -300,6 +300,100 @@ export async function categoryRoutes(app: FastifyInstance) {
     return { created, updated, linked, total: categories.length };
   });
 
+  // Batch-link existing products to categories via TecDoc API
+  app.post("/categories/link-products", async (request, reply) => {
+    const supplier = await prisma.supplier.findUnique({ where: { code: "tecdoc" } });
+    if (!supplier) {
+      return reply.code(404).send({ error: "TecDoc supplier not found" });
+    }
+
+    let creds: { apiKey: string; providerId?: number; articleCountry?: string } = { apiKey: "" };
+    try {
+      let raw = supplier.credentials as string;
+      try { raw = decryptCredentials(raw); } catch { /* plaintext fallback */ }
+      creds = JSON.parse(raw);
+    } catch {
+      return reply.code(500).send({ error: "Invalid TecDoc credentials" });
+    }
+
+    const tecdocUrl = supplier.baseUrl || "https://webservice.tecalliance.services/pegasus-3-0/services/TecdocToCatDLB.jsonEndpoint";
+
+    // Get all categories with tecdocId
+    const categories = await prisma.category.findMany({
+      where: { tecdocId: { not: null } },
+      select: { id: true, tecdocId: true, name: true },
+    });
+
+    logger.info({ categories: categories.length }, "Starting product-category linking");
+
+    let totalLinked = 0;
+    let groupsProcessed = 0;
+
+    for (const cat of categories) {
+      if (!cat.tecdocId) continue;
+      groupsProcessed++;
+
+      try {
+        // Fetch first page of articles for this assembly group
+        const response = await fetch(tecdocUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Api-Key": creds.apiKey,
+          },
+          body: JSON.stringify({
+            getArticles: {
+              articleCountry: creds.articleCountry ?? "NL",
+              providerId: creds.providerId ?? 22691,
+              lang: "nl",
+              perPage: 100,
+              page: 1,
+              assemblyGroupNodeIds: [cat.tecdocId],
+            },
+          }),
+        });
+
+        if (!response.ok) continue;
+
+        const data = (await response.json()) as Record<string, unknown>;
+        const articles = (data.articles ?? []) as Array<Record<string, unknown>>;
+
+        if (articles.length === 0) continue;
+
+        // Extract article numbers from this group
+        const articleNos = articles
+          .map((a) => a.articleNumber as string)
+          .filter(Boolean);
+
+        if (articleNos.length === 0) continue;
+
+        // Update products that match these article numbers
+        const result = await prisma.$executeRawUnsafe(
+          `UPDATE product_maps SET category_id = $1
+           WHERE supplier_id = $2 AND category_id IS NULL
+           AND article_no = ANY($3::text[])`,
+          cat.id,
+          supplier.id,
+          articleNos
+        );
+
+        totalLinked += Number(result);
+
+        if (groupsProcessed % 50 === 0) {
+          logger.info({ groupsProcessed, totalLinked, total: categories.length }, "Link progress");
+        }
+
+        // Rate limit: 200ms between API calls
+        await new Promise((r) => setTimeout(r, 200));
+      } catch (err) {
+        logger.warn({ err, categoryId: cat.id, tecdocId: cat.tecdocId }, "Failed to link category");
+      }
+    }
+
+    logger.info({ totalLinked, groupsProcessed }, "Product-category linking completed");
+    return { totalLinked, groupsProcessed, totalCategories: categories.length };
+  });
+
   // Update category
   app.patch("/categories/:id", async (request, reply) => {
     const { id } = request.params as { id: string };

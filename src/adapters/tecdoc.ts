@@ -357,7 +357,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
             const articles = result.articles ?? [];
             if (articles.length === 0) break;
 
-            const items = this.mapArticlesToCatalogItems(articles);
+            const items = this.mapArticlesToCatalogItems(articles, group.assemblyGroupNodeId);
             yield items;
             groupYielded += items.length;
             totalYielded += items.length;
@@ -454,7 +454,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
     logger.info({ supplier: this.code, totalYielded }, "TecDoc direct pagination sync completed");
   }
 
-  private mapArticlesToCatalogItems(articles: TecDocArticle[]): SupplierCatalogItem[] {
+  private mapArticlesToCatalogItems(articles: TecDocArticle[], groupNodeId?: number): SupplierCatalogItem[] {
     return articles.map((art) => {
       const ean = art.eanNumbers?.[0]?.eanNumber ?? null;
       const oemList = (art.oemNumbers ?? [])
@@ -477,6 +477,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
         images,
         genericArticle: art.genericArticleDescription ?? null,
         oemNumbers: oemList,
+        tecdocGroupId: groupNodeId ?? null,
       };
     });
   }
