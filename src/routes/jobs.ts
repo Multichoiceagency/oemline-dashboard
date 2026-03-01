@@ -76,6 +76,38 @@ export async function jobRoutes(app: FastifyInstance) {
     return { jobId: job.id, queue: "index", status: "queued" };
   });
 
+  // Debug: check Redis connection and raw job data
+  app.get("/jobs/debug", async () => {
+    const { redis } = await import("../lib/redis.js");
+
+    // Check raw Redis keys for BullMQ
+    const syncKeys = await redis.keys("bull:sync:*");
+    const matchKeys = await redis.keys("bull:match:*");
+    const indexKeys = await redis.keys("bull:index:*");
+
+    // Try to get a specific job
+    const job = await syncQueue.add("debug-test", { test: true });
+    const jobId = job.id;
+
+    // Wait 1 second and check
+    await new Promise((r) => setTimeout(r, 1000));
+
+    const retrieved = await syncQueue.getJob(jobId!);
+    const state = retrieved ? await retrieved.getState() : "not-found";
+
+    // Cleanup test job
+    if (retrieved) await retrieved.remove();
+
+    return {
+      redisConnected: true,
+      syncKeys: syncKeys.length,
+      matchKeys: matchKeys.length,
+      indexKeys: indexKeys.length,
+      testJob: { id: jobId, state, exists: !!retrieved },
+      sampleKeys: syncKeys.slice(0, 10),
+    };
+  });
+
   // Trigger sync for ALL active suppliers
   app.post("/jobs/sync-all", async () => {
     const { prisma } = await import("../lib/prisma.js");
