@@ -78,7 +78,14 @@ export async function intercarsRoutes(app: FastifyInstance) {
       return { imported: 0 };
     }
 
-    const values = validRows.map((r) =>
+    // Deduplicate by towKod within the batch (keep last occurrence)
+    const deduped = new Map<string, CsvRow>();
+    for (const r of validRows) {
+      deduped.set(r.towKod, r);
+    }
+    const uniqueRows = Array.from(deduped.values());
+
+    const values = uniqueRows.map((r) =>
       Prisma.sql`(
         ${r.towKod}, ${r.icIndex ?? ""}, ${r.articleNumber}, ${r.manufacturer},
         ${r.tecdocProd}, ${r.description ?? ""}, ${r.ean}, ${r.weight},
@@ -104,7 +111,7 @@ export async function intercarsRoutes(app: FastifyInstance) {
         blocked_return = EXCLUDED.blocked_return
     `;
 
-    return { imported: validRows.length };
+    return { imported: uniqueRows.length };
   });
 
   // Lookup: find IC mapping for a brand + article number
