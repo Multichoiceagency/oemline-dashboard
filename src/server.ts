@@ -6,7 +6,7 @@ import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
 import { config } from "./config.js";
 import { logger } from "./lib/logger.js";
-import { disconnectPrisma, validateConnection } from "./lib/prisma.js";
+import { disconnectPrisma, validateConnection, ensureNormalizedIndexes } from "./lib/prisma.js";
 import { disconnectRedis, redis } from "./lib/redis.js";
 import { ensureProductsIndex } from "./lib/meilisearch.js";
 import { healthRoutes } from "./routes/health.js";
@@ -124,6 +124,10 @@ try {
 
   await loadAdaptersFromDb().catch((err) => {
     logger.warn({ err }, "Failed to load adapters from DB — no suppliers active");
+  });
+
+  await ensureNormalizedIndexes().catch((err) => {
+    logger.warn({ err }, "Normalized index creation failed — matching may be slower");
   });
 
   await ensureBucket().catch((err) => {

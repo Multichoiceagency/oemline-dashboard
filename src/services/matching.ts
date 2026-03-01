@@ -2,6 +2,11 @@ import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import type { MatchMethod, MatchResult } from "../types/index.js";
 
+/** Strip all non-alphanumeric chars and uppercase for robust comparison */
+function normalize(s: string): string {
+  return s.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+}
+
 interface MatchQuery {
   supplierId: number;
   brandId?: number;
@@ -108,18 +113,42 @@ async function matchByTecdocId(params: MatchQuery): Promise<MatchResult | null> 
 async function matchByEan(params: MatchQuery): Promise<MatchResult | null> {
   if (!params.ean) return null;
 
-  const product = await prisma.productMap.findFirst({
+  // Try exact match first (uses index)
+  let product = await prisma.productMap.findFirst({
     where: {
       supplierId: params.supplierId,
       ean: params.ean,
     },
   });
 
-  if (!product) return null;
+  if (product) {
+    return {
+      supplier: params.supplierId.toString(),
+      sku: product.sku,
+      method: "ean",
+      confidence: 0.95,
+      timestamp: new Date(),
+    };
+  }
+
+  // Fallback: normalized EAN (strip non-digits, right-pad to compare)
+  const normalizedEan = params.ean.replace(/[^0-9]/g, "");
+  if (!normalizedEan || normalizedEan.length < 8) return null;
+
+  const rows = await prisma.$queryRawUnsafe<Array<{ sku: string }>>(
+    `SELECT sku FROM product_maps
+     WHERE supplier_id = $1
+       AND regexp_replace(ean, '[^0-9]', '', 'g') = $2
+     LIMIT 1`,
+    params.supplierId,
+    normalizedEan
+  );
+
+  if (rows.length === 0) return null;
 
   return {
     supplier: params.supplierId.toString(),
-    sku: product.sku,
+    sku: rows[0].sku,
     method: "ean",
     confidence: 0.9,
     timestamp: new Date(),
@@ -129,7 +158,8 @@ async function matchByEan(params: MatchQuery): Promise<MatchResult | null> {
 async function matchByBrandArticle(params: MatchQuery): Promise<MatchResult | null> {
   if (!params.brandId || !params.articleNo) return null;
 
-  const product = await prisma.productMap.findFirst({
+  // Try exact match first (uses index)
+  let product = await prisma.productMap.findFirst({
     where: {
       supplierId: params.supplierId,
       brandId: params.brandId,
@@ -137,11 +167,35 @@ async function matchByBrandArticle(params: MatchQuery): Promise<MatchResult | nu
     },
   });
 
-  if (!product) return null;
+  if (product) {
+    return {
+      supplier: params.supplierId.toString(),
+      sku: product.sku,
+      method: "brand_article",
+      confidence: 0.90,
+      timestamp: new Date(),
+    };
+  }
+
+  // Fallback: normalized match (strips all non-alphanumeric chars)
+  const normalizedArticle = normalize(params.articleNo);
+  if (!normalizedArticle) return null;
+
+  const rows = await prisma.$queryRawUnsafe<Array<{ sku: string }>>(
+    `SELECT sku FROM product_maps
+     WHERE supplier_id = $1 AND brand_id = $2
+       AND UPPER(regexp_replace(article_no, '[^a-zA-Z0-9]', '', 'g')) = $3
+     LIMIT 1`,
+    params.supplierId,
+    params.brandId,
+    normalizedArticle
+  );
+
+  if (rows.length === 0) return null;
 
   return {
     supplier: params.supplierId.toString(),
-    sku: product.sku,
+    sku: rows[0].sku,
     method: "brand_article",
     confidence: 0.85,
     timestamp: new Date(),
@@ -151,18 +205,42 @@ async function matchByBrandArticle(params: MatchQuery): Promise<MatchResult | nu
 async function matchByOem(params: MatchQuery): Promise<MatchResult | null> {
   if (!params.oem) return null;
 
-  const product = await prisma.productMap.findFirst({
+  // Try exact match first (uses index)
+  let product = await prisma.productMap.findFirst({
     where: {
       supplierId: params.supplierId,
       oem: params.oem,
     },
   });
 
-  if (!product) return null;
+  if (product) {
+    return {
+      supplier: params.supplierId.toString(),
+      sku: product.sku,
+      method: "oem",
+      confidence: 0.80,
+      timestamp: new Date(),
+    };
+  }
+
+  // Fallback: normalized OEM (strip non-alphanumeric)
+  const normalizedOem = normalize(params.oem);
+  if (!normalizedOem) return null;
+
+  const rows = await prisma.$queryRawUnsafe<Array<{ sku: string }>>(
+    `SELECT sku FROM product_maps
+     WHERE supplier_id = $1
+       AND UPPER(regexp_replace(oem, '[^a-zA-Z0-9]', '', 'g')) = $2
+     LIMIT 1`,
+    params.supplierId,
+    normalizedOem
+  );
+
+  if (rows.length === 0) return null;
 
   return {
     supplier: params.supplierId.toString(),
-    sku: product.sku,
+    sku: rows[0].sku,
     method: "oem",
     confidence: 0.75,
     timestamp: new Date(),

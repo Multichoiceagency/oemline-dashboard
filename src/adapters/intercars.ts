@@ -308,7 +308,9 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       let totalMatched = 0;
 
       while (true) {
-        // Find products matched to IC via brand + article_number (case-insensitive, ignore dashes)
+        // Find products matched to IC via brand + article_number
+        // Normalization: strip ALL non-alphanumeric chars (spaces, dashes, dots, slashes, underscores) + uppercase
+        // Handles: "0 986 478 684" = "0986478684", "10.0341-0113" = "10034101134", "ATE/UAT" = "ATEUAT"
         const matchedProducts = await prisma.$queryRawUnsafe<Array<{
           product_id: number;
           sku: string;
@@ -331,8 +333,8 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
           FROM product_maps pm
           JOIN brands b ON b.id = pm.brand_id
           JOIN intercars_mappings im ON
-            UPPER(REPLACE(REPLACE(im.manufacturer, ' ', ''), '-', '')) = UPPER(REPLACE(REPLACE(b.name, ' ', ''), '-', ''))
-            AND UPPER(REPLACE(REPLACE(im.article_number, ' ', ''), '-', '')) = UPPER(REPLACE(REPLACE(pm.article_no, ' ', ''), '-', ''))
+            UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+            AND UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
           WHERE pm.status = 'active'
           ORDER BY pm.id
           LIMIT ${PAGE_SIZE} OFFSET ${offset}`
