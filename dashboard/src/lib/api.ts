@@ -3,13 +3,19 @@ const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
+  const headers: Record<string, string> = {
+    "X-API-Key": API_KEY,
+  };
+  // Only set Content-Type for requests with a body
+  if (init?.body) {
+    headers["Content-Type"] = "application/json";
+  }
   let res: Response;
   try {
     res = await fetch(url, {
       ...init,
       headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": API_KEY,
+        ...headers,
         ...init?.headers,
       },
     });
