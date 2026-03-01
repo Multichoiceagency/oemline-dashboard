@@ -13,6 +13,7 @@ import {
   GitCompare,
   Activity,
   Code2,
+  Package,
   Moon,
   Sun,
 } from "lucide-react";
@@ -22,6 +23,7 @@ import { Button } from "@/components/ui/button";
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/suppliers", label: "Suppliers", icon: Truck },
+  { href: "/products", label: "Products", icon: Package },
   { href: "/search", label: "Product Search", icon: Search },
   { href: "/tecdoc", label: "TecDoc", icon: BookOpen },
   { href: "/unmatched", label: "Unmatched", icon: AlertTriangle },

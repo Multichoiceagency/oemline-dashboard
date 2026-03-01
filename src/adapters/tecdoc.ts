@@ -229,10 +229,95 @@ export class TecDocAdapter extends BaseSupplierAdapter {
   }
 
   /**
-   * TecDoc catalog sync not applicable — TecDoc is used as a reference catalog.
+   * TecDoc catalog sync — fetches brands via getBrands,
+   * then iterates top brands to fetch articles and populate the local DB.
+   * Cursor format: "brandIndex:page"
    */
-  async *syncCatalog(_cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
-    // TecDoc serves as a reference catalog, not synced locally
-    return;
+  async *syncCatalog(cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
+    try {
+      // Get top/favoured brands
+      const brandsResult = (await this.tecdocRequest("getBrands", {
+        favouredList: 1,
+      })) as { brands?: Array<{ brandId?: number; brandName?: string }> };
+
+      const brands = brandsResult.brands ?? [];
+      if (brands.length === 0) {
+        logger.warn({ supplier: this.code }, "TecDoc getBrands returned no brands");
+        return;
+      }
+
+      logger.info({ supplier: this.code, brandCount: brands.length }, "TecDoc brands loaded for sync");
+
+      let startBrandIdx = 0;
+      let startPage = 1;
+      if (cursor) {
+        const parts = cursor.split(":");
+        startBrandIdx = parseInt(parts[0] ?? "0", 10) || 0;
+        startPage = parseInt(parts[1] ?? "1", 10) || 1;
+      }
+
+      for (let bi = startBrandIdx; bi < brands.length; bi++) {
+        const brand = brands[bi];
+        if (!brand.brandId) continue;
+
+        let page = bi === startBrandIdx ? startPage : 1;
+        const perPage = 100;
+        let hasMore = true;
+        let emptyPages = 0;
+
+        while (hasMore) {
+          try {
+            const result = (await this.tecdocRequest(
+              "getArticleDirectSearchAllNumbersWithState",
+              {
+                articleNumber: "",
+                numberType: 0,
+                searchExact: false,
+                brandNo: brand.brandId,
+                perPage,
+                page,
+              }
+            )) as DirectSearchResponse;
+
+            const articles = result.data?.array ?? [];
+
+            if (articles.length === 0) {
+              emptyPages++;
+              if (emptyPages >= 2) hasMore = false;
+              break;
+            }
+
+            const items: SupplierCatalogItem[] = articles.map((a) => ({
+              sku: String(a.articleId ?? 0),
+              brand: a.brandName ?? brand.brandName ?? "",
+              articleNo: a.articleNo ?? a.articleSearchNo ?? "",
+              ean: null,
+              tecdocId: String(a.articleId ?? 0),
+              oem: null,
+              description: a.articleName ?? "",
+            }));
+
+            yield items;
+
+            if (articles.length < perPage) {
+              hasMore = false;
+            } else if (page >= 10) {
+              // Cap at 10 pages per brand to avoid overloading
+              hasMore = false;
+            } else {
+              page++;
+            }
+          } catch (err) {
+            logger.warn(
+              { err, supplier: this.code, brandId: brand.brandId, page },
+              "TecDoc brand article fetch failed, skipping brand"
+            );
+            hasMore = false;
+          }
+        }
+      }
+    } catch (err) {
+      logger.error({ err, supplier: this.code }, "TecDoc catalog sync failed");
+    }
   }
 }

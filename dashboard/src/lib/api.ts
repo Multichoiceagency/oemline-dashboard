@@ -271,6 +271,102 @@ export const createOverride = (data: {
     body: JSON.stringify(data),
   });
 
+// Products
+export interface Product {
+  id: number;
+  supplierId: number;
+  brandId: number;
+  sku: string;
+  articleNo: string;
+  ean: string | null;
+  tecdocId: string | null;
+  oem: string | null;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+  supplier: { id: number; name: string; code: string };
+  brand: { id: number; name: string; code: string };
+}
+
+export interface ProductsResponse {
+  items: Product[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export interface ProductStats {
+  total: number;
+  recentlyUpdated: number;
+  bySupplier: Array<{
+    supplier: { id: number; name: string; code: string };
+    count: number;
+  }>;
+}
+
+export const getProducts = (params?: {
+  page?: number;
+  limit?: number;
+  q?: string;
+  supplier?: string;
+  brand?: string;
+}) => {
+  const qs = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    });
+  }
+  return apiFetch<ProductsResponse>(`/api/products?${qs}`);
+};
+
+export const getProduct = (id: number) =>
+  apiFetch<Product>(`/api/products/${id}`);
+
+export const updateProduct = (id: number, data: Record<string, unknown>) =>
+  apiFetch<Product>(`/api/products/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+
+export const deleteProduct = (id: number) =>
+  apiFetch<{ success: boolean }>(`/api/products/${id}`, {
+    method: "DELETE",
+  });
+
+export const importProducts = (data: {
+  supplierId: number;
+  brandId?: number;
+  items: Array<{
+    sku: string;
+    articleNo: string;
+    ean?: string | null;
+    tecdocId?: string | null;
+    oem?: string | null;
+    description?: string;
+  }>;
+}) =>
+  apiFetch<{ imported: number; updated: number; total: number }>(
+    "/api/products/import",
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    }
+  );
+
+export const getProductStats = () =>
+  apiFetch<ProductStats>("/api/products/stats");
+
+export const populateTecDoc = (queries: string[]) =>
+  apiFetch<{ imported: number; updated: number; total: number }>(
+    "/api/tecdoc/populate",
+    {
+      method: "POST",
+      body: JSON.stringify({ queries }),
+    }
+  );
+
 // Match Logs / Trace
 export interface MatchLog {
   id: string;

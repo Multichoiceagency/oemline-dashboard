@@ -15,6 +15,7 @@ import { overrideRoutes } from "./routes/override.js";
 import { logsRoutes } from "./routes/logs.js";
 import { supplierRoutes } from "./routes/suppliers.js";
 import { tecdocRoutes } from "./routes/tecdoc.js";
+import { productRoutes } from "./routes/products.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 
 const app = Fastify({
@@ -73,6 +74,7 @@ await app.register(searchRoutes, { prefix: "/api" });
 await app.register(overrideRoutes, { prefix: "/api" });
 await app.register(logsRoutes, { prefix: "/api" });
 await app.register(tecdocRoutes, { prefix: "/api" });
+await app.register(productRoutes, { prefix: "/api" });
 
 app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
   request.log.error({ err: error, reqId: request.id }, "Request error");
