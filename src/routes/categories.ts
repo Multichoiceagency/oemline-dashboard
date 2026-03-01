@@ -149,15 +149,74 @@ export async function categoryRoutes(app: FastifyInstance) {
     }
 
     const data = (await response.json()) as Record<string, unknown>;
-    const agf = data.assemblyGroupFacets;
+
+    // Debug: log top-level keys to understand response shape
+    const topKeys = Object.keys(data);
+    logger.info({ topKeys }, "TecDoc API response top-level keys");
+
+    // The response may be nested under a wrapper key (e.g., "getArticlesResponse" or the first key)
+    let responseBody = data;
+    if (!data.assemblyGroupFacets && topKeys.length === 1) {
+      const inner = data[topKeys[0]];
+      if (inner && typeof inner === "object") {
+        responseBody = inner as Record<string, unknown>;
+        logger.info({ innerKeys: Object.keys(responseBody) }, "TecDoc API inner response keys");
+      }
+    }
+
+    const agf = responseBody.assemblyGroupFacets;
+    logger.info(
+      {
+        agfType: agf === null ? "null" : typeof agf,
+        agfIsArray: Array.isArray(agf),
+        agfKeys: agf && typeof agf === "object" && !Array.isArray(agf) ? Object.keys(agf as Record<string, unknown>) : undefined,
+        agfLength: Array.isArray(agf) ? agf.length : undefined,
+        agfSample: Array.isArray(agf) && agf.length > 0 ? JSON.stringify(agf[0]).slice(0, 300) : undefined,
+      },
+      "TecDoc assemblyGroupFacets debug"
+    );
 
     let rawFacets: Array<Record<string, unknown>> = [];
     if (Array.isArray(agf)) {
       rawFacets = agf;
     } else if (agf && typeof agf === "object") {
       const obj = agf as Record<string, unknown>;
-      rawFacets = (obj.counts ?? obj.array ?? obj.data ?? []) as Array<Record<string, unknown>>;
-      if (!Array.isArray(rawFacets)) rawFacets = [];
+      // Try all possible nested array keys
+      const possibleArrays = ["counts", "array", "data", "groups", "items", "assemblyGroups"];
+      for (const key of possibleArrays) {
+        if (Array.isArray(obj[key])) {
+          rawFacets = obj[key] as Array<Record<string, unknown>>;
+          logger.info({ key, count: rawFacets.length }, "Found facets under nested key");
+          break;
+        }
+      }
+      if (rawFacets.length === 0) {
+        // Last resort: try all keys that are arrays
+        for (const [key, val] of Object.entries(obj)) {
+          if (Array.isArray(val) && val.length > 0) {
+            rawFacets = val as Array<Record<string, unknown>>;
+            logger.info({ key, count: rawFacets.length }, "Found facets under fallback key");
+            break;
+          }
+        }
+      }
+    }
+
+    // If still 0, return debug info
+    if (rawFacets.length === 0) {
+      const debugSample = JSON.stringify(data).slice(0, 2000);
+      logger.warn({ debugSample }, "No assembly group facets found");
+      return {
+        created: 0, updated: 0, linked: 0, total: 0,
+        debug: {
+          topKeys,
+          responseBodyKeys: Object.keys(responseBody),
+          agfType: agf === null ? "null" : typeof agf,
+          agfIsArray: Array.isArray(agf),
+          agfKeys: agf && typeof agf === "object" && !Array.isArray(agf) ? Object.keys(agf as Record<string, unknown>) : undefined,
+          responseSample: debugSample,
+        },
+      };
     }
 
     // Recursive flatten with parent tracking
