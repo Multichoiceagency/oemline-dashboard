@@ -108,6 +108,123 @@ export async function jobRoutes(app: FastifyInstance) {
     };
   });
 
+  // Import InterCars CSV mapping
+  app.post("/jobs/import-intercars-csv", async (request) => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { logger } = await import("../lib/logger.js");
+    const { createReadStream } = await import("node:fs");
+    const { createInterface } = await import("node:readline");
+    const { Prisma } = await import("@prisma/client");
+    const { resolve } = await import("node:path");
+
+    const body = (request.body ?? {}) as { csvPath?: string };
+    const csvPath = body.csvPath || resolve(process.cwd(), "ProductInformation_2026-02-26.csv");
+
+    // Create table if not exists
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS intercars_mappings (
+        id SERIAL PRIMARY KEY,
+        tow_kod TEXT NOT NULL UNIQUE,
+        ic_index TEXT NOT NULL DEFAULT '',
+        article_number TEXT NOT NULL DEFAULT '',
+        manufacturer TEXT NOT NULL DEFAULT '',
+        tecdoc_prod INTEGER,
+        description TEXT NOT NULL DEFAULT '',
+        ean TEXT,
+        weight DOUBLE PRECISION,
+        blocked_return BOOLEAN NOT NULL DEFAULT false,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS idx_ic_map_mfr_art ON intercars_mappings (manufacturer, article_number)`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS idx_ic_map_art ON intercars_mappings (article_number)`);
+
+    // Stream the CSV in background
+    const BATCH_SIZE = 5000;
+    let batch: Array<{ towKod: string; icIndex: string; articleNumber: string; manufacturer: string; tecdocProd: number | null; description: string; ean: string | null; weight: number | null; blockedReturn: boolean }> = [];
+    let totalImported = 0;
+
+    const stream = createReadStream(csvPath, { encoding: "utf-8" });
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
+    let lineNum = 0;
+
+    for await (const line of rl) {
+      lineNum++;
+      if (lineNum === 1) continue;
+
+      const parts = line.split(";");
+      if (parts.length < 15) continue;
+
+      const towKod = parts[0]?.trim();
+      if (!towKod) continue;
+
+      const articleNumber = parts[4]?.trim() ?? "";
+      const manufacturer = parts[5]?.trim() ?? "";
+      if (!articleNumber || !manufacturer) continue;
+
+      const tecdocProdRaw = parseInt(parts[3]?.trim() ?? "", 10);
+      const weightStr = parts[9]?.trim().replace(",", ".") ?? "";
+      const weightVal = parseFloat(weightStr);
+
+      batch.push({
+        towKod,
+        icIndex: parts[1]?.trim() ?? "",
+        articleNumber,
+        manufacturer,
+        tecdocProd: isNaN(tecdocProdRaw) ? null : tecdocProdRaw,
+        description: parts[7]?.trim() || parts[6]?.trim() || "",
+        ean: parts[8]?.trim().split(",")[0] || null,
+        weight: isNaN(weightVal) ? null : weightVal,
+        blockedReturn: parts[14]?.trim().toLowerCase() === "true",
+      });
+
+      if (batch.length >= BATCH_SIZE) {
+        const values = batch.map((r) =>
+          Prisma.sql`(${r.towKod}, ${r.icIndex}, ${r.articleNumber}, ${r.manufacturer}, ${r.tecdocProd}, ${r.description}, ${r.ean}, ${r.weight}, ${r.blockedReturn}, NOW())`
+        );
+        await prisma.$executeRaw`
+          INSERT INTO intercars_mappings (tow_kod, ic_index, article_number, manufacturer, tecdoc_prod, description, ean, weight, blocked_return, created_at)
+          VALUES ${Prisma.join(values)}
+          ON CONFLICT (tow_kod) DO UPDATE SET
+            ic_index = EXCLUDED.ic_index, article_number = EXCLUDED.article_number,
+            manufacturer = EXCLUDED.manufacturer, tecdoc_prod = EXCLUDED.tecdoc_prod,
+            description = CASE WHEN EXCLUDED.description != '' THEN EXCLUDED.description ELSE intercars_mappings.description END,
+            ean = COALESCE(EXCLUDED.ean, intercars_mappings.ean),
+            weight = COALESCE(EXCLUDED.weight, intercars_mappings.weight),
+            blocked_return = EXCLUDED.blocked_return
+        `;
+        totalImported += batch.length;
+        batch = [];
+
+        if (totalImported % 50000 === 0) {
+          logger.info({ totalImported }, "InterCars CSV import progress");
+        }
+      }
+    }
+
+    if (batch.length > 0) {
+      const values = batch.map((r) =>
+        Prisma.sql`(${r.towKod}, ${r.icIndex}, ${r.articleNumber}, ${r.manufacturer}, ${r.tecdocProd}, ${r.description}, ${r.ean}, ${r.weight}, ${r.blockedReturn}, NOW())`
+      );
+      await prisma.$executeRaw`
+        INSERT INTO intercars_mappings (tow_kod, ic_index, article_number, manufacturer, tecdoc_prod, description, ean, weight, blocked_return, created_at)
+        VALUES ${Prisma.join(values)}
+        ON CONFLICT (tow_kod) DO UPDATE SET
+          ic_index = EXCLUDED.ic_index, article_number = EXCLUDED.article_number,
+          manufacturer = EXCLUDED.manufacturer, tecdoc_prod = EXCLUDED.tecdoc_prod,
+          description = CASE WHEN EXCLUDED.description != '' THEN EXCLUDED.description ELSE intercars_mappings.description END,
+          ean = COALESCE(EXCLUDED.ean, intercars_mappings.ean),
+          weight = COALESCE(EXCLUDED.weight, intercars_mappings.weight),
+          blocked_return = EXCLUDED.blocked_return
+      `;
+      totalImported += batch.length;
+    }
+
+    logger.info({ totalImported, totalLines: lineNum }, "InterCars CSV import completed");
+
+    return { imported: totalImported, totalLines: lineNum };
+  });
+
   // Trigger sync for ALL active suppliers
   app.post("/jobs/sync-all", async () => {
     const { prisma } = await import("../lib/prisma.js");

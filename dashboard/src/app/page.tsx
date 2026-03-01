@@ -1,7 +1,8 @@
 "use client";
 
 import { useApi, useInterval } from "@/lib/hooks";
-import { getHealth, getSuppliers, getUnmatched, getMatchLogs } from "@/lib/api";
+import { getHealth, getSuppliers, getUnmatched, getMatchLogs, getJobsStatus } from "@/lib/api";
+import type { QueueStatus } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatNumber } from "@/lib/utils";
@@ -14,15 +15,75 @@ import {
   Server,
   Search,
   Clock,
+  Play,
+  Pause,
+  RotateCw,
 } from "lucide-react";
+
+function QueueCard({ name, status }: { name: string; status: QueueStatus }) {
+  const isActive = status.active > 0;
+  const hasScheduled = status.repeatableJobs > 0;
+  const total = status.active + status.waiting + status.prioritized + status.wait + status.delayed;
+
+  return (
+    <div className="rounded-lg border p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold capitalize">{name}</span>
+        {isActive ? (
+          <Badge variant="default" className="bg-green-600">
+            <Play className="mr-1 h-3 w-3" /> Running
+          </Badge>
+        ) : hasScheduled ? (
+          <Badge variant="secondary">
+            <RotateCw className="mr-1 h-3 w-3" /> Scheduled
+          </Badge>
+        ) : (
+          <Badge variant="outline">
+            <Pause className="mr-1 h-3 w-3" /> Idle
+          </Badge>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">Active</span>
+          <span className="font-mono font-medium">{status.active}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">Pending</span>
+          <span className="font-mono font-medium">{total - status.active}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">Completed</span>
+          <span className="font-mono font-medium text-green-600">{formatNumber(status.completed)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">Failed</span>
+          <span className={`font-mono font-medium ${status.failed > 0 ? "text-red-500" : ""}`}>{status.failed}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">Delayed</span>
+          <span className="font-mono font-medium">{status.delayed}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">Repeatable</span>
+          <span className="font-mono font-medium">{status.repeatableJobs}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function DashboardPage() {
   const health = useApi(() => getHealth(), []);
+  const jobs = useApi(() => getJobsStatus(), []);
   const suppliers = useApi(() => getSuppliers({ limit: 100 }), []);
   const unmatched = useApi(() => getUnmatched({ limit: 1, resolved: "false" }), []);
   const matchLogs = useApi(() => getMatchLogs({ limit: 1 }), []);
 
-  useInterval(() => health.refetch(), 15000);
+  useInterval(() => {
+    health.refetch();
+    jobs.refetch();
+  }, 10000);
 
   const activeSuppliers = suppliers.data?.items.filter((s) => s.active).length ?? 0;
   const totalProducts = suppliers.data?.items.reduce((sum, s) => sum + (s._count?.productMaps ?? 0), 0) ?? 0;
@@ -83,7 +144,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* System Status */}
+      {/* System Status + Queue Status */}
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
@@ -126,46 +187,20 @@ export default function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Activity className="h-5 w-5" /> Queue Status
+              <Activity className="h-5 w-5" /> Background Queues
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {health.loading ? (
+            {jobs.loading ? (
               <p className="text-sm text-muted-foreground">Loading...</p>
-            ) : health.error ? (
-              <p className="text-sm text-destructive">Failed to load</p>
-            ) : health.data ? (
-              <>
-                {Object.entries(health.data.queues).map(([queue, depth]) => (
-                  <div key={queue} className="flex items-center justify-between">
-                    <span className="text-sm font-medium capitalize">{queue} Queue</span>
-                    <Badge variant={depth > 0 ? "warning" : "secondary"}>
-                      {depth} pending
-                    </Badge>
-                  </div>
-                ))}
-                {health.data.circuits && Object.keys(health.data.circuits).length > 0 && (
-                  <div className="pt-2 border-t">
-                    <p className="text-sm font-medium mb-2">Circuit Breakers</p>
-                    {Object.entries(health.data.circuits).map(([name, info]) => (
-                      <div key={name} className="flex items-center justify-between">
-                        <span className="text-sm">{name}</span>
-                        <Badge
-                          variant={
-                            info.state === "closed"
-                              ? "success"
-                              : info.state === "open"
-                              ? "destructive"
-                              : "warning"
-                          }
-                        >
-                          {info.state} ({info.failures} failures)
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
+            ) : jobs.error ? (
+              <p className="text-sm text-destructive">Failed to load: {jobs.error}</p>
+            ) : jobs.data ? (
+              <div className="space-y-3">
+                <QueueCard name="Sync" status={jobs.data.sync} />
+                <QueueCard name="Match" status={jobs.data.match} />
+                <QueueCard name="Index" status={jobs.data.index} />
+              </div>
             ) : null}
           </CardContent>
         </Card>

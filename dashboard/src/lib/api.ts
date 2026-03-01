@@ -49,6 +49,28 @@ export interface HealthResponse {
 }
 export const getHealth = () => apiFetch<HealthResponse>("/health");
 
+// Jobs Status
+export interface QueueStatus {
+  name: string;
+  active: number;
+  completed: number;
+  delayed: number;
+  failed: number;
+  paused: number;
+  waiting: number;
+  prioritized: number;
+  wait: number;
+  repeatableJobs: number;
+}
+
+export interface JobsStatusResponse {
+  sync: QueueStatus;
+  match: QueueStatus;
+  index: QueueStatus;
+}
+
+export const getJobsStatus = () => apiFetch<JobsStatusResponse>("/api/jobs/status");
+
 // Suppliers
 export interface Supplier {
   id: string;
@@ -442,6 +464,12 @@ export const getBrands = (params?: { page?: number; limit?: number; q?: string }
 export const getBrand = (id: number) =>
   apiFetch<Brand & { productMaps: Product[] }>(`/api/brands/${id}`);
 
+export const updateBrand = (id: number, data: { name?: string; logoUrl?: string | null; tecdocId?: number | null }) =>
+  apiFetch<Brand>(`/api/brands/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+
 // Categories
 export interface Category {
   id: number;
@@ -476,6 +504,12 @@ export const getCategories = (params?: { page?: number; limit?: number; parentId
 
 export const getCategory = (id: number) =>
   apiFetch<Category & { parent: { id: number; name: string; code: string } | null; products: Product[] }>(`/api/categories/${id}`);
+
+export const updateCategory = (id: number, data: { name?: string; code?: string; parentId?: number | null }) =>
+  apiFetch<Category>(`/api/categories/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
 
 export const getMatchLogs = (params?: {
   page?: number;

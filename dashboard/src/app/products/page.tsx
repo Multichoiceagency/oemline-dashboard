@@ -50,9 +50,11 @@ import {
   Eye,
   X,
   Loader2,
+  ImageIcon,
+  DollarSign,
+  Boxes,
 } from "lucide-react";
 
-// Common OEM numbers for auto parts to seed the database
 const SEED_QUERIES = [
   "04E115561H", "1K0615301AC", "5Q0698151", "03L115466", "1K0615601AC",
   "04E115561T", "WHT005437", "JZW698151", "03C115561H", "1K0407366B",
@@ -92,6 +94,12 @@ export default function ProductsPage() {
     tecdocId: "",
     oem: "",
     description: "",
+    imageUrl: "",
+    price: "",
+    currency: "EUR",
+    stock: "",
+    genericArticle: "",
+    status: "active",
   });
   const [saving, setSaving] = useState(false);
 
@@ -142,6 +150,12 @@ export default function ProductsPage() {
       tecdocId: product.tecdocId ?? "",
       oem: product.oem ?? "",
       description: product.description,
+      imageUrl: product.imageUrl ?? "",
+      price: product.price != null ? String(product.price) : "",
+      currency: product.currency ?? "EUR",
+      stock: product.stock != null ? String(product.stock) : "",
+      genericArticle: product.genericArticle ?? "",
+      status: product.status,
     });
   };
 
@@ -156,6 +170,12 @@ export default function ProductsPage() {
         tecdocId: editForm.tecdocId || null,
         oem: editForm.oem || null,
         description: editForm.description,
+        imageUrl: editForm.imageUrl || null,
+        price: editForm.price ? parseFloat(editForm.price) : null,
+        currency: editForm.currency || "EUR",
+        stock: editForm.stock ? parseInt(editForm.stock, 10) : null,
+        genericArticle: editForm.genericArticle || null,
+        status: editForm.status,
       });
       setSelectedProduct(updated);
       setEditMode(false);
@@ -214,7 +234,6 @@ export default function ProductsPage() {
     if (importResults.length === 0) return;
     setImporting(true);
     try {
-      // Group by supplier
       const supplierMap = new Map<string, typeof importResults>();
       for (const r of importResults) {
         const existing = supplierMap.get(r.supplier) || [];
@@ -261,7 +280,7 @@ export default function ProductsPage() {
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Products</h2>
           <p className="text-muted-foreground">
-            All products in the database with full details
+            All products with images, pricing, and stock information
           </p>
         </div>
         <div className="flex gap-2">
@@ -358,14 +377,13 @@ export default function ProductsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>SKU</TableHead>
+                  <TableHead className="w-[50px]">Image</TableHead>
                   <TableHead>Article No.</TableHead>
                   <TableHead>Brand</TableHead>
                   <TableHead>Supplier</TableHead>
-                  <TableHead>EAN</TableHead>
-                  <TableHead>TecDoc ID</TableHead>
-                  <TableHead>OEM</TableHead>
                   <TableHead>Description</TableHead>
+                  <TableHead>Price</TableHead>
+                  <TableHead>Stock</TableHead>
                   <TableHead>Updated</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -373,17 +391,21 @@ export default function ProductsPage() {
               <TableBody>
                 {data.items.map((p) => (
                   <TableRow key={p.id} className="cursor-pointer hover:bg-muted/50">
-                    <TableCell
-                      className="font-mono text-xs"
-                      onClick={() => openDetail(p)}
-                    >
-                      {p.sku}
+                    <TableCell onClick={() => openDetail(p)}>
+                      {p.imageUrl ? (
+                        <img src={p.imageUrl} alt="" className="h-10 w-10 object-contain rounded border" />
+                      ) : (
+                        <div className="h-10 w-10 bg-muted rounded flex items-center justify-center border">
+                          <Package className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell
                       className="font-mono text-xs font-medium"
                       onClick={() => openDetail(p)}
                     >
-                      {p.articleNo}
+                      <div>{p.articleNo}</div>
+                      <div className="text-muted-foreground">{p.sku}</div>
                     </TableCell>
                     <TableCell onClick={() => openDetail(p)}>
                       <Badge variant="outline">{p.brand?.name ?? "-"}</Badge>
@@ -392,28 +414,28 @@ export default function ProductsPage() {
                       <Badge variant="secondary">{p.supplier?.name ?? "-"}</Badge>
                     </TableCell>
                     <TableCell
-                      className="font-mono text-xs"
-                      onClick={() => openDetail(p)}
-                    >
-                      {p.ean ?? "-"}
-                    </TableCell>
-                    <TableCell
-                      className="font-mono text-xs"
-                      onClick={() => openDetail(p)}
-                    >
-                      {p.tecdocId ?? "-"}
-                    </TableCell>
-                    <TableCell
-                      className="font-mono text-xs"
-                      onClick={() => openDetail(p)}
-                    >
-                      {p.oem ?? "-"}
-                    </TableCell>
-                    <TableCell
-                      className="max-w-[200px] truncate"
+                      className="max-w-[200px] truncate text-sm"
                       onClick={() => openDetail(p)}
                     >
                       {p.description || "-"}
+                    </TableCell>
+                    <TableCell onClick={() => openDetail(p)}>
+                      {p.price != null ? (
+                        <span className="font-mono text-xs font-medium">
+                          {p.currency ?? "EUR"} {p.price.toFixed(2)}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
+                    <TableCell onClick={() => openDetail(p)}>
+                      {p.stock != null ? (
+                        <Badge variant={p.stock > 0 ? "success" : "destructive"}>
+                          {p.stock}
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {formatDate(p.updatedAt)}
@@ -491,7 +513,7 @@ export default function ProductsPage() {
           }
         }}
       >
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Package className="h-5 w-5" />
@@ -506,34 +528,51 @@ export default function ProductsPage() {
             <div className="space-y-4 py-4">
               {editMode ? (
                 <>
+                  {/* Image section */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium flex items-center gap-2">
+                      <ImageIcon className="h-4 w-4" /> Product Image URL
+                    </label>
+                    <Input
+                      value={editForm.imageUrl}
+                      onChange={(e) => setEditForm({ ...editForm, imageUrl: e.target.value })}
+                      placeholder="https://example.com/product.jpg"
+                    />
+                    {editForm.imageUrl && (
+                      <div className="flex items-center gap-4 p-3 rounded-lg border bg-muted/50">
+                        <span className="text-xs text-muted-foreground">Preview:</span>
+                        <img
+                          src={editForm.imageUrl}
+                          alt="Preview"
+                          className="h-20 w-20 object-contain rounded"
+                        />
+                      </div>
+                    )}
+                  </div>
+
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <label className="text-sm font-medium">SKU</label>
                       <Input
                         value={editForm.sku}
-                        onChange={(e) =>
-                          setEditForm({ ...editForm, sku: e.target.value })
-                        }
+                        onChange={(e) => setEditForm({ ...editForm, sku: e.target.value })}
                       />
                     </div>
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Article No.</label>
                       <Input
                         value={editForm.articleNo}
-                        onChange={(e) =>
-                          setEditForm({ ...editForm, articleNo: e.target.value })
-                        }
+                        onChange={(e) => setEditForm({ ...editForm, articleNo: e.target.value })}
                       />
                     </div>
                   </div>
+
                   <div className="grid grid-cols-3 gap-4">
                     <div className="space-y-2">
                       <label className="text-sm font-medium">EAN</label>
                       <Input
                         value={editForm.ean}
-                        onChange={(e) =>
-                          setEditForm({ ...editForm, ean: e.target.value })
-                        }
+                        onChange={(e) => setEditForm({ ...editForm, ean: e.target.value })}
                         placeholder="None"
                       />
                     </div>
@@ -541,9 +580,7 @@ export default function ProductsPage() {
                       <label className="text-sm font-medium">TecDoc ID</label>
                       <Input
                         value={editForm.tecdocId}
-                        onChange={(e) =>
-                          setEditForm({ ...editForm, tecdocId: e.target.value })
-                        }
+                        onChange={(e) => setEditForm({ ...editForm, tecdocId: e.target.value })}
                         placeholder="None"
                       />
                     </div>
@@ -551,70 +588,186 @@ export default function ProductsPage() {
                       <label className="text-sm font-medium">OEM Number</label>
                       <Input
                         value={editForm.oem}
-                        onChange={(e) =>
-                          setEditForm({ ...editForm, oem: e.target.value })
-                        }
+                        onChange={(e) => setEditForm({ ...editForm, oem: e.target.value })}
                         placeholder="None"
                       />
                     </div>
                   </div>
+
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Description</label>
                     <Input
                       value={editForm.description}
-                      onChange={(e) =>
-                        setEditForm({ ...editForm, description: e.target.value })
-                      }
+                      onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
                     />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Generic Article</label>
+                    <Input
+                      value={editForm.genericArticle}
+                      onChange={(e) => setEditForm({ ...editForm, genericArticle: e.target.value })}
+                      placeholder="e.g. Brake Pad Set"
+                    />
+                  </div>
+
+                  {/* Pricing & Stock */}
+                  <div className="rounded-lg border p-4 space-y-4">
+                    <h4 className="text-sm font-semibold flex items-center gap-2">
+                      <DollarSign className="h-4 w-4" /> Pricing & Stock
+                    </h4>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Price</label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={editForm.price}
+                          onChange={(e) => setEditForm({ ...editForm, price: e.target.value })}
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Currency</label>
+                        <Select
+                          value={editForm.currency}
+                          onValueChange={(v) => setEditForm({ ...editForm, currency: v })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="EUR">EUR</SelectItem>
+                            <SelectItem value="USD">USD</SelectItem>
+                            <SelectItem value="GBP">GBP</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Stock</label>
+                        <Input
+                          type="number"
+                          value={editForm.stock}
+                          onChange={(e) => setEditForm({ ...editForm, stock: e.target.value })}
+                          placeholder="0"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Status */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Status</label>
+                    <Select
+                      value={editForm.status}
+                      onValueChange={(v) => setEditForm({ ...editForm, status: v })}
+                    >
+                      <SelectTrigger className="w-[200px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="inactive">Inactive</SelectItem>
+                        <SelectItem value="discontinued">Discontinued</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </>
               ) : (
                 <>
+                  {/* Product images */}
+                  {(selectedProduct.imageUrl || (selectedProduct.images && selectedProduct.images.length > 0)) && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                        <ImageIcon className="h-3 w-3" /> Product Images
+                      </p>
+                      <div className="flex gap-3 flex-wrap">
+                        {selectedProduct.imageUrl && (
+                          <img
+                            src={selectedProduct.imageUrl}
+                            alt={selectedProduct.articleNo}
+                            className="h-24 w-24 object-contain rounded-lg border p-1"
+                          />
+                        )}
+                        {selectedProduct.images
+                          ?.filter((img) => img !== selectedProduct.imageUrl)
+                          .map((img, i) => (
+                            <img
+                              key={i}
+                              src={img}
+                              alt=""
+                              className="h-24 w-24 object-contain rounded-lg border p-1"
+                            />
+                          ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-4">
                     <DetailField label="ID" value={String(selectedProduct.id)} />
                     <DetailField label="SKU" value={selectedProduct.sku} mono />
-                    <DetailField
-                      label="Article No."
-                      value={selectedProduct.articleNo}
-                      mono
-                    />
-                    <DetailField
-                      label="Brand"
-                      value={selectedProduct.brand?.name ?? "-"}
-                    />
-                    <DetailField
-                      label="Supplier"
-                      value={selectedProduct.supplier?.name ?? "-"}
-                    />
-                    <DetailField
-                      label="EAN"
-                      value={selectedProduct.ean ?? "-"}
-                      mono
-                    />
-                    <DetailField
-                      label="TecDoc ID"
-                      value={selectedProduct.tecdocId ?? "-"}
-                      mono
-                    />
-                    <DetailField
-                      label="OEM Number"
-                      value={selectedProduct.oem ?? "-"}
-                      mono
-                    />
+                    <DetailField label="Article No." value={selectedProduct.articleNo} mono />
+                    <DetailField label="Brand" value={selectedProduct.brand?.name ?? "-"} />
+                    <DetailField label="Supplier" value={selectedProduct.supplier?.name ?? "-"} />
+                    <DetailField label="EAN" value={selectedProduct.ean ?? "-"} mono />
+                    <DetailField label="TecDoc ID" value={selectedProduct.tecdocId ?? "-"} mono />
+                    <DetailField label="OEM Number" value={selectedProduct.oem ?? "-"} mono />
                   </div>
-                  <DetailField
-                    label="Description"
-                    value={selectedProduct.description || "-"}
-                  />
+
+                  <DetailField label="Description" value={selectedProduct.description || "-"} />
+                  {selectedProduct.genericArticle && (
+                    <DetailField label="Generic Article" value={selectedProduct.genericArticle} />
+                  )}
+
+                  {/* Pricing & Stock display */}
+                  <div className="rounded-lg border p-4 grid grid-cols-3 gap-4">
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                        <DollarSign className="h-3 w-3" /> Price
+                      </p>
+                      <p className="text-lg font-bold font-mono">
+                        {selectedProduct.price != null
+                          ? `${selectedProduct.currency ?? "EUR"} ${selectedProduct.price.toFixed(2)}`
+                          : "-"}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                        <Boxes className="h-3 w-3" /> Stock
+                      </p>
+                      <p className="text-lg font-bold">
+                        {selectedProduct.stock != null ? (
+                          <Badge variant={selectedProduct.stock > 0 ? "success" : "destructive"} className="text-base">
+                            {selectedProduct.stock} units
+                          </Badge>
+                        ) : "-"}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground">Status</p>
+                      <Badge variant={selectedProduct.status === "active" ? "success" : "secondary"}>
+                        {selectedProduct.status}
+                      </Badge>
+                    </div>
+                  </div>
+
+                  {/* OEM Numbers list */}
+                  {selectedProduct.oemNumbers && selectedProduct.oemNumbers.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-muted-foreground">OEM Numbers</p>
+                      <div className="flex gap-1 flex-wrap">
+                        {selectedProduct.oemNumbers.map((oem, i) => (
+                          <Badge key={i} variant="outline" className="font-mono text-xs">
+                            {oem}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-4">
-                    <DetailField
-                      label="Created"
-                      value={formatDate(selectedProduct.createdAt)}
-                    />
-                    <DetailField
-                      label="Updated"
-                      value={formatDate(selectedProduct.updatedAt)}
-                    />
+                    <DetailField label="Created" value={formatDate(selectedProduct.createdAt)} />
+                    <DetailField label="Updated" value={formatDate(selectedProduct.updatedAt)} />
                   </div>
                 </>
               )}
@@ -624,11 +777,7 @@ export default function ProductsPage() {
           <DialogFooter>
             {editMode ? (
               <>
-                <Button
-                  variant="outline"
-                  onClick={() => setEditMode(false)}
-                  disabled={saving}
-                >
+                <Button variant="outline" onClick={() => setEditMode(false)} disabled={saving}>
                   Cancel
                 </Button>
                 <Button onClick={handleSave} disabled={saving}>
@@ -640,9 +789,7 @@ export default function ProductsPage() {
               <>
                 <Button
                   variant="outline"
-                  onClick={() =>
-                    selectedProduct && handleDelete(selectedProduct)
-                  }
+                  onClick={() => selectedProduct && handleDelete(selectedProduct)}
                 >
                   <Trash2 className="mr-2 h-4 w-4" /> Delete
                 </Button>

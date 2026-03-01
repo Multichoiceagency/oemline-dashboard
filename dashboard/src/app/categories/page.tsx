@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useApi } from "@/lib/hooks";
-import { getCategories } from "@/lib/api";
+import { getCategories, updateCategory } from "@/lib/api";
 import type { Category } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { formatNumber } from "@/lib/utils";
 import {
   FolderTree,
@@ -25,6 +32,7 @@ import {
   X,
   Loader2,
   ArrowLeft,
+  Pencil,
 } from "lucide-react";
 
 export default function CategoriesPage() {
@@ -34,7 +42,7 @@ export default function CategoriesPage() {
   const [parentId, setParentId] = useState<number | undefined>(undefined);
   const [breadcrumbs, setBreadcrumbs] = useState<Array<{ id: number; name: string }>>([]);
 
-  const { data, loading } = useApi(
+  const { data, loading, refetch } = useApi(
     () =>
       getCategories({
         page,
@@ -44,6 +52,11 @@ export default function CategoriesPage() {
       }),
     [page, parentId, searchQuery]
   );
+
+  // Edit dialog
+  const [editCategory, setEditCategory] = useState<Category | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", code: "" });
+  const [saving, setSaving] = useState(false);
 
   const handleSearch = () => {
     setSearchQuery(searchInput);
@@ -84,6 +97,29 @@ export default function CategoriesPage() {
       setParentId(newBreadcrumbs[newBreadcrumbs.length - 1].id);
     }
     setPage(1);
+  };
+
+  const openEdit = (cat: Category, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditCategory(cat);
+    setEditForm({ name: cat.name, code: cat.code });
+  };
+
+  const handleSave = async () => {
+    if (!editCategory) return;
+    setSaving(true);
+    try {
+      await updateCategory(editCategory.id, {
+        name: editForm.name,
+        code: editForm.code,
+      });
+      setEditCategory(null);
+      refetch();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to update category");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -220,11 +256,16 @@ export default function CategoriesPage() {
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      {(cat._count?.children ?? 0) > 0 && (
-                        <Button variant="ghost" size="sm">
-                          <ChevronRight className="h-4 w-4" />
+                      <div className="flex justify-end gap-1">
+                        <Button variant="ghost" size="sm" onClick={(e) => openEdit(cat, e)}>
+                          <Pencil className="h-3 w-3" />
                         </Button>
-                      )}
+                        {(cat._count?.children ?? 0) > 0 && (
+                          <Button variant="ghost" size="sm">
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -249,6 +290,45 @@ export default function CategoriesPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Edit Category Dialog */}
+      <Dialog open={!!editCategory} onOpenChange={(open) => { if (!open) setEditCategory(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="h-5 w-5" /> Edit Category
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Name</label>
+              <Input
+                value={editForm.name}
+                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Code</label>
+              <Input
+                value={editForm.code}
+                onChange={(e) => setEditForm({ ...editForm, code: e.target.value })}
+              />
+            </div>
+            <div className="text-sm text-muted-foreground">
+              TecDoc ID: {editCategory?.tecdocId ?? "-"}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditCategory(null)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={saving}>
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

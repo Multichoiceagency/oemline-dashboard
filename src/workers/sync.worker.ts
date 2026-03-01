@@ -107,11 +107,15 @@ async function batchUpsertProducts(supplierId: number, items: SupplierCatalogIte
     const images = JSON.stringify(item.images ?? []);
     const genericArticle = item.genericArticle ?? null;
     const oemNumbers = JSON.stringify(item.oemNumbers ?? []);
+    const price = item.price ?? null;
+    const currency = item.currency ?? "EUR";
+    const stock = item.stock ?? null;
 
     return Prisma.sql`(
       ${supplierId}, ${brandId}, ${item.sku}, ${item.articleNo},
       ${item.ean}, ${item.tecdocId}, ${item.oem}, ${item.description},
       ${imageUrl}, ${images}::jsonb, ${genericArticle}, ${oemNumbers}::jsonb,
+      ${price}, ${currency}, ${stock},
       'active', NOW(), NOW()
     )`;
   });
@@ -121,6 +125,7 @@ async function batchUpsertProducts(supplierId: number, items: SupplierCatalogIte
       supplier_id, brand_id, sku, article_no,
       ean, tecdoc_id, oem, description,
       image_url, images, generic_article, oem_numbers,
+      price, currency, stock,
       status, created_at, updated_at
     )
     VALUES ${Prisma.join(values)}
@@ -136,6 +141,9 @@ async function batchUpsertProducts(supplierId: number, items: SupplierCatalogIte
       images = CASE WHEN EXCLUDED.images != '[]'::jsonb THEN EXCLUDED.images ELSE product_maps.images END,
       generic_article = COALESCE(EXCLUDED.generic_article, product_maps.generic_article),
       oem_numbers = CASE WHEN EXCLUDED.oem_numbers != '[]'::jsonb THEN EXCLUDED.oem_numbers ELSE product_maps.oem_numbers END,
+      price = COALESCE(EXCLUDED.price, product_maps.price),
+      currency = COALESCE(EXCLUDED.currency, product_maps.currency),
+      stock = COALESCE(EXCLUDED.stock, product_maps.stock),
       updated_at = NOW()
   `;
 }

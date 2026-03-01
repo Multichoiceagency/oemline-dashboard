@@ -19,3 +19,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+ProductInformation_2026-02-26.csv
+*.csv
+*.csv.zip

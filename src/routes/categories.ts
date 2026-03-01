@@ -9,6 +9,12 @@ const listQuerySchema = z.object({
   q: z.string().optional(),
 });
 
+const updateCategorySchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  code: z.string().min(1).max(100).optional(),
+  parentId: z.number().int().nullable().optional(),
+});
+
 export async function categoryRoutes(app: FastifyInstance) {
   // List categories (tree or flat)
   app.get("/categories", async (request) => {
@@ -88,5 +94,26 @@ export async function categoryRoutes(app: FastifyInstance) {
     }
 
     return category;
+  });
+
+  // Update category
+  app.patch("/categories/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = updateCategorySchema.parse(request.body);
+
+    const existing = await prisma.category.findUnique({
+      where: { id: parseInt(id, 10) },
+    });
+
+    if (!existing) {
+      return reply.code(404).send({ error: "Category not found" });
+    }
+
+    const updated = await prisma.category.update({
+      where: { id: parseInt(id, 10) },
+      data: body,
+    });
+
+    return updated;
   });
 }

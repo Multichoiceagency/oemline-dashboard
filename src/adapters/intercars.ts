@@ -44,24 +44,6 @@ interface PricingItem {
   currency?: string;
 }
 
-interface CatalogCategory {
-  id?: string;
-  name?: string;
-  children?: CatalogCategory[];
-}
-
-interface CatalogProduct {
-  sku?: string;
-  index?: string;
-  brand?: string;
-  articleNumber?: string;
-  tecdoc?: string;
-  tecdocProd?: number;
-  description?: string;
-  ean?: string;
-  blockedReturn?: boolean;
-}
-
 export class IntercarsAdapter extends BaseSupplierAdapter {
   readonly name = "InterCars";
   readonly code = "intercars";
@@ -73,7 +55,6 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
   constructor(apiUrl: string, apiKey: string, timeout = 30000) {
     super(apiUrl, apiKey, timeout);
 
-    // apiKey is a JSON string of InterCars credentials
     let creds: Partial<InterCarsCredentials> = {};
     try {
       creds = JSON.parse(apiKey);
@@ -81,7 +62,6 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       // Fallback: apiKey is the client_secret
     }
 
-    // Also check env vars as fallback
     this.credentials = {
       clientId: creds.clientId || process.env.INTERCARS_CLIENT_ID || "",
       clientSecret: creds.clientSecret || process.env.INTERCARS_CLIENT_SECRET || apiKey,
@@ -134,7 +114,6 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       "Accept-Language": "en",
     };
 
-    // Add InterCars-specific headers
     if (this.credentials.customerId) {
       headers["X-Customer-Id"] = this.credentials.customerId;
     }
@@ -149,11 +128,11 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
   }
 
   /**
-   * Direct fetch with long timeout for sync operations (bypasses circuit breaker).
+   * Direct fetch with long timeout for sync operations.
    */
   private async syncFetch(url: string, headers: Record<string, string>, opts?: { method?: string; body?: string }): Promise<Response> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 60_000); // 60s for sync ops
+    const timer = setTimeout(() => controller.abort(), 60_000);
 
     try {
       return await fetch(url, {
@@ -278,144 +257,177 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
   }
 
   /**
-   * InterCars "sync" fetches pricing and stock for products already in our DB.
+   * InterCars sync: uses CSV mapping table to match products to IC SKUs (TOW_KOD),
+   * then fetches pricing and stock for matched products.
    *
-   * InterCars is NOT a catalog source — TecDoc provides the catalog.
-   * InterCars provides pricing and stock for products we can map to IC SKUs.
+   * Mapping: brand + article_number -> TOW_KOD
+   * Pricing: GET /dropshipping/pricing/quote?sku=TOW_KOD&quantity=1
+   * Stock:   GET /inventory/stock?sku=TOW_KOD
    *
    * Strategy:
-   * 1. Load products from DB that have article numbers
-   * 2. Use inventory/quote to get pricing and stock in batches of 30
-   * 3. Yield updated items with price/stock data
+   * 1. Load products from DB that need pricing
+   * 2. Look up IC TOW_KOD via intercars_mappings table (brand + article_no)
+   * 3. Batch fetch stock and pricing using TOW_KOD
+   * 4. Yield updated items with price/stock data
    */
   async *syncCatalog(_cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
     try {
       const { prisma } = await import("../lib/prisma.js");
 
-      // Get products from DB that need pricing (all active products)
-      const products = await prisma.productMap.findMany({
-        where: { status: "active" },
-        select: { sku: true, articleNo: true, ean: true, brand: { select: { name: true } } },
-        take: 10000,
-        orderBy: { updatedAt: "asc" },
-      });
+      // Check if mapping table has data
+      let totalMappings = 0;
+      try {
+        const mappingCount = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+          `SELECT COUNT(*) as count FROM intercars_mappings`
+        );
+        totalMappings = Number(mappingCount[0]?.count ?? 0);
+      } catch {
+        logger.warn(
+          { supplier: this.code },
+          "intercars_mappings table not found. Run CSV import first."
+        );
+        return;
+      }
+
+      if (totalMappings === 0) {
+        logger.warn(
+          { supplier: this.code },
+          "No InterCars CSV mappings found. Run: npx tsx src/scripts/import-intercars-csv.ts"
+        );
+        return;
+      }
 
       logger.info(
-        { supplier: this.code, productCount: products.length },
-        "InterCars pricing sync starting"
+        { supplier: this.code, totalMappings },
+        "InterCars pricing sync starting with CSV mapping"
       );
 
-      if (products.length === 0) return;
-
-      const BATCH_SIZE = 30; // InterCars API limit per request
+      const PAGE_SIZE = 500;
+      let offset = 0;
       let totalUpdated = 0;
-      let batchNum = 0;
+      let totalMatched = 0;
 
-      for (let i = 0; i < products.length; i += BATCH_SIZE) {
-        const batch = products.slice(i, i + BATCH_SIZE);
-        batchNum++;
+      while (true) {
+        // Find products matched to IC via brand + article_number (case-insensitive, ignore dashes)
+        const matchedProducts = await prisma.$queryRawUnsafe<Array<{
+          product_id: number;
+          sku: string;
+          article_no: string;
+          brand_name: string;
+          tow_kod: string;
+          ic_description: string;
+          ic_ean: string | null;
+          ic_weight: number | null;
+        }>>(
+          `SELECT
+            pm.id as product_id,
+            pm.sku,
+            pm.article_no,
+            b.name as brand_name,
+            im.tow_kod,
+            im.description as ic_description,
+            im.ean as ic_ean,
+            im.weight as ic_weight
+          FROM product_maps pm
+          JOIN brands b ON b.id = pm.brand_id
+          JOIN intercars_mappings im ON
+            UPPER(REPLACE(REPLACE(im.manufacturer, ' ', ''), '-', '')) = UPPER(REPLACE(REPLACE(b.name, ' ', ''), '-', ''))
+            AND UPPER(REPLACE(REPLACE(im.article_number, ' ', ''), '-', '')) = UPPER(REPLACE(REPLACE(pm.article_no, ' ', ''), '-', ''))
+          WHERE pm.status = 'active'
+          ORDER BY pm.id
+          LIMIT ${PAGE_SIZE} OFFSET ${offset}`
+        );
 
-        try {
-          const headers = await this.authHeaders();
-          headers["Content-Type"] = "application/json";
+        if (matchedProducts.length === 0) break;
 
-          // Build quote request using article numbers as SKUs
-          const lines = batch
-            .filter((p) => p.articleNo)
-            .map((p) => ({ sku: p.articleNo, quantity: 1 }));
+        totalMatched += matchedProducts.length;
+        offset += PAGE_SIZE;
 
-          if (lines.length === 0) continue;
+        // Batch fetch stock and pricing for matched TOW_KODs
+        const BATCH_SIZE = 30;
+        for (let i = 0; i < matchedProducts.length; i += BATCH_SIZE) {
+          const batch = matchedProducts.slice(i, i + BATCH_SIZE);
+          const items: SupplierCatalogItem[] = [];
 
-          const quoteUrl = `${this.apiUrl}/inventory/quote`;
-          const response = await this.syncFetch(quoteUrl, headers, {
-            method: "POST",
-            body: JSON.stringify({ lines }),
-          });
+          try {
+            const headers = await this.authHeaders();
 
-          if (!response.ok) {
-            if (response.status === 401) {
-              this.accessToken = null;
-              // Retry once with new token
-              const newHeaders = await this.authHeaders();
-              newHeaders["Content-Type"] = "application/json";
-              const retry = await this.syncFetch(quoteUrl, newHeaders, {
-                method: "POST",
-                body: JSON.stringify({ lines }),
-              });
-              if (!retry.ok) continue;
-              const retryData = await retry.json();
-              const retryItems = this.processQuoteResponse(retryData, batch);
-              if (retryItems.length > 0) {
-                yield retryItems;
-                totalUpdated += retryItems.length;
+            for (const product of batch) {
+              try {
+                let stockQty: number | null = null;
+                let price: number | null = null;
+                let currency = "EUR";
+
+                // Fetch stock
+                const stockUrl = `${this.apiUrl}/inventory/stock?sku=${encodeURIComponent(product.tow_kod)}`;
+                const stockResp = await this.syncFetch(stockUrl, headers);
+
+                if (stockResp.ok) {
+                  const stockData = (await stockResp.json()) as StockItem[] | { items?: StockItem[] };
+                  const stockItems = Array.isArray(stockData) ? stockData : (stockData.items ?? []);
+                  stockQty = stockItems.reduce((sum: number, s: StockItem) => sum + (s.availability ?? 0), 0);
+                }
+
+                // Fetch pricing
+                try {
+                  const priceUrl = `${this.apiUrl}/dropshipping/pricing/quote?sku=${encodeURIComponent(product.tow_kod)}&quantity=1`;
+                  const priceResp = await this.syncFetch(priceUrl, headers);
+
+                  if (priceResp.ok) {
+                    const priceData = (await priceResp.json()) as PricingItem | PricingItem[];
+                    const pricing = Array.isArray(priceData) ? priceData[0] : priceData;
+                    price = pricing?.customerPrice ?? pricing?.listPriceNet ?? null;
+                    currency = pricing?.currency ?? "EUR";
+                  }
+                } catch {
+                  // pricing is best-effort
+                }
+
+                items.push({
+                  sku: product.sku,
+                  brand: product.brand_name,
+                  articleNo: product.article_no,
+                  ean: product.ic_ean,
+                  tecdocId: null,
+                  oem: null,
+                  description: product.ic_description || "",
+                  weight: product.ic_weight,
+                  price,
+                  currency,
+                  stock: stockQty,
+                });
+              } catch {
+                // Skip individual item errors
               }
-              continue;
+
+              // Rate limit between API calls
+              await new Promise((r) => setTimeout(r, 50));
             }
-            continue;
+
+            if (items.length > 0) {
+              yield items;
+              totalUpdated += items.length;
+            }
+          } catch (err) {
+            logger.warn({ err, supplier: this.code }, "InterCars batch fetch failed");
           }
+        }
 
-          const data = await response.json();
-          const items = this.processQuoteResponse(data, batch);
-
-          if (items.length > 0) {
-            yield items;
-            totalUpdated += items.length;
-          }
-
-          // Log progress every 10 batches
-          if (batchNum % 10 === 0) {
-            logger.info(
-              { supplier: this.code, batch: batchNum, totalBatches: Math.ceil(products.length / BATCH_SIZE), totalUpdated },
-              "InterCars pricing sync progress"
-            );
-          }
-
-          await new Promise((r) => setTimeout(r, 100));
-        } catch (err) {
-          logger.warn({ err, supplier: this.code, batch: batchNum }, "InterCars quote batch failed");
+        // Log progress
+        if (totalMatched % 500 === 0 || matchedProducts.length < PAGE_SIZE) {
+          logger.info(
+            { supplier: this.code, matched: totalMatched, updated: totalUpdated, offset },
+            "InterCars pricing sync progress"
+          );
         }
       }
 
-      logger.info({ supplier: this.code, totalUpdated }, "InterCars pricing sync completed");
+      logger.info(
+        { supplier: this.code, totalMatched, totalUpdated },
+        "InterCars pricing sync completed"
+      );
     } catch (err) {
       logger.error({ err, supplier: this.code }, "InterCars pricing sync failed");
     }
   }
-
-  private processQuoteResponse(
-    data: unknown,
-    batch: Array<{ sku: string; articleNo: string; ean: string | null; brand: { name: string } | null }>
-  ): SupplierCatalogItem[] {
-    const items: SupplierCatalogItem[] = [];
-    const responseItems = Array.isArray(data) ? data : ((data as Record<string, unknown>)?.lines ?? (data as Record<string, unknown>)?.items ?? []) as Array<{
-      sku?: string;
-      price?: { listPriceNet?: number; customerPriceNet?: number; currencyCode?: string };
-      lines?: Array<{ availability?: number }>;
-      name?: string;
-      description?: string;
-      eans?: string[];
-    }>;
-
-    for (const item of responseItems) {
-      if (!item.sku) continue;
-      const original = batch.find((b) => b.articleNo === item.sku);
-      if (!original) continue;
-
-      const price = item.price?.customerPriceNet ?? item.price?.listPriceNet ?? null;
-      const _stock = item.lines?.reduce((sum: number, l: { availability?: number }) => sum + (l.availability ?? 0), 0) ?? null;
-
-      items.push({
-        sku: original.sku,
-        brand: original.brand?.name ?? "",
-        articleNo: original.articleNo,
-        ean: original.ean ?? (item.eans?.[0] ?? null),
-        tecdocId: null,
-        oem: null,
-        description: item.name ?? item.description ?? "",
-      });
-    }
-
-    return items;
-  }
-
 }

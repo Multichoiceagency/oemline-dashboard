@@ -68,4 +68,7 @@ export interface SupplierCatalogItem {
   genericArticle?: string | null;
   oemNumbers?: string[];
   weight?: number | null;
+  price?: number | null;
+  currency?: string | null;
+  stock?: number | null;
 }
