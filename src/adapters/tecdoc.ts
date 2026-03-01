@@ -255,158 +255,121 @@ export class TecDocAdapter extends BaseSupplierAdapter {
   }
 
   /**
-   * Full TecDoc catalog sync using getArticles with dataSupplierId (brand filter).
+   * Full TecDoc catalog sync by paginating through all articles.
    *
-   * Strategy:
-   * 1. Discover all data suppliers (brands) using getArticles with perPage=0 + dataSupplierFacetOptions
-   * 2. For each brand, use getArticles with dataSupplierId to get all articles
-   * 3. Paginate through each brand's articles
-   * 4. Yield batches for DB upsert
+   * Strategy: Use getArticles with pagination to fetch all articles.
+   * TecDoc enforces max 100 per page. We paginate through all available articles.
    *
-   * Cursor format: "brandIndex:page" for resume capability
+   * Cursor format: page number string for resume capability
    */
   async *syncCatalog(cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
     try {
-      // Step 1: Discover all brands via dataSupplierFacets (perPage=0 returns only metadata)
-      const facetResult = (await this.tecdocFetch({
-        getArticles: {
-          articleCountry: this.credentials.articleCountry,
-          providerId: this.credentials.providerId,
-          lang: "nl",
-          perPage: 0,
-          page: 1,
-          dataSupplierFacetOptions: { enabled: true, assemblyGroupType: "P" },
-        },
-      })) as {
-        dataSupplierFacets?: Array<{ dataSupplierId?: number; mfrName?: string; matchCount?: number }>;
-        totalMatchingArticles?: number;
-      };
+      // First check total article count with perPage=0
+      const countResult = (await this.tecdocRequest("getArticles", {
+        perPage: 0,
+        page: 1,
+      })) as GetArticlesResponse;
 
-      const dataSuppliers = facetResult.dataSupplierFacets ?? [];
-      const brands: TecDocBrand[] = dataSuppliers
-        .filter((ds) => ds.dataSupplierId && ds.matchCount && ds.matchCount > 0)
-        .map((ds) => ({
-          brandId: ds.dataSupplierId,
-          brandName: ds.mfrName ?? `Brand ${ds.dataSupplierId}`,
-        }));
-
-      if (brands.length === 0) {
-        logger.warn(
-          { supplier: this.code, totalArticles: facetResult.totalMatchingArticles, rawFacets: dataSuppliers.length },
-          "TecDoc returned no data supplier facets"
-        );
-        return;
-      }
-
+      const totalArticles = countResult.totalMatchingArticles ?? 0;
       logger.info(
-        { supplier: this.code, brandCount: brands.length },
+        { supplier: this.code, totalArticles },
         "TecDoc catalog sync starting"
       );
 
-      let startBrandIdx = 0;
-      let startPage = 1;
-      if (cursor) {
-        const parts = cursor.split(":");
-        startBrandIdx = parseInt(parts[0] ?? "0", 10) || 0;
-        startPage = parseInt(parts[1] ?? "1", 10) || 1;
+      if (totalArticles === 0) {
+        logger.warn({ supplier: this.code }, "TecDoc returned 0 articles");
+        return;
       }
 
+      const perPage = 100;
+      let page = cursor ? parseInt(cursor, 10) : 1;
+      if (isNaN(page) || page < 1) page = 1;
       let totalYielded = 0;
+      let consecutiveEmpty = 0;
 
-      for (let bi = startBrandIdx; bi < brands.length; bi++) {
-        const brand = brands[bi];
-        if (!brand.brandId) continue;
+      while (true) {
+        try {
+          const result = (await this.tecdocRequest("getArticles", {
+            perPage,
+            page,
+            includeOemNumbers: true,
+            includeEanNumbers: true,
+            includeImages: true,
+          })) as GetArticlesResponse;
 
-        let page = bi === startBrandIdx ? startPage : 1;
-        const perPage = 100;
-        let hasMore = true;
-        let brandArticleCount = 0;
+          const articles = result.articles ?? [];
 
-        while (hasMore) {
-          try {
-            // Use getArticles with dataSupplierId for bulk fetch
-            const result = (await this.tecdocRequest("getArticles", {
-              dataSupplierId: brand.brandId,
-              perPage,
-              page,
-              includeOemNumbers: true,
-              includeEanNumbers: true,
-              includeImages: true,
-            })) as GetArticlesResponse;
-
-            const articles = result.articles ?? [];
-
-            if (articles.length === 0) {
-              hasMore = false;
-              break;
-            }
-
-            // Map TecDoc articles to our catalog item format
-            const items: SupplierCatalogItem[] = articles.map((art) => {
-              const ean = art.eanNumbers?.[0]?.eanNumber ?? null;
-              const oemList = (art.oemNumbers ?? [])
-                .map((o) => o.oemNumber)
-                .filter((o): o is string => !!o);
-              const images = (art.images ?? [])
-                .map((img) => img.imageURL800 ?? img.imageURL400 ?? img.imageURL200 ?? "")
-                .filter(Boolean);
-              const imageUrl = images[0] ?? null;
-
-              return {
-                sku: String(art.dataSupplierId ?? brand.brandId ?? 0) + "_" + (art.articleNumber ?? ""),
-                brand: art.mfrName ?? brand.brandName ?? "",
-                articleNo: art.articleNumber ?? "",
-                ean,
-                tecdocId: String(art.dataSupplierId ?? 0),
-                oem: oemList[0] ?? null,
-                description: art.genericArticleDescription ?? "",
-                imageUrl,
-                images,
-                genericArticle: art.genericArticleDescription ?? null,
-                oemNumbers: oemList,
-              };
-            });
-
-            yield items;
-            brandArticleCount += items.length;
-            totalYielded += items.length;
-
-            // Check if more pages
-            const totalForBrand = result.totalMatchingArticles ?? 0;
-            if (articles.length < perPage || (totalForBrand > 0 && page * perPage >= totalForBrand)) {
-              hasMore = false;
-            } else {
-              page++;
-            }
-
-            // Small delay to avoid rate limiting
-            await new Promise((r) => setTimeout(r, 200));
-          } catch (err) {
-            logger.warn(
-              { err, supplier: this.code, brandId: brand.brandId, brandName: brand.brandName, page },
-              "TecDoc getArticles failed for brand, skipping"
-            );
-            hasMore = false;
+          if (articles.length === 0) {
+            consecutiveEmpty++;
+            if (consecutiveEmpty >= 3) break;
+            page++;
+            continue;
           }
-        }
 
-        // Log progress every 10 brands or when a brand has articles
-        if (bi % 10 === 0 || brandArticleCount > 0) {
-          logger.info(
-            {
-              supplier: this.code,
-              brandIndex: bi,
-              totalBrands: brands.length,
-              brand: brand.brandName,
-              brandArticles: brandArticleCount,
-              totalYielded,
-            },
-            "TecDoc sync progress"
+          consecutiveEmpty = 0;
+
+          // Map TecDoc articles to our catalog item format
+          const items: SupplierCatalogItem[] = articles.map((art) => {
+            const ean = art.eanNumbers?.[0]?.eanNumber ?? null;
+            const oemList = (art.oemNumbers ?? [])
+              .map((o) => o.oemNumber)
+              .filter((o): o is string => !!o);
+            const images = (art.images ?? [])
+              .map((img) => img.imageURL800 ?? img.imageURL400 ?? img.imageURL200 ?? "")
+              .filter(Boolean);
+            const imageUrl = images[0] ?? null;
+
+            return {
+              sku: String(art.dataSupplierId ?? 0) + "_" + (art.articleNumber ?? ""),
+              brand: art.mfrName ?? "",
+              articleNo: art.articleNumber ?? "",
+              ean,
+              tecdocId: String(art.dataSupplierId ?? 0),
+              oem: oemList[0] ?? null,
+              description: art.genericArticleDescription ?? "",
+              imageUrl,
+              images,
+              genericArticle: art.genericArticleDescription ?? null,
+              oemNumbers: oemList,
+            };
+          });
+
+          yield items;
+          totalYielded += items.length;
+
+          // Log progress every 50 pages
+          if (page % 50 === 0 || page === 1) {
+            logger.info(
+              {
+                supplier: this.code,
+                page,
+                totalPages: Math.ceil(totalArticles / perPage),
+                totalYielded,
+              },
+              "TecDoc sync progress"
+            );
+          }
+
+          // Check if we've reached the end
+          if (articles.length < perPage) break;
+          if (totalArticles > 0 && page * perPage >= totalArticles) break;
+
+          page++;
+
+          // Small delay to avoid rate limiting
+          await new Promise((r) => setTimeout(r, 200));
+        } catch (err) {
+          logger.warn(
+            { err, supplier: this.code, page },
+            "TecDoc getArticles failed for page, retrying next page"
           );
+          page++;
+          consecutiveEmpty++;
+          if (consecutiveEmpty >= 5) break;
         }
       }
 
-      logger.info({ supplier: this.code, totalYielded }, "TecDoc catalog sync completed");
+      logger.info({ supplier: this.code, totalYielded, pages: page }, "TecDoc catalog sync completed");
     } catch (err) {
       logger.error({ err, supplier: this.code }, "TecDoc catalog sync failed");
     }

@@ -296,13 +296,31 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       }
 
       const categoriesRaw = await catResponse.json();
-      const categories = (Array.isArray(categoriesRaw) ? categoriesRaw : (categoriesRaw as { categories?: CatalogCategory[] }).categories ?? []) as CatalogCategory[];
+
+      // Log raw response structure for debugging
+      const rawKeys = typeof categoriesRaw === "object" && categoriesRaw !== null
+        ? Object.keys(categoriesRaw as Record<string, unknown>).slice(0, 10)
+        : [];
+      const isArray = Array.isArray(categoriesRaw);
+      logger.info(
+        { supplier: this.code, isArray, rawKeys, rawLength: isArray ? (categoriesRaw as unknown[]).length : 0 },
+        "InterCars catalog/category raw response"
+      );
+
+      // Try multiple response formats
+      let categories: CatalogCategory[] = [];
+      if (isArray) {
+        categories = categoriesRaw as CatalogCategory[];
+      } else if (categoriesRaw && typeof categoriesRaw === "object") {
+        const raw = categoriesRaw as Record<string, unknown>;
+        categories = (raw.categories ?? raw.data ?? raw.items ?? raw.result ?? []) as CatalogCategory[];
+      }
 
       // Flatten category tree to get all category IDs (both parents and leaves)
       const categoryIds = this.flattenCategories(categories);
 
       logger.info(
-        { supplier: this.code, categoryCount: categoryIds.length },
+        { supplier: this.code, categoryCount: categoryIds.length, firstCategories: categories.slice(0, 3).map(c => ({ id: c.id, name: c.name })) },
         "InterCars catalog categories loaded"
       );
 
