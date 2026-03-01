@@ -2,25 +2,44 @@ import { config } from "../config.js";
 import { logger } from "../lib/logger.js";
 import { cacheGet, cacheSet } from "./cache.js";
 
-const TECDOC_PROVIDER_ID = 22691; // Standard TecDoc provider ID
+const TECDOC_PROVIDER_ID = 22691;
+const ARTICLE_COUNTRY = "NL";
 
-interface TecDocArticle {
-  dataSupplierId?: number;
-  articleNumber?: string;
-  mfrName?: string;
-  mfrId?: number;
-  genericArticleDescription?: string;
-  eanNumbers?: Array<{ eanNumber?: string }>;
-  oemNumbers?: Array<{ oemNumber?: string; mfrName?: string }>;
-  articleStatusDescription?: string;
-  packingUnit?: number;
+/**
+ * Response from getArticleDirectSearchAllNumbersWithState
+ */
+interface DirectSearchResponse {
+  data?: {
+    array?: Array<{
+      articleId?: number;
+      articleName?: string;
+      articleNo?: string;
+      articleSearchNo?: string;
+      articleStateId?: number;
+      brandName?: string;
+      brandNo?: number;
+      genericArticleId?: number;
+      numberType?: number;
+    }>;
+  };
+  status?: number;
 }
 
-interface TecDocSearchResponse {
-  data?: {
-    articles?: TecDocArticle[];
-    totalMatchingArticles?: number;
-  };
+/**
+ * Response from getArticles (full article details)
+ */
+interface GetArticlesResponse {
+  totalMatchingArticles?: number;
+  articles?: Array<{
+    dataSupplierId?: number;
+    articleNumber?: string;
+    mfrName?: string;
+    mfrId?: number;
+    genericArticleDescription?: string;
+    eanNumbers?: Array<{ eanNumber?: string }>;
+    oemNumbers?: Array<{ oemNumber?: string; mfrName?: string }>;
+    articleStatusDescription?: string;
+  }>;
   status?: number;
 }
 
@@ -34,10 +53,6 @@ export interface TecDocProduct {
   tecdocId: string;
 }
 
-/**
- * TecDoc Pegasus 3.0 JSON API service.
- * Reference data source for article lookups, OEM cross-references, and EAN matching.
- */
 export class TecDocService {
   private apiUrl: string;
   private apiKey: string;
@@ -50,6 +65,7 @@ export class TecDocService {
   private async request(method: string, params: Record<string, unknown>): Promise<unknown> {
     const body = {
       ...params,
+      articleCountry: ARTICLE_COUNTRY,
       providerId: TECDOC_PROVIDER_ID,
       lang: "nl",
     };
@@ -60,18 +76,21 @@ export class TecDocService {
         "Content-Type": "application/json",
         "X-Api-Key": this.apiKey,
       },
-      body: JSON.stringify({
-        [method]: body,
-      }),
+      body: JSON.stringify({ [method]: body }),
     });
 
     if (!response.ok) {
-      throw new Error(`TecDoc API error: ${response.status} ${response.statusText}`);
+      const text = await response.text();
+      throw new Error(`TecDoc API error: ${response.status} ${text}`);
     }
 
     return response.json();
   }
 
+  /**
+   * Search by article number using getArticleDirectSearchAllNumbersWithState.
+   * numberType: 0 = article number, 2 = OEM number, 3 = trade number, 4 = EAN
+   */
   async searchByArticleNumber(articleNumber: string, brandId?: number): Promise<TecDocProduct[]> {
     const cached = await cacheGet<TecDocProduct[]>("tecdoc", ["article", articleNumber, String(brandId ?? "")]);
     if (cached) return cached;
@@ -85,11 +104,14 @@ export class TecDocService {
         page: 1,
       };
 
-      if (brandId) params.dataSupplierId = brandId;
+      if (brandId) params.brandNo = brandId;
 
-      const result = (await this.request("getArticles", params)) as TecDocSearchResponse;
-      const articles = this.mapArticles(result);
+      const result = (await this.request(
+        "getArticleDirectSearchAllNumbersWithState",
+        params
+      )) as DirectSearchResponse;
 
+      const articles = this.mapDirectSearch(result);
       await cacheSet("tecdoc", ["article", articleNumber, String(brandId ?? "")], articles);
       return articles;
     } catch (err) {
@@ -103,15 +125,18 @@ export class TecDocService {
     if (cached) return cached;
 
     try {
-      const result = (await this.request("getArticles", {
-        articleNumber: oemNumber,
-        numberType: 2,
-        searchExact: false,
-        perPage: 25,
-        page: 1,
-      })) as TecDocSearchResponse;
+      const result = (await this.request(
+        "getArticleDirectSearchAllNumbersWithState",
+        {
+          articleNumber: oemNumber,
+          numberType: 2,
+          searchExact: true,
+          perPage: 25,
+          page: 1,
+        }
+      )) as DirectSearchResponse;
 
-      const articles = this.mapArticles(result);
+      const articles = this.mapDirectSearch(result);
       await cacheSet("tecdoc", ["oem", oemNumber], articles);
       return articles;
     } catch (err) {
@@ -125,15 +150,18 @@ export class TecDocService {
     if (cached) return cached;
 
     try {
-      const result = (await this.request("getArticles", {
-        articleNumber: ean,
-        numberType: 4,
-        searchExact: true,
-        perPage: 25,
-        page: 1,
-      })) as TecDocSearchResponse;
+      const result = (await this.request(
+        "getArticleDirectSearchAllNumbersWithState",
+        {
+          articleNumber: ean,
+          numberType: 4,
+          searchExact: true,
+          perPage: 25,
+          page: 1,
+        }
+      )) as DirectSearchResponse;
 
-      const articles = this.mapArticles(result);
+      const articles = this.mapDirectSearch(result);
       await cacheSet("tecdoc", ["ean", ean], articles);
       return articles;
     } catch (err) {
@@ -153,16 +181,19 @@ export class TecDocService {
     if (cached) return cached;
 
     try {
-      const result = (await this.request("getArticles", {
-        articleNumber: query,
-        numberType: 0,
-        searchExact: false,
-        perPage,
-        page,
-      })) as TecDocSearchResponse;
+      const result = (await this.request(
+        "getArticleDirectSearchAllNumbersWithState",
+        {
+          articleNumber: query,
+          numberType: 0,
+          searchExact: false,
+          perPage,
+          page,
+        }
+      )) as DirectSearchResponse;
 
-      const articles = this.mapArticles(result);
-      const total = result.data?.totalMatchingArticles ?? articles.length;
+      const articles = this.mapDirectSearch(result);
+      const total = articles.length;
       const response = { articles, total };
 
       await cacheSet("search", ["tecdoc", query, String(page), String(perPage)], response);
@@ -173,17 +204,17 @@ export class TecDocService {
     }
   }
 
-  private mapArticles(result: TecDocSearchResponse): TecDocProduct[] {
-    const articles = result.data?.articles ?? [];
+  private mapDirectSearch(result: DirectSearchResponse): TecDocProduct[] {
+    const items = result.data?.array ?? [];
 
-    return articles.map((a) => ({
-      articleNumber: a.articleNumber ?? "",
-      brand: a.mfrName ?? "",
-      brandId: a.mfrId ?? 0,
-      description: a.genericArticleDescription ?? a.articleStatusDescription ?? "",
-      ean: a.eanNumbers?.[0]?.eanNumber ?? null,
-      oemNumbers: (a.oemNumbers ?? []).map((o) => o.oemNumber ?? "").filter(Boolean),
-      tecdocId: `${a.dataSupplierId ?? 0}_${a.articleNumber ?? ""}`,
+    return items.map((a) => ({
+      articleNumber: a.articleNo ?? a.articleSearchNo ?? "",
+      brand: a.brandName ?? "",
+      brandId: a.brandNo ?? 0,
+      description: a.articleName ?? "",
+      ean: null,
+      oemNumbers: [],
+      tecdocId: String(a.articleId ?? 0),
     }));
   }
 }
