@@ -23,24 +23,32 @@ export async function tecdocRoutes(app: FastifyInstance): Promise<void> {
     const { q, type, brandId, page, limit } = parsed.data;
     const tecdoc = getTecDocService();
 
-    switch (type) {
-      case "article": {
-        const articles = await tecdoc.searchByArticleNumber(q, brandId);
-        return reply.send({ articles, total: articles.length });
+    try {
+      switch (type) {
+        case "article": {
+          const articles = await tecdoc.searchByArticleNumber(q, brandId);
+          return reply.send({ articles, total: articles.length });
+        }
+        case "oem": {
+          const articles = await tecdoc.searchByOemNumber(q);
+          return reply.send({ articles, total: articles.length });
+        }
+        case "ean": {
+          const articles = await tecdoc.searchByEan(q);
+          return reply.send({ articles, total: articles.length });
+        }
+        case "text":
+        default: {
+          const result = await tecdoc.searchFreeText(q, page, limit);
+          return reply.send(result);
+        }
       }
-      case "oem": {
-        const articles = await tecdoc.searchByOemNumber(q);
-        return reply.send({ articles, total: articles.length });
-      }
-      case "ean": {
-        const articles = await tecdoc.searchByEan(q);
-        return reply.send({ articles, total: articles.length });
-      }
-      case "text":
-      default: {
-        const result = await tecdoc.searchFreeText(q, page, limit);
-        return reply.send(result);
-      }
+    } catch (err) {
+      request.log.error({ err }, "TecDoc search error");
+      return reply.code(502).send({
+        error: "TecDoc API error",
+        message: err instanceof Error ? err.message : "Unknown error",
+      });
     }
   });
 }

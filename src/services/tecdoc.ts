@@ -70,21 +70,25 @@ export class TecDocService {
       lang: "nl",
     };
 
+    const payload = JSON.stringify({ [method]: body });
+
     const response = await fetch(this.apiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-Api-Key": this.apiKey,
       },
-      body: JSON.stringify({ [method]: body }),
+      body: payload,
     });
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`TecDoc API error: ${response.status} ${text}`);
+    const json = (await response.json()) as Record<string, unknown>;
+
+    // TecDoc returns HTTP 200 even for errors; check JSON status
+    if (json.status && json.status !== 200) {
+      throw new Error(`TecDoc API error: status=${json.status} ${json.statusText ?? ""}`);
     }
 
-    return response.json();
+    return json;
   }
 
   /**
