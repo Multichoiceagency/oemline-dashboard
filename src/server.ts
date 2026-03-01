@@ -20,6 +20,7 @@ import { brandRoutes } from "./routes/brands.js";
 import { categoryRoutes } from "./routes/categories.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { storefrontRoutes } from "./routes/storefront.js";
+import { intercarsRoutes } from "./routes/intercars-mapping.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 
 const app = Fastify({
@@ -33,7 +34,7 @@ const app = Fastify({
   genReqId: () => crypto.randomUUID(),
   trustProxy: true,
   requestTimeout: 15_000,
-  bodyLimit: 1_048_576,
+  bodyLimit: 10_485_760, // 10MB for batch imports
 });
 
 await app.register(cors, { origin: true });
@@ -83,6 +84,7 @@ await app.register(brandRoutes, { prefix: "/api" });
 await app.register(categoryRoutes, { prefix: "/api" });
 await app.register(jobRoutes, { prefix: "/api" });
 await app.register(storefrontRoutes, { prefix: "/api" });
+await app.register(intercarsRoutes, { prefix: "/api" });
 
 app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
   request.log.error({ err: error, reqId: request.id }, "Request error");
