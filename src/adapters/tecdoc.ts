@@ -31,18 +31,42 @@ interface DirectSearchResponse {
   status?: number;
 }
 
-interface GetArticlesResponse {
-  articles?: Array<{
-    dataSupplierId?: number;
-    articleNumber?: string;
-    mfrName?: string;
-    mfrId?: number;
-    genericArticleDescription?: string;
-    eanNumbers?: Array<{ eanNumber?: string }>;
-    oemNumbers?: Array<{ oemNumber?: string; mfrName?: string }>;
+interface TecDocArticle {
+  dataSupplierId?: number;
+  articleNumber?: string;
+  mfrName?: string;
+  mfrId?: number;
+  genericArticleDescription?: string;
+  eanNumbers?: Array<{ eanNumber?: string }>;
+  oemNumbers?: Array<{ oemNumber?: string; mfrName?: string }>;
+  articleStatusDescription?: string;
+  images?: Array<{
+    imageURL50?: string;
+    imageURL100?: string;
+    imageURL200?: string;
+    imageURL400?: string;
+    imageURL800?: string;
   }>;
+  articleAttributes?: Array<{
+    attrName?: string;
+    attrValue?: string;
+    attrUnit?: string;
+  }>;
+  linkages?: Array<{
+    linkageTargetType?: string;
+  }>;
+}
+
+interface GetArticlesResponse {
+  articles?: TecDocArticle[];
   totalMatchingArticles?: number;
   status?: number;
+}
+
+interface TecDocBrand {
+  brandId?: number;
+  brandName?: string;
+  brandLogoUrl?: string;
 }
 
 export class TecDocAdapter extends BaseSupplierAdapter {
@@ -158,7 +182,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
       {
         articleNumber: query,
         numberType,
-        searchExact: numberType === 4, // exact for EAN
+        searchExact: numberType === 4,
         perPage: 25,
         page: 1,
       }
@@ -182,7 +206,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
   }
 
   /**
-   * Enrich products with EAN and OEM numbers from getArticles endpoint
+   * Enrich products with EAN, OEM numbers, and images from getArticles endpoint
    */
   private async enrichWithDetails(products: SupplierProduct[]): Promise<void> {
     const articleIds = products
@@ -196,11 +220,11 @@ export class TecDocAdapter extends BaseSupplierAdapter {
         articleId: articleIds,
         includeOemNumbers: true,
         includeEanNumbers: true,
+        includeImages: true,
       })) as GetArticlesResponse;
 
       const articleMap = new Map<string, { ean: string | null; oem: string | null }>();
       for (const art of result.articles ?? []) {
-        const id = String(art.dataSupplierId ?? 0);
         const ean = art.eanNumbers?.[0]?.eanNumber ?? null;
         const oemList = art.oemNumbers?.map((o) => o.oemNumber).filter(Boolean) ?? [];
         articleMap.set(art.articleNumber ?? "", { ean, oem: oemList[0] ?? null });
@@ -218,27 +242,75 @@ export class TecDocAdapter extends BaseSupplierAdapter {
     }
   }
 
+  /**
+   * Fetch full article details for a batch of article IDs.
+   * Returns enriched catalog items with images, OEM numbers, EAN, etc.
+   */
+  private async fetchArticleDetails(articleIds: number[]): Promise<SupplierCatalogItem[]> {
+    if (articleIds.length === 0) return [];
+
+    try {
+      const result = (await this.tecdocRequest("getArticles", {
+        articleId: articleIds,
+        includeOemNumbers: true,
+        includeEanNumbers: true,
+        includeImages: true,
+        includeAll: true,
+      })) as GetArticlesResponse;
+
+      return (result.articles ?? []).map((art) => {
+        const ean = art.eanNumbers?.[0]?.eanNumber ?? null;
+        const oemList = (art.oemNumbers ?? [])
+          .map((o) => o.oemNumber)
+          .filter((o): o is string => !!o);
+        const images = (art.images ?? [])
+          .map((img) => img.imageURL800 ?? img.imageURL400 ?? img.imageURL200 ?? "")
+          .filter(Boolean);
+        const imageUrl = images[0] ?? null;
+
+        return {
+          sku: String(art.dataSupplierId ?? 0),
+          brand: art.mfrName ?? "",
+          articleNo: art.articleNumber ?? "",
+          ean,
+          tecdocId: String(art.dataSupplierId ?? 0),
+          oem: oemList[0] ?? null,
+          description: art.genericArticleDescription ?? "",
+          imageUrl,
+          images,
+          genericArticle: art.genericArticleDescription ?? null,
+          oemNumbers: oemList,
+        };
+      });
+    } catch (err) {
+      logger.warn({ err }, "TecDoc fetchArticleDetails failed");
+      return [];
+    }
+  }
+
   async getPrice(_sku: string): Promise<{ price: number; currency: string } | null> {
-    // TecDoc doesn't provide pricing
     return null;
   }
 
   async getStock(_sku: string): Promise<{ quantity: number; available: boolean } | null> {
-    // TecDoc doesn't provide stock info
     return null;
   }
 
   /**
-   * TecDoc catalog sync — fetches brands via getBrands,
-   * then iterates top brands to fetch articles and populate the local DB.
-   * Cursor format: "brandIndex:page"
+   * Full TecDoc catalog sync.
+   * 1. Fetches all brands via getBrands
+   * 2. For each brand, fetches articles via search (paginated)
+   * 3. Enriches with full details (images, OEM, EAN) via getArticles
+   * 4. Yields batches for DB upsert
+   *
+   * Cursor format: "brandIndex:page" for resume capability
    */
   async *syncCatalog(cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
     try {
-      // Get top/favoured brands
-      const brandsResult = (await this.tecdocRequest("getBrands", {
-        favouredList: 1,
-      })) as { brands?: Array<{ brandId?: number; brandName?: string }> };
+      // Step 1: Get ALL brands (not just favourites)
+      const brandsResult = (await this.tecdocRequest("getBrands", {})) as {
+        brands?: TecDocBrand[];
+      };
 
       const brands = brandsResult.brands ?? [];
       if (brands.length === 0) {
@@ -246,7 +318,10 @@ export class TecDocAdapter extends BaseSupplierAdapter {
         return;
       }
 
-      logger.info({ supplier: this.code, brandCount: brands.length }, "TecDoc brands loaded for sync");
+      logger.info(
+        { supplier: this.code, brandCount: brands.length },
+        "TecDoc catalog sync starting — fetching all brands"
+      );
 
       let startBrandIdx = 0;
       let startPage = 1;
@@ -263,10 +338,10 @@ export class TecDocAdapter extends BaseSupplierAdapter {
         let page = bi === startBrandIdx ? startPage : 1;
         const perPage = 100;
         let hasMore = true;
-        let emptyPages = 0;
 
         while (hasMore) {
           try {
+            // Search for articles by brand
             const result = (await this.tecdocRequest(
               "getArticleDirectSearchAllNumbersWithState",
               {
@@ -282,40 +357,60 @@ export class TecDocAdapter extends BaseSupplierAdapter {
             const articles = result.data?.array ?? [];
 
             if (articles.length === 0) {
-              emptyPages++;
-              if (emptyPages >= 2) hasMore = false;
+              hasMore = false;
               break;
             }
 
-            const items: SupplierCatalogItem[] = articles.map((a) => ({
-              sku: String(a.articleId ?? 0),
-              brand: a.brandName ?? brand.brandName ?? "",
-              articleNo: a.articleNo ?? a.articleSearchNo ?? "",
-              ean: null,
-              tecdocId: String(a.articleId ?? 0),
-              oem: null,
-              description: a.articleName ?? "",
-            }));
+            // Collect article IDs for enrichment
+            const articleIds = articles
+              .map((a) => a.articleId)
+              .filter((id): id is number => !!id && id > 0);
 
-            yield items;
+            // Try to enrich with full details
+            let enrichedItems: SupplierCatalogItem[] = [];
+            if (articleIds.length > 0) {
+              enrichedItems = await this.fetchArticleDetails(articleIds);
+            }
+
+            // Fallback: use basic data if enrichment fails or returns nothing
+            if (enrichedItems.length === 0) {
+              enrichedItems = articles.map((a) => ({
+                sku: String(a.articleId ?? 0),
+                brand: a.brandName ?? brand.brandName ?? "",
+                articleNo: a.articleNo ?? a.articleSearchNo ?? "",
+                ean: null,
+                tecdocId: String(a.articleId ?? 0),
+                oem: null,
+                description: a.articleName ?? "",
+              }));
+            }
+
+            yield enrichedItems;
 
             if (articles.length < perPage) {
-              hasMore = false;
-            } else if (page >= 10) {
-              // Cap at 10 pages per brand to avoid overloading
               hasMore = false;
             } else {
               page++;
             }
           } catch (err) {
             logger.warn(
-              { err, supplier: this.code, brandId: brand.brandId, page },
+              { err, supplier: this.code, brandId: brand.brandId, brandName: brand.brandName, page },
               "TecDoc brand article fetch failed, skipping brand"
             );
             hasMore = false;
           }
         }
+
+        // Log progress every 10 brands
+        if (bi % 10 === 0) {
+          logger.info(
+            { supplier: this.code, brandIndex: bi, totalBrands: brands.length, brand: brand.brandName },
+            "TecDoc sync progress"
+          );
+        }
       }
+
+      logger.info({ supplier: this.code }, "TecDoc catalog sync completed");
     } catch (err) {
       logger.error({ err, supplier: this.code }, "TecDoc catalog sync failed");
     }

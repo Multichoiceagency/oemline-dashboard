@@ -9,6 +9,7 @@ import { processSyncJob } from "./workers/sync.worker.js";
 import { processRematchJob } from "./workers/match.worker.js";
 import { processIndexJob } from "./workers/index.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
+import { startScheduler } from "./workers/scheduler.js";
 
 const connection = {
   host: redisConfig.host,
@@ -127,6 +128,9 @@ try {
     { queues: workers.map((w) => w.name) },
     "Workers started"
   );
+
+  // Start the scheduler to enqueue repeating sync/match/index jobs
+  await startScheduler();
 } catch (err) {
   logger.error(err, "Failed to start workers");
   process.exit(1);

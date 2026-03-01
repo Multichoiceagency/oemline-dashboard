@@ -50,6 +50,11 @@ export async function processIndexJob(job: Job<IndexJobData>): Promise<void> {
       tecdocId: p.tecdocId ?? "",
       oem: p.oem ?? "",
       description: p.description,
+      imageUrl: p.imageUrl ?? "",
+      genericArticle: p.genericArticle ?? "",
+      price: p.price,
+      stock: p.stock,
+      status: p.status,
       createdAt: p.createdAt.toISOString(),
     }));
 

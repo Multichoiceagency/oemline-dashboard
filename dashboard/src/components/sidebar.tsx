@@ -14,6 +14,8 @@ import {
   Activity,
   Code2,
   Package,
+  Tag,
+  FolderTree,
   Moon,
   Sun,
 } from "lucide-react";
@@ -24,6 +26,8 @@ const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/suppliers", label: "Suppliers", icon: Truck },
   { href: "/products", label: "Products", icon: Package },
+  { href: "/brands", label: "Brands", icon: Tag },
+  { href: "/categories", label: "Categories", icon: FolderTree },
   { href: "/search", label: "Product Search", icon: Search },
   { href: "/tecdoc", label: "TecDoc", icon: BookOpen },
   { href: "/unmatched", label: "Unmatched", icon: AlertTriangle },

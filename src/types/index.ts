@@ -63,4 +63,9 @@ export interface SupplierCatalogItem {
   tecdocId: string | null;
   oem: string | null;
   description: string;
+  imageUrl?: string | null;
+  images?: string[];
+  genericArticle?: string | null;
+  oemNumbers?: string[];
+  weight?: number | null;
 }

@@ -276,16 +276,27 @@ export interface Product {
   id: number;
   supplierId: number;
   brandId: number;
+  categoryId: number | null;
   sku: string;
   articleNo: string;
   ean: string | null;
   tecdocId: string | null;
   oem: string | null;
   description: string;
+  imageUrl: string | null;
+  images: string[];
+  price: number | null;
+  currency: string | null;
+  stock: number | null;
+  weight: number | null;
+  genericArticle: string | null;
+  oemNumbers: string[];
+  status: string;
   createdAt: string;
   updatedAt: string;
   supplier: { id: number; name: string; code: string };
   brand: { id: number; name: string; code: string };
+  category?: { id: number; name: string; code: string } | null;
 }
 
 export interface ProductsResponse {
@@ -397,6 +408,74 @@ export interface MatchLogsResponse {
   totalPages: number;
   stats: MatchLogStat[];
 }
+
+// Brands
+export interface Brand {
+  id: number;
+  name: string;
+  code: string;
+  tecdocId: number | null;
+  logoUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+  _count?: { productMaps: number };
+}
+
+export interface BrandsResponse {
+  items: Brand[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export const getBrands = (params?: { page?: number; limit?: number; q?: string }) => {
+  const qs = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    });
+  }
+  return apiFetch<BrandsResponse>(`/api/brands?${qs}`);
+};
+
+export const getBrand = (id: number) =>
+  apiFetch<Brand & { productMaps: Product[] }>(`/api/brands/${id}`);
+
+// Categories
+export interface Category {
+  id: number;
+  name: string;
+  code: string;
+  tecdocId: number | null;
+  parentId: number | null;
+  level: number;
+  createdAt: string;
+  updatedAt: string;
+  _count?: { products: number; children: number };
+  children?: Category[];
+}
+
+export interface CategoriesResponse {
+  items: Category[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export const getCategories = (params?: { page?: number; limit?: number; parentId?: number; q?: string }) => {
+  const qs = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    });
+  }
+  return apiFetch<CategoriesResponse>(`/api/categories?${qs}`);
+};
+
+export const getCategory = (id: number) =>
+  apiFetch<Category & { parent: { id: number; name: string; code: string } | null; products: Product[] }>(`/api/categories/${id}`);
 
 export const getMatchLogs = (params?: {
   page?: number;

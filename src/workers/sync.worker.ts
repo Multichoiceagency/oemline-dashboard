@@ -39,6 +39,9 @@ export async function processSyncJob(job: Job<SyncJobData>): Promise<void> {
   for await (const batch of catalogIterator) {
     batchCount++;
 
+    // Resolve brands first
+    await ensureBrands(batch);
+
     // Process in chunks using batch upsert via raw SQL
     for (let i = 0; i < batch.length; i += UPSERT_BATCH_SIZE) {
       const chunk = batch.slice(i, i + UPSERT_BATCH_SIZE);
@@ -63,24 +66,76 @@ export async function processSyncJob(job: Job<SyncJobData>): Promise<void> {
   );
 }
 
+// Brand cache to avoid repeated DB lookups
+const brandCache = new Map<string, number>();
+
+async function ensureBrands(items: SupplierCatalogItem[]): Promise<void> {
+  const uniqueBrands = new Set(items.map((i) => i.brand).filter(Boolean));
+
+  for (const brandName of uniqueBrands) {
+    if (brandCache.has(brandName)) continue;
+
+    const code = brandName.toLowerCase().replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_");
+    try {
+      const existing = await prisma.brand.findUnique({ where: { code } });
+      if (existing) {
+        brandCache.set(brandName, existing.id);
+      } else {
+        const created = await prisma.brand.create({
+          data: { name: brandName, code },
+        });
+        brandCache.set(brandName, created.id);
+      }
+    } catch {
+      // Concurrent creation — try to find it
+      const found = await prisma.brand.findUnique({ where: { code } });
+      if (found) brandCache.set(brandName, found.id);
+    }
+  }
+}
+
+function getBrandId(brandName: string): number {
+  return brandCache.get(brandName) ?? 1;
+}
+
 async function batchUpsertProducts(supplierId: number, items: SupplierCatalogItem[]): Promise<void> {
   if (items.length === 0) return;
 
-  const values = items.map(
-    (item) =>
-      Prisma.sql`(${supplierId}, 1, ${item.sku}, ${item.articleNo}, ${item.ean}, ${item.tecdocId}, ${item.oem}, ${item.description}, NOW(), NOW())`
-  );
+  const values = items.map((item) => {
+    const brandId = getBrandId(item.brand);
+    const imageUrl = item.imageUrl ?? null;
+    const images = JSON.stringify(item.images ?? []);
+    const genericArticle = item.genericArticle ?? null;
+    const oemNumbers = JSON.stringify(item.oemNumbers ?? []);
+
+    return Prisma.sql`(
+      ${supplierId}, ${brandId}, ${item.sku}, ${item.articleNo},
+      ${item.ean}, ${item.tecdocId}, ${item.oem}, ${item.description},
+      ${imageUrl}, ${images}::jsonb, ${genericArticle}, ${oemNumbers}::jsonb,
+      'active', NOW(), NOW()
+    )`;
+  });
 
   await prisma.$executeRaw`
-    INSERT INTO product_maps (supplier_id, brand_id, sku, article_no, ean, tecdoc_id, oem, description, created_at, updated_at)
+    INSERT INTO product_maps (
+      supplier_id, brand_id, sku, article_no,
+      ean, tecdoc_id, oem, description,
+      image_url, images, generic_article, oem_numbers,
+      status, created_at, updated_at
+    )
     VALUES ${Prisma.join(values)}
     ON CONFLICT (supplier_id, sku)
     DO UPDATE SET
+      brand_id = EXCLUDED.brand_id,
       article_no = EXCLUDED.article_no,
-      ean = EXCLUDED.ean,
-      tecdoc_id = EXCLUDED.tecdoc_id,
-      oem = EXCLUDED.oem,
-      description = EXCLUDED.description,
+      ean = COALESCE(EXCLUDED.ean, product_maps.ean),
+      tecdoc_id = COALESCE(EXCLUDED.tecdoc_id, product_maps.tecdoc_id),
+      oem = COALESCE(EXCLUDED.oem, product_maps.oem),
+      description = CASE WHEN EXCLUDED.description != '' THEN EXCLUDED.description ELSE product_maps.description END,
+      image_url = COALESCE(EXCLUDED.image_url, product_maps.image_url),
+      images = CASE WHEN EXCLUDED.images != '[]'::jsonb THEN EXCLUDED.images ELSE product_maps.images END,
+      generic_article = COALESCE(EXCLUDED.generic_article, product_maps.generic_article),
+      oem_numbers = CASE WHEN EXCLUDED.oem_numbers != '[]'::jsonb THEN EXCLUDED.oem_numbers ELSE product_maps.oem_numbers END,
       updated_at = NOW()
   `;
 }

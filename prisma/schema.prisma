@@ -33,6 +33,8 @@ model Brand {
   id        Int      @id @default(autoincrement())
   name      String   @unique
   code      String   @unique
+  tecdocId  Int?     @unique @map("tecdoc_id")
+  logoUrl   String?  @map("logo_url")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -43,6 +45,24 @@ model Brand {
   unmatched   Unmatched[]
 
   @@map("brands")
+}
+
+model Category {
+  id          Int      @id @default(autoincrement())
+  name        String
+  code        String   @unique
+  tecdocId    Int?     @unique @map("tecdoc_id")
+  parentId    Int?     @map("parent_id")
+  level       Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+  products ProductMap[]
+
+  @@index([parentId])
+  @@map("categories")
 }
 
 model SupplierBrandRule {
@@ -70,25 +90,38 @@ model ProductMap {
   id          Int      @id @default(autoincrement())
   supplierId  Int      @map("supplier_id")
   brandId     Int      @map("brand_id")
+  categoryId  Int?     @map("category_id")
   sku         String
   articleNo   String   @map("article_no")
   ean         String?
   tecdocId    String?  @map("tecdoc_id")
   oem         String?
   description String   @default("")
+  imageUrl    String?  @map("image_url")
+  images      Json?    @default("[]")
+  price       Float?
+  currency    String?  @default("EUR")
+  stock       Int?
+  weight      Float?
+  genericArticle String? @map("generic_article")
+  oemNumbers  Json?    @default("[]") @map("oem_numbers")
+  status      String   @default("active")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
-  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
-  brand    Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  supplier Supplier  @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  brand    Brand     @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   @@unique([supplierId, sku])
   @@index([supplierId, ean])
   @@index([supplierId, tecdocId])
   @@index([supplierId, brandId, articleNo])
+  @@index([categoryId])
   @@index([ean])
   @@index([tecdocId])
   @@index([oem])
+  @@index([articleNo])
   @@index([createdAt])
   @@map("product_maps")
 }

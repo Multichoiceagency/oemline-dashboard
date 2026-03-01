@@ -32,6 +32,12 @@ const updateSchema = z.object({
   oem: z.string().nullable().optional(),
   description: z.string().optional(),
   brandId: z.number().int().optional(),
+  imageUrl: z.string().nullable().optional(),
+  price: z.number().nullable().optional(),
+  currency: z.string().nullable().optional(),
+  stock: z.number().int().nullable().optional(),
+  genericArticle: z.string().nullable().optional(),
+  status: z.string().optional(),
 });
 
 const batchImportSchema = z.object({
