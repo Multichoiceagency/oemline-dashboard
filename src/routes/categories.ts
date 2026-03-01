@@ -133,7 +133,7 @@ export async function categoryRoutes(app: FastifyInstance) {
         getArticles: {
           articleCountry: creds.articleCountry ?? "NL",
           providerId: creds.providerId ?? 22691,
-          lang: "en",
+          lang: "nl",
           perPage: 0,
           page: 1,
           assemblyGroupFacetOptions: {
