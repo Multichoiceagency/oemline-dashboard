@@ -10,6 +10,9 @@ interface InterCarsCredentials {
   clientId: string;
   clientSecret: string;
   tokenUrl: string;
+  customerId?: string;
+  payerId?: string;
+  branch?: string;
 }
 
 interface TokenResponse {
@@ -67,7 +70,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
   private accessToken: string | null = null;
   private tokenExpiresAt = 0;
 
-  constructor(apiUrl: string, apiKey: string, timeout = 10000) {
+  constructor(apiUrl: string, apiKey: string, timeout = 30000) {
     super(apiUrl, apiKey, timeout);
 
     // apiKey is a JSON string of InterCars credentials
@@ -78,17 +81,19 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       // Fallback: apiKey is the client_secret
     }
 
+    // Also check env vars as fallback
     this.credentials = {
-      clientId: creds.clientId ?? "",
-      clientSecret: creds.clientSecret ?? apiKey,
-      tokenUrl: creds.tokenUrl ?? "https://is.webapi.intercars.eu/oauth2/token",
+      clientId: creds.clientId || process.env.INTERCARS_CLIENT_ID || "",
+      clientSecret: creds.clientSecret || process.env.INTERCARS_CLIENT_SECRET || apiKey,
+      tokenUrl: creds.tokenUrl || process.env.INTERCARS_TOKEN_URL || "https://is.webapi.intercars.eu/oauth2/token",
+      customerId: creds.customerId || process.env.INTERCARS_CUSTOMER_ID || "",
+      payerId: creds.payerId || process.env.INTERCARS_PAYER_ID || "",
+      branch: creds.branch || process.env.INTERCARS_BRANCH || "",
     };
   }
 
   /**
    * OAuth2 client_credentials with Basic Auth header.
-   * IC uses: Authorization: Basic base64(clientId:clientSecret)
-   * Body: grant_type=client_credentials&scope=allinone
    */
   private async getAccessToken(): Promise<string> {
     if (this.accessToken && Date.now() < this.tokenExpiresAt - 30_000) {
@@ -123,26 +128,49 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
   private async authHeaders(): Promise<Record<string, string>> {
     const token = await this.getAccessToken();
-    return {
+    const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
     };
+
+    // Add InterCars-specific headers
+    if (this.credentials.customerId) {
+      headers["X-Customer-Id"] = this.credentials.customerId;
+    }
+    if (this.credentials.payerId) {
+      headers["X-Payer-Id"] = this.credentials.payerId;
+    }
+    if (this.credentials.branch) {
+      headers["X-Branch"] = this.credentials.branch;
+    }
+
+    return headers;
   }
 
   /**
-   * Search: InterCars has no free-text search API.
-   * We use /inventory/stock for SKU-based lookups, supplemented with pricing.
-   * For general queries, return empty — rely on Meilisearch index from catalog sync.
+   * Direct fetch with long timeout for sync operations (bypasses circuit breaker).
+   */
+  private async syncFetch(url: string, headers: Record<string, string>): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60_000); // 60s for sync ops
+
+    try {
+      return await fetch(url, { headers, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Search: InterCars uses /inventory/stock for SKU-based lookups.
    */
   async search(params: SupplierSearchParams): Promise<SupplierProduct[]> {
     try {
-      // We need a specific SKU/article to query InterCars
       const sku = params.articleNo ?? params.query;
       if (!sku) return [];
 
       const headers = await this.authHeaders();
 
-      // Check stock (also returns product info)
       const stockUrl = `${this.apiUrl}/inventory/stock?sku=${encodeURIComponent(sku)}`;
       const stockResponse = await this.fetchWithTimeout(stockUrl, { headers });
 
@@ -156,7 +184,6 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
       if (items.length === 0) return [];
 
-      // Fetch pricing for found items
       const priceMap = new Map<string, PricingItem>();
       for (const item of items.slice(0, 20)) {
         const itemSku = item.sku ?? item.index;
@@ -200,9 +227,6 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
     }
   }
 
-  /**
-   * GET /dropshipping/pricing/quote?sku=XXX&quantity=1
-   */
   async getPrice(sku: string): Promise<{ price: number; currency: string } | null> {
     try {
       const headers = await this.authHeaders();
@@ -225,9 +249,6 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
     }
   }
 
-  /**
-   * GET /inventory/stock?sku=XXX (max 30 SKUs per request)
-   */
   async getStock(sku: string): Promise<{ quantity: number; available: boolean } | null> {
     try {
       const headers = await this.authHeaders();
@@ -252,8 +273,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
   /**
    * Catalog sync: browse category tree, then fetch products per category.
-   * GET /catalog/category — top-level categories
-   * GET /catalog/products?categoryId=XXX&pageNumber=0&pageSize=50
+   * Uses long timeout and direct fetch (bypasses circuit breaker).
    */
   async *syncCatalog(cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
     try {
@@ -261,22 +281,39 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
       // Get all top-level categories
       const catUrl = `${this.apiUrl}/catalog/category`;
-      const catResponse = await this.fetchWithTimeout(catUrl, { headers });
+      logger.info({ supplier: this.code, url: catUrl }, "Fetching InterCars catalog categories");
+
+      const catResponse = await this.syncFetch(catUrl, headers);
 
       if (!catResponse.ok) {
-        logger.warn({ status: catResponse.status, supplier: this.code }, "InterCars catalog/category failed");
+        const text = await catResponse.text().catch(() => "");
+        logger.error(
+          { status: catResponse.status, supplier: this.code, body: text.slice(0, 500) },
+          "InterCars catalog/category failed"
+        );
         return;
       }
 
-      const categories = (await catResponse.json()) as CatalogCategory[] | { categories?: CatalogCategory[] };
-      const catList = Array.isArray(categories) ? categories : (categories.categories ?? []);
+      const categoriesRaw = await catResponse.json();
+      const categories = (Array.isArray(categoriesRaw) ? categoriesRaw : (categoriesRaw as { categories?: CatalogCategory[] }).categories ?? []) as CatalogCategory[];
 
-      // Flatten category tree to get leaf category IDs
-      const categoryIds = this.flattenCategories(catList);
+      // Flatten category tree to get all category IDs (both parents and leaves)
+      const categoryIds = this.flattenCategories(categories);
 
-      // If cursor is provided, skip to that category index
+      logger.info(
+        { supplier: this.code, categoryCount: categoryIds.length },
+        "InterCars catalog categories loaded"
+      );
+
+      if (categoryIds.length === 0) {
+        logger.warn({ supplier: this.code }, "InterCars returned 0 categories");
+        return;
+      }
+
       let startIdx = cursor ? parseInt(cursor, 10) : 0;
       if (isNaN(startIdx)) startIdx = 0;
+
+      let totalProducts = 0;
 
       for (let i = startIdx; i < categoryIds.length; i++) {
         const categoryId = categoryIds[i];
@@ -286,9 +323,18 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         while (true) {
           try {
             const prodUrl = `${this.apiUrl}/catalog/products?categoryId=${encodeURIComponent(categoryId)}&pageNumber=${pageNumber}&pageSize=${pageSize}`;
-            const prodResponse = await this.fetchWithTimeout(prodUrl, { headers });
+            const prodResponse = await this.syncFetch(prodUrl, headers);
 
-            if (!prodResponse.ok) break;
+            if (!prodResponse.ok) {
+              if (prodResponse.status === 401) {
+                // Token expired, refresh
+                this.accessToken = null;
+                const newHeaders = await this.authHeaders();
+                Object.assign(headers, newHeaders);
+                continue; // retry with new token
+              }
+              break;
+            }
 
             const prodData = (await prodResponse.json()) as {
               products?: CatalogProduct[];
@@ -310,17 +356,31 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
             }));
 
             yield items;
+            totalProducts += items.length;
 
             if (products.length < pageSize) break;
             if (prodData.totalPages != null && pageNumber >= prodData.totalPages - 1) break;
 
             pageNumber++;
+
+            // Small delay to avoid rate limiting
+            await new Promise((r) => setTimeout(r, 100));
           } catch (err) {
             logger.error({ err, supplier: this.code, categoryId, pageNumber }, "InterCars catalog page failed");
             break;
           }
         }
+
+        // Log progress every 20 categories
+        if (i % 20 === 0 || i === categoryIds.length - 1) {
+          logger.info(
+            { supplier: this.code, categoryIndex: i, totalCategories: categoryIds.length, totalProducts },
+            "InterCars sync progress"
+          );
+        }
       }
+
+      logger.info({ supplier: this.code, totalProducts }, "InterCars catalog sync completed");
     } catch (err) {
       logger.error({ err, supplier: this.code }, "InterCars catalog sync failed");
     }
@@ -331,9 +391,9 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
     for (const cat of categories) {
       if (cat.id) {
-        if (!cat.children || cat.children.length === 0) {
-          ids.push(cat.id);
-        } else {
+        // Add all categories, not just leaves
+        ids.push(cat.id);
+        if (cat.children && cat.children.length > 0) {
           ids.push(...this.flattenCategories(cat.children));
         }
       }

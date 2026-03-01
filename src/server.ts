@@ -18,6 +18,7 @@ import { tecdocRoutes } from "./routes/tecdoc.js";
 import { productRoutes } from "./routes/products.js";
 import { brandRoutes } from "./routes/brands.js";
 import { categoryRoutes } from "./routes/categories.js";
+import { jobRoutes } from "./routes/jobs.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 
 const app = Fastify({
@@ -79,6 +80,7 @@ await app.register(tecdocRoutes, { prefix: "/api" });
 await app.register(productRoutes, { prefix: "/api" });
 await app.register(brandRoutes, { prefix: "/api" });
 await app.register(categoryRoutes, { prefix: "/api" });
+await app.register(jobRoutes, { prefix: "/api" });
 
 app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
   request.log.error({ err: error, reqId: request.id }, "Request error");
