@@ -282,24 +282,37 @@ export class TecDocAdapter extends BaseSupplierAdapter {
             assemblyGroupType: "P",
           },
         },
-      })) as {
-        assemblyGroupFacets?: Array<{
-          assemblyGroupNodeId?: number;
-          assemblyGroupName?: string;
-          matchCount?: number;
-          parentNodeId?: number;
-          children?: unknown[];
-        }>;
-        totalMatchingArticles?: number;
-      };
+      })) as Record<string, unknown>;
 
-      const totalArticles = facetResult.totalMatchingArticles ?? 0;
-      const groups = (facetResult.assemblyGroupFacets ?? [])
+      const totalArticles = (facetResult.totalMatchingArticles as number) ?? 0;
+
+      // assemblyGroupFacets can be an object with counts/array, or directly an array
+      let rawFacets: Array<Record<string, unknown>> = [];
+      const agf = facetResult.assemblyGroupFacets;
+      if (Array.isArray(agf)) {
+        rawFacets = agf;
+      } else if (agf && typeof agf === "object") {
+        const obj = agf as Record<string, unknown>;
+        rawFacets = (obj.counts ?? obj.array ?? obj.data ?? []) as Array<Record<string, unknown>>;
+        if (!Array.isArray(rawFacets)) rawFacets = [];
+      }
+
+      // Flatten nested tree structure if needed
+      const allFacets = this.flattenFacets(rawFacets);
+
+      const groups = allFacets
         .filter((g) => g.assemblyGroupNodeId && (g.matchCount ?? 0) > 0)
         .sort((a, b) => (b.matchCount ?? 0) - (a.matchCount ?? 0));
 
       logger.info(
-        { supplier: this.code, totalArticles, assemblyGroups: groups.length },
+        {
+          supplier: this.code,
+          totalArticles,
+          assemblyGroups: groups.length,
+          facetType: typeof agf,
+          isArray: Array.isArray(agf),
+          rawFacetKeys: agf && typeof agf === "object" && !Array.isArray(agf) ? Object.keys(agf as Record<string, unknown>).slice(0, 5) : [],
+        },
         "TecDoc catalog sync starting with assembly group partitioning"
       );
 
@@ -382,6 +395,28 @@ export class TecDocAdapter extends BaseSupplierAdapter {
     } catch (err) {
       logger.error({ err, supplier: this.code }, "TecDoc catalog sync failed");
     }
+  }
+
+  private flattenFacets(facets: Array<Record<string, unknown>>): Array<{ assemblyGroupNodeId: number; assemblyGroupName: string; matchCount: number }> {
+    const result: Array<{ assemblyGroupNodeId: number; assemblyGroupName: string; matchCount: number }> = [];
+
+    for (const facet of facets) {
+      const nodeId = facet.assemblyGroupNodeId as number | undefined;
+      const name = (facet.assemblyGroupName ?? facet.name ?? "") as string;
+      const count = (facet.matchCount ?? facet.count ?? 0) as number;
+
+      if (nodeId) {
+        result.push({ assemblyGroupNodeId: nodeId, assemblyGroupName: name, matchCount: count });
+      }
+
+      // Recursively flatten children
+      const children = facet.children as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(children) && children.length > 0) {
+        result.push(...this.flattenFacets(children));
+      }
+    }
+
+    return result;
   }
 
   /**
