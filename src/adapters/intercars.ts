@@ -131,6 +131,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
+      "Accept-Language": "en",
     };
 
     // Add InterCars-specific headers

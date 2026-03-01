@@ -258,7 +258,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
    * Full TecDoc catalog sync using getArticles with dataSupplierId (brand filter).
    *
    * Strategy:
-   * 1. Fetch all brands via getBrands
+   * 1. Discover all data suppliers (brands) using getArticles with perPage=0 + dataSupplierFacetOptions
    * 2. For each brand, use getArticles with dataSupplierId to get all articles
    * 3. Paginate through each brand's articles
    * 4. Yield batches for DB upsert
@@ -267,14 +267,34 @@ export class TecDocAdapter extends BaseSupplierAdapter {
    */
   async *syncCatalog(cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
     try {
-      // Step 1: Get ALL brands
-      const brandsResult = (await this.tecdocRequest("getBrands", {})) as {
-        brands?: TecDocBrand[];
+      // Step 1: Discover all brands via dataSupplierFacets (perPage=0 returns only metadata)
+      const facetResult = (await this.tecdocFetch({
+        getArticles: {
+          articleCountry: this.credentials.articleCountry,
+          providerId: this.credentials.providerId,
+          lang: "nl",
+          perPage: 0,
+          page: 1,
+          dataSupplierFacetOptions: { enabled: true, assemblyGroupType: "P" },
+        },
+      })) as {
+        dataSupplierFacets?: Array<{ dataSupplierId?: number; mfrName?: string; matchCount?: number }>;
+        totalMatchingArticles?: number;
       };
 
-      const brands = brandsResult.brands ?? [];
+      const dataSuppliers = facetResult.dataSupplierFacets ?? [];
+      const brands: TecDocBrand[] = dataSuppliers
+        .filter((ds) => ds.dataSupplierId && ds.matchCount && ds.matchCount > 0)
+        .map((ds) => ({
+          brandId: ds.dataSupplierId,
+          brandName: ds.mfrName ?? `Brand ${ds.dataSupplierId}`,
+        }));
+
       if (brands.length === 0) {
-        logger.warn({ supplier: this.code }, "TecDoc getBrands returned no brands");
+        logger.warn(
+          { supplier: this.code, totalArticles: facetResult.totalMatchingArticles, rawFacets: dataSuppliers.length },
+          "TecDoc returned no data supplier facets"
+        );
         return;
       }
 
