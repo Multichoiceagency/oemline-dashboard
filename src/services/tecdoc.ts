@@ -133,8 +133,8 @@ export class TecDocService {
         "getArticleDirectSearchAllNumbersWithState",
         {
           articleNumber: oemNumber,
-          numberType: 2,
-          searchExact: true,
+          numberType: 10, // OEM cross-reference
+          searchExact: false,
           perPage: 25,
           page: 1,
         }
