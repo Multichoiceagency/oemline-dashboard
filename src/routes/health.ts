@@ -31,9 +31,12 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // Circuit breaker states
-    const circuits: Record<string, string> = {};
+    const circuits: Record<string, { state: string; failures: number }> = {};
     for (const adapter of getAllAdapters()) {
-      circuits[adapter.code] = adapter.circuitBreaker.getState();
+      circuits[adapter.code] = {
+        state: adapter.circuitBreaker.getState(),
+        failures: adapter.circuitBreaker.getFailures(),
+      };
     }
 
     // Queue depths (waiting + active + prioritized)

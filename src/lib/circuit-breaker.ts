@@ -61,6 +61,10 @@ export class CircuitBreaker {
     return this.state;
   }
 
+  getFailures(): number {
+    return this.failureCount;
+  }
+
   private onSuccess(): void {
     if (this.state === "half-open") {
       logger.info({ circuit: this.name }, "Circuit recovered, closing");
