@@ -77,3 +77,54 @@ export async function getPresignedUploadUrl(
 ): Promise<string> {
   return minioClient.presignedPutObject(BUCKET, objectName, expirySeconds);
 }
+
+export interface StorageObject {
+  name: string;
+  size: number;
+  lastModified: Date;
+  etag: string;
+  prefix?: string;
+}
+
+/**
+ * List objects in the bucket with optional prefix filtering.
+ */
+export async function listObjects(prefix = "", recursive = true): Promise<StorageObject[]> {
+  const objects: StorageObject[] = [];
+  const stream = minioClient.listObjectsV2(BUCKET, prefix, recursive);
+  return new Promise((resolve, reject) => {
+    stream.on("data", (obj) => {
+      if (obj.name) {
+        objects.push({
+          name: obj.name,
+          size: obj.size,
+          lastModified: obj.lastModified,
+          etag: obj.etag ?? "",
+          prefix: obj.prefix,
+        });
+      }
+    });
+    stream.on("end", () => resolve(objects));
+    stream.on("error", reject);
+  });
+}
+
+/**
+ * Get bucket storage stats.
+ */
+export async function getBucketStats(): Promise<{ totalFiles: number; totalSize: number; folders: Record<string, { count: number; size: number }> }> {
+  const objects = await listObjects();
+  const folders: Record<string, { count: number; size: number }> = {};
+  let totalSize = 0;
+
+  for (const obj of objects) {
+    totalSize += obj.size;
+    const parts = obj.name.split("/");
+    const folder = parts.length > 1 ? parts.slice(0, -1).join("/") : "/";
+    if (!folders[folder]) folders[folder] = { count: 0, size: 0 };
+    folders[folder].count++;
+    folders[folder].size += obj.size;
+  }
+
+  return { totalFiles: objects.length, totalSize, folders };
+}

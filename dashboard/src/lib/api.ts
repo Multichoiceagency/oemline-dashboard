@@ -550,6 +550,52 @@ export const uploadBrandLogo = async (brandId: number, file: File): Promise<{ ur
   return res.json();
 };
 
+// Storage
+export interface StorageFile {
+  name: string;
+  size: number;
+  lastModified: string;
+  url: string;
+}
+
+export interface StorageStats {
+  totalFiles: number;
+  totalSize: number;
+  folders: Record<string, { count: number; size: number }>;
+}
+
+export const getStorageFiles = (prefix?: string) => {
+  const qs = prefix ? `?prefix=${encodeURIComponent(prefix)}` : "";
+  return apiFetch<{ items: StorageFile[]; total: number }>(`/api/uploads/list${qs}`);
+};
+
+export const getStorageStats = () =>
+  apiFetch<StorageStats>("/api/uploads/stats");
+
+export const uploadGenericFile = async (file: File, folder = "misc"): Promise<{ url: string; objectName: string }> => {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const url = `${API_BASE}/api/uploads/file?folder=${encodeURIComponent(folder)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "X-API-Key": API_KEY },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as Record<string, string>).error || `Upload failed: ${res.status}`);
+  }
+
+  return res.json();
+};
+
+export const deleteStorageFile = (objectName: string) =>
+  apiFetch<{ deleted: boolean; objectName: string }>(`/api/uploads/file?objectName=${encodeURIComponent(objectName)}`, {
+    method: "DELETE",
+  });
+
 // InterCars Mapping Stats
 export interface MappingStats {
   totalMappings: number;

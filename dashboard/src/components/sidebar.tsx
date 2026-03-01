@@ -16,6 +16,7 @@ import {
   Package,
   Tag,
   FolderTree,
+  HardDrive,
   Moon,
   Sun,
 } from "lucide-react";
@@ -32,6 +33,7 @@ const navItems = [
   { href: "/tecdoc", label: "TecDoc", icon: BookOpen },
   { href: "/unmatched", label: "Unmatched", icon: AlertTriangle },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/storage", label: "Storage", icon: HardDrive },
   { href: "/overrides", label: "Overrides", icon: GitCompare },
   { href: "/health", label: "System Health", icon: Activity },
   { href: "/api-reference", label: "API Reference", icon: Code2 },
