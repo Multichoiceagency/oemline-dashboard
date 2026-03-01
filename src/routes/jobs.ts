@@ -141,7 +141,7 @@ function getQueue(name: string) {
 
 async function getQueueCounts(queue: typeof syncQueue) {
   const counts = await queue.getJobCounts(
-    "active", "completed", "delayed", "failed", "paused", "waiting"
+    "active", "completed", "delayed", "failed", "paused", "waiting", "prioritized", "wait"
   );
 
   const repeatable = await queue.getRepeatableJobs();
