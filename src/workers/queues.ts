@@ -1,0 +1,60 @@
+import { Queue } from "bullmq";
+import { redisConfig } from "../lib/redis.js";
+
+const connection = {
+  host: redisConfig.host,
+  port: redisConfig.port,
+  password: redisConfig.password,
+  db: redisConfig.db,
+  maxRetriesPerRequest: null,
+};
+
+export const syncQueue = new Queue("sync", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 100 },
+    removeOnFail: { count: 500 },
+    attempts: 3,
+    backoff: { type: "exponential", delay: 5000 },
+  },
+});
+
+export const matchQueue = new Queue("match", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 500 },
+    removeOnFail: { count: 1000 },
+    attempts: 2,
+    backoff: { type: "fixed", delay: 2000 },
+  },
+});
+
+export const pricingQueue = new Queue("pricing", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 200 },
+    removeOnFail: { count: 500 },
+    attempts: 2,
+    backoff: { type: "fixed", delay: 3000 },
+  },
+});
+
+export const stockQueue = new Queue("stock", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 200 },
+    removeOnFail: { count: 500 },
+    attempts: 2,
+    backoff: { type: "fixed", delay: 3000 },
+  },
+});
+
+export const indexQueue = new Queue("index", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 100 },
+    removeOnFail: { count: 200 },
+    attempts: 3,
+    backoff: { type: "exponential", delay: 3000 },
+  },
+});

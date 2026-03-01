@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Supplier {
+  id            Int      @id @default(autoincrement())
+  name          String   @unique
+  code          String   @unique
+  adapterType   String   @map("adapter_type")
+  baseUrl       String   @map("base_url")
+  credentials   String   @default("{}")
+  priority      Int      @default(100)
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  brandRules  SupplierBrandRule[]
+  productMaps ProductMap[]
+  overrides   Override[]
+  matchLogs   MatchLog[]
+  unmatched   Unmatched[]
+
+  @@index([active, priority])
+  @@map("suppliers")
+}
+
+model Brand {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  code      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  brandRules  SupplierBrandRule[]
+  productMaps ProductMap[]
+  overrides   Override[]
+  matchLogs   MatchLog[]
+  unmatched   Unmatched[]
+
+  @@map("brands")
+}
+
+model SupplierBrandRule {
+  id             Int      @id @default(autoincrement())
+  supplierId     Int      @map("supplier_id")
+  brandId        Int      @map("brand_id")
+  supplierBrand  String   @map("supplier_brand")
+  prefixStrip    String?  @map("prefix_strip")
+  suffixStrip    String?  @map("suffix_strip")
+  normalizeRegex String?  @map("normalize_regex")
+  matchOrder     Json?    @map("match_order")
+  priority       Int      @default(100)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  brand    Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@unique([supplierId, brandId])
+  @@map("supplier_brand_rules")
+}
+
+model ProductMap {
+  id          Int      @id @default(autoincrement())
+  supplierId  Int      @map("supplier_id")
+  brandId     Int      @map("brand_id")
+  sku         String
+  articleNo   String   @map("article_no")
+  ean         String?
+  tecdocId    String?  @map("tecdoc_id")
+  oem         String?
+  description String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  brand    Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@unique([supplierId, sku])
+  @@index([supplierId, ean])
+  @@index([supplierId, tecdocId])
+  @@index([supplierId, brandId, articleNo])
+  @@index([ean])
+  @@index([tecdocId])
+  @@index([oem])
+  @@index([createdAt])
+  @@map("product_maps")
+}
+
+model Override {
+  id         Int      @id @default(autoincrement())
+  supplierId Int      @map("supplier_id")
+  brandId    Int      @map("brand_id")
+  articleNo  String   @map("article_no")
+  sku        String
+  ean        String?
+  tecdocId   String?  @map("tecdoc_id")
+  oem        String?
+  reason     String   @default("")
+  createdBy  String   @map("created_by")
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  brand    Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@unique([supplierId, brandId, articleNo])
+  @@index([supplierId, ean])
+  @@index([supplierId, tecdocId])
+  @@index([createdAt])
+  @@map("overrides")
+}
+
+model MatchLog {
+  id         Int      @id @default(autoincrement())
+  supplierId Int      @map("supplier_id")
+  brandId    Int?     @map("brand_id")
+  query      String
+  sku        String?
+  method     String?
+  confidence Float?
+  matched    Boolean
+  durationMs Int      @map("duration_ms")
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  brand    Brand?   @relation(fields: [brandId], references: [id], onDelete: SetNull)
+
+  @@index([supplierId, createdAt])
+  @@index([matched, createdAt])
+  @@index([method, createdAt])
+  @@index([createdAt])
+  @@map("match_logs")
+}
+
+model Unmatched {
+  id         Int       @id @default(autoincrement())
+  supplierId Int       @map("supplier_id")
+  brandId    Int?      @map("brand_id")
+  query      String
+  articleNo  String?   @map("article_no")
+  ean        String?
+  tecdocId   String?   @map("tecdoc_id")
+  oem        String?
+  attempts   Int       @default(1)
+  resolvedAt DateTime? @map("resolved_at")
+  resolvedBy String?   @map("resolved_by")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  brand    Brand?   @relation(fields: [brandId], references: [id], onDelete: SetNull)
+
+  @@unique([supplierId, query])
+  @@index([resolvedAt])
+  @@index([createdAt])
+  @@index([attempts])
+  @@map("unmatched")
+}
