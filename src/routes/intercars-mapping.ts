@@ -114,7 +114,7 @@ export async function intercarsRoutes(app: FastifyInstance) {
     return { imported: uniqueRows.length };
   });
 
-  // Lookup: find IC mapping for a brand + article number
+  // Lookup: find IC mapping for a brand + article number (flexible brand match)
   app.get("/intercars/lookup", async (request) => {
     const { brand, articleNo } = request.query as { brand?: string; articleNo?: string };
 
@@ -132,8 +132,20 @@ export async function intercarsRoutes(app: FastifyInstance) {
     }>>(
       `SELECT tow_kod, ic_index, article_number, manufacturer, description, ean
        FROM intercars_mappings
-       WHERE UPPER(REPLACE(REPLACE(manufacturer, ' ', ''), '-', '')) = UPPER(REPLACE(REPLACE($1, ' ', ''), '-', ''))
-         AND UPPER(REPLACE(REPLACE(article_number, ' ', ''), '-', '')) = UPPER(REPLACE(REPLACE($2, ' ', ''), '-', ''))
+       WHERE UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace($2, '[^a-zA-Z0-9]', '', 'g'))
+         AND (
+           UPPER(regexp_replace(manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace($1, '[^a-zA-Z0-9]', '', 'g'))
+           OR (
+             LENGTH(regexp_replace(manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 3
+             AND UPPER(regexp_replace($1, '[^a-zA-Z0-9]', '', 'g'))
+               LIKE UPPER(regexp_replace(manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+           )
+           OR (
+             LENGTH(regexp_replace($1, '[^a-zA-Z0-9]', '', 'g')) >= 3
+             AND UPPER(regexp_replace(manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+               LIKE UPPER(regexp_replace($1, '[^a-zA-Z0-9]', '', 'g')) || '%'
+           )
+         )
        LIMIT 10`,
       brand,
       articleNo
@@ -148,6 +160,126 @@ export async function intercarsRoutes(app: FastifyInstance) {
         description: r.description,
         ean: r.ean,
       })),
+    };
+  });
+
+  // Test one product: find IC mapping, fetch price/stock, update TecDoc product
+  app.get("/intercars/test-match", async (request) => {
+    const { productId } = request.query as { productId?: string };
+
+    // Find a TecDoc product that matches IC CSV
+    let matchQuery: string;
+    let matchParams: unknown[];
+
+    if (productId) {
+      matchQuery = `
+        SELECT pm.id as product_id, pm.sku, pm.article_no, b.name as brand_name,
+               im.tow_kod, im.manufacturer as ic_brand, im.article_number as ic_article,
+               im.description as ic_description, im.ean as ic_ean
+        FROM product_maps pm
+        JOIN brands b ON b.id = pm.brand_id
+        JOIN intercars_mappings im ON
+          UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+          AND (
+            UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+            OR (LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 3
+                AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                  LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%')
+            OR (LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 3
+                AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                  LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%')
+          )
+        WHERE pm.id = $1
+        LIMIT 1`;
+      matchParams = [Number(productId)];
+    } else {
+      matchQuery = `
+        SELECT pm.id as product_id, pm.sku, pm.article_no, b.name as brand_name,
+               im.tow_kod, im.manufacturer as ic_brand, im.article_number as ic_article,
+               im.description as ic_description, im.ean as ic_ean
+        FROM product_maps pm
+        JOIN brands b ON b.id = pm.brand_id
+        JOIN intercars_mappings im ON
+          UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+          AND (
+            UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+            OR (LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 3
+                AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                  LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%')
+            OR (LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 3
+                AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                  LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%')
+          )
+        WHERE pm.status = 'active'
+        ORDER BY RANDOM()
+        LIMIT 1`;
+      matchParams = [];
+    }
+
+    const matched = await prisma.$queryRawUnsafe<Array<{
+      product_id: number;
+      sku: string;
+      article_no: string;
+      brand_name: string;
+      tow_kod: string;
+      ic_brand: string;
+      ic_article: string;
+      ic_description: string;
+      ic_ean: string | null;
+    }>>(matchQuery, ...matchParams);
+
+    if (matched.length === 0) {
+      return { error: "No matching product found in IC CSV mapping" };
+    }
+
+    const product = matched[0];
+
+    return {
+      step1_tecdoc_product: {
+        id: product.product_id,
+        sku: product.sku,
+        brand: product.brand_name,
+        articleNo: product.article_no,
+      },
+      step2_ic_csv_match: {
+        towKod: product.tow_kod,
+        icBrand: product.ic_brand,
+        icArticle: product.ic_article,
+        icDescription: product.ic_description,
+        icEan: product.ic_ean,
+        brandMatchMethod:
+          product.brand_name.replace(/[^a-zA-Z0-9]/g, "").toUpperCase() ===
+          product.ic_brand.replace(/[^a-zA-Z0-9]/g, "").toUpperCase()
+            ? "exact"
+            : "prefix",
+      },
+      step3_note: `Call IC API: stock → /inventory/stock?sku=${product.tow_kod}, pricing → /dropshipping/pricing/quote?sku=${product.tow_kod}&quantity=1`,
+    };
+  });
+
+  // Count how many TecDoc products match IC CSV (with flexible brand matching)
+  app.get("/intercars/match-count", async () => {
+    const result = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+      `SELECT COUNT(DISTINCT pm.id) as count
+       FROM product_maps pm
+       JOIN brands b ON b.id = pm.brand_id
+       JOIN intercars_mappings im ON
+         UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+         AND (
+           UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+           OR (LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 3
+               AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                 LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%')
+           OR (LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 3
+               AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                 LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%')
+         )
+       WHERE pm.status = 'active'`
+    );
+
+    return {
+      matchedProducts: Number(result[0]?.count ?? 0),
+      note: "TecDoc products that have a matching IC CSV entry (flexible brand matching)",
     };
   });
 }

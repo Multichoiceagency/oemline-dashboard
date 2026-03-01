@@ -257,18 +257,14 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
   }
 
   /**
-   * InterCars sync: uses CSV mapping table to match products to IC SKUs (TOW_KOD),
-   * then fetches pricing and stock for matched products.
+   * InterCars is a PRICING/STOCK enrichment source, not a product catalog.
+   * Products come from TecDoc; IC provides prices and stock via CSV mapping.
    *
-   * Mapping: brand + article_number -> TOW_KOD
-   * Pricing: GET /dropshipping/pricing/quote?sku=TOW_KOD&quantity=1
-   * Stock:   GET /inventory/stock?sku=TOW_KOD
-   *
-   * Strategy:
-   * 1. Load products from DB that need pricing
-   * 2. Look up IC TOW_KOD via intercars_mappings table (brand + article_no)
-   * 3. Batch fetch stock and pricing using TOW_KOD
-   * 4. Yield updated items with price/stock data
+   * Flow:
+   * 1. Match TecDoc products to IC CSV (brand + article_number → TOW_KOD)
+   *    - Brand matching is flexible: exact OR prefix match (handles "FEBI" ↔ "FEBI BILSTEIN")
+   * 2. Fetch stock + pricing from IC API using TOW_KOD
+   * 3. Directly UPDATE the TecDoc product_maps with price/stock (no duplicate records)
    */
   async *syncCatalog(_cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
     try {
@@ -299,7 +295,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
       logger.info(
         { supplier: this.code, totalMappings },
-        "InterCars pricing sync starting with CSV mapping"
+        "InterCars pricing enrichment starting"
       );
 
       const PAGE_SIZE = 500;
@@ -308,9 +304,10 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       let totalMatched = 0;
 
       while (true) {
-        // Find products matched to IC via brand + article_number
-        // Normalization: strip ALL non-alphanumeric chars (spaces, dashes, dots, slashes, underscores) + uppercase
-        // Handles: "0 986 478 684" = "0986478684", "10.0341-0113" = "10034101134", "ATE/UAT" = "ATEUAT"
+        // Match TecDoc products → IC CSV mappings via normalized brand + article_number.
+        // Brand matching: exact OR prefix (shorter name must be prefix of longer).
+        // This handles: "FEBI" ↔ "FEBI BILSTEIN", "DT" ↔ "DT Spare Parts",
+        //               "TRW" ↔ "TRW AUTOMOTIVE", "BOSCH" = "BOSCH" (exact)
         const matchedProducts = await prisma.$queryRawUnsafe<Array<{
           product_id: number;
           sku: string;
@@ -321,7 +318,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
           ic_ean: string | null;
           ic_weight: number | null;
         }>>(
-          `SELECT
+          `SELECT DISTINCT ON (pm.id)
             pm.id as product_id,
             pm.sku,
             pm.article_no,
@@ -333,8 +330,23 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
           FROM product_maps pm
           JOIN brands b ON b.id = pm.brand_id
           JOIN intercars_mappings im ON
-            UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
-            AND UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+            UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+            AND (
+              -- Exact brand match
+              UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+              -- OR prefix match: IC brand is prefix of TecDoc brand (e.g. "FEBI" matches "FEBIBILSTEIN")
+              OR (
+                LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 3
+                AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                  LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+              )
+              -- OR reverse prefix: TecDoc brand is prefix of IC brand (e.g. "TRW" matches "TRWAUTOMOTIVE")
+              OR (
+                LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 3
+                AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                  LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+              )
+            )
           WHERE pm.status = 'active'
           ORDER BY pm.id
           LIMIT ${PAGE_SIZE} OFFSET ${offset}`
@@ -345,11 +357,10 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         totalMatched += matchedProducts.length;
         offset += PAGE_SIZE;
 
-        // Batch fetch stock and pricing for matched TOW_KODs
+        // Batch fetch stock and pricing, then DIRECTLY UPDATE the TecDoc product
         const BATCH_SIZE = 30;
         for (let i = 0; i < matchedProducts.length; i += BATCH_SIZE) {
           const batch = matchedProducts.slice(i, i + BATCH_SIZE);
-          const items: SupplierCatalogItem[] = [];
 
           try {
             const headers = await this.authHeaders();
@@ -385,19 +396,24 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
                   // pricing is best-effort
                 }
 
-                items.push({
-                  sku: product.sku,
-                  brand: product.brand_name,
-                  articleNo: product.article_no,
-                  ean: product.ic_ean,
-                  tecdocId: null,
-                  oem: null,
-                  description: product.ic_description || "",
-                  weight: product.ic_weight,
-                  price,
-                  currency,
-                  stock: stockQty,
-                });
+                // DIRECTLY UPDATE the TecDoc product with price/stock
+                if (price !== null || stockQty !== null) {
+                  await prisma.$executeRawUnsafe(
+                    `UPDATE product_maps SET
+                      price = COALESCE($1, price),
+                      stock = COALESCE($2, stock),
+                      currency = COALESCE($3, currency),
+                      ean = COALESCE($4, ean),
+                      updated_at = NOW()
+                    WHERE id = $5`,
+                    price,
+                    stockQty,
+                    currency,
+                    product.ic_ean,
+                    product.product_id
+                  );
+                  totalUpdated++;
+                }
               } catch {
                 // Skip individual item errors
               }
@@ -405,31 +421,27 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
               // Rate limit between API calls
               await new Promise((r) => setTimeout(r, 50));
             }
-
-            if (items.length > 0) {
-              yield items;
-              totalUpdated += items.length;
-            }
           } catch (err) {
             logger.warn({ err, supplier: this.code }, "InterCars batch fetch failed");
           }
         }
 
         // Log progress
-        if (totalMatched % 500 === 0 || matchedProducts.length < PAGE_SIZE) {
-          logger.info(
-            { supplier: this.code, matched: totalMatched, updated: totalUpdated, offset },
-            "InterCars pricing sync progress"
-          );
-        }
+        logger.info(
+          { supplier: this.code, matched: totalMatched, updated: totalUpdated, offset },
+          "InterCars pricing enrichment progress"
+        );
       }
+
+      // Yield one empty batch so the sync worker knows we ran
+      yield [];
 
       logger.info(
         { supplier: this.code, totalMatched, totalUpdated },
-        "InterCars pricing sync completed"
+        "InterCars pricing enrichment completed"
       );
     } catch (err) {
-      logger.error({ err, supplier: this.code }, "InterCars pricing sync failed");
+      logger.error({ err, supplier: this.code }, "InterCars pricing enrichment failed");
     }
   }
 }
