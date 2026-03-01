@@ -21,7 +21,9 @@ import { categoryRoutes } from "./routes/categories.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { storefrontRoutes } from "./routes/storefront.js";
 import { intercarsRoutes } from "./routes/intercars-mapping.js";
+import { uploadRoutes } from "./routes/uploads.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
+import { ensureBucket } from "./lib/minio.js";
 
 const app = Fastify({
   logger: {
@@ -85,6 +87,7 @@ await app.register(categoryRoutes, { prefix: "/api" });
 await app.register(jobRoutes, { prefix: "/api" });
 await app.register(storefrontRoutes, { prefix: "/api" });
 await app.register(intercarsRoutes, { prefix: "/api" });
+await app.register(uploadRoutes, { prefix: "/api" });
 
 app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
   request.log.error({ err: error, reqId: request.id }, "Request error");
@@ -121,6 +124,10 @@ try {
 
   await loadAdaptersFromDb().catch((err) => {
     logger.warn({ err }, "Failed to load adapters from DB — no suppliers active");
+  });
+
+  await ensureBucket().catch((err) => {
+    logger.warn({ err }, "MinIO bucket init failed — file uploads may not work");
   });
 
   await app.listen({ port: config.PORT, host: config.HOST });

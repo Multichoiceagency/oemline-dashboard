@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useApi } from "@/lib/hooks";
 import {
   getProducts,
@@ -10,6 +10,7 @@ import {
   populateTecDoc,
   searchProducts,
   importProducts,
+  uploadProductImage,
 } from "@/lib/api";
 import type { Product } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -53,6 +54,7 @@ import {
   ImageIcon,
   DollarSign,
   Boxes,
+  Upload,
 } from "lucide-react";
 
 const SEED_QUERIES = [
@@ -102,6 +104,25 @@ export default function ProductsPage() {
     status: "active",
   });
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const imageFileRef = useRef<HTMLInputElement>(null);
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedProduct) return;
+    setUploading(true);
+    try {
+      const result = await uploadProductImage(selectedProduct.id, file);
+      setEditForm({ ...editForm, imageUrl: result.url });
+      setSelectedProduct({ ...selectedProduct, imageUrl: result.url, images: result.images });
+      refetch();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+      if (imageFileRef.current) imageFileRef.current.value = "";
+    }
+  };
 
   // Populate dialog
   const [populateOpen, setPopulateOpen] = useState(false);
@@ -531,13 +552,31 @@ export default function ProductsPage() {
                   {/* Image section */}
                   <div className="space-y-2">
                     <label className="text-sm font-medium flex items-center gap-2">
-                      <ImageIcon className="h-4 w-4" /> Product Image URL
+                      <ImageIcon className="h-4 w-4" /> Product Image
                     </label>
-                    <Input
-                      value={editForm.imageUrl}
-                      onChange={(e) => setEditForm({ ...editForm, imageUrl: e.target.value })}
-                      placeholder="https://example.com/product.jpg"
-                    />
+                    <div className="flex gap-2">
+                      <Input
+                        value={editForm.imageUrl}
+                        onChange={(e) => setEditForm({ ...editForm, imageUrl: e.target.value })}
+                        placeholder="https://example.com/product.jpg"
+                        className="flex-1"
+                      />
+                      <input
+                        ref={imageFileRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={handleImageUpload}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => imageFileRef.current?.click()}
+                        disabled={uploading}
+                      >
+                        {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                      </Button>
+                    </div>
                     {editForm.imageUrl && (
                       <div className="flex items-center gap-4 p-3 rounded-lg border bg-muted/50">
                         <span className="text-xs text-muted-foreground">Preview:</span>
@@ -546,6 +585,14 @@ export default function ProductsPage() {
                           alt="Preview"
                           className="h-20 w-20 object-contain rounded"
                         />
+                      </div>
+                    )}
+                    {/* Show existing images gallery */}
+                    {selectedProduct.images && selectedProduct.images.length > 1 && (
+                      <div className="flex gap-2 flex-wrap">
+                        {selectedProduct.images.map((img, i) => (
+                          <img key={i} src={img} alt="" className="h-12 w-12 object-contain rounded border p-0.5 cursor-pointer hover:ring-2 ring-primary" onClick={() => setEditForm({ ...editForm, imageUrl: img })} />
+                        ))}
                       </div>
                     )}
                   </div>

@@ -25,6 +25,15 @@ const envSchema = z.object({
   INTERCARS_CUSTOMER_ID: z.string().default(""),
   INTERCARS_PAYER_ID: z.string().default(""),
   INTERCARS_BRANCH: z.string().default(""),
+
+  // MinIO / S3
+  MINIO_ENDPOINT: z.string().default("minio.oemline.eu"),
+  MINIO_PORT: z.coerce.number().default(443),
+  MINIO_USE_SSL: z.string().default("true"),
+  MINIO_ACCESS_KEY: z.string().default(""),
+  MINIO_SECRET_KEY: z.string().default(""),
+  MINIO_BUCKET: z.string().default("oemline"),
+  MINIO_PUBLIC_URL: z.string().default("https://minio.oemline.eu"),
 });
 
 const parsed = envSchema.safeParse(process.env);

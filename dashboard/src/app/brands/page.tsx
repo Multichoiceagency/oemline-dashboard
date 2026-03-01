@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useApi } from "@/lib/hooks";
-import { getBrands, getProducts, updateBrand } from "@/lib/api";
+import { getBrands, getProducts, updateBrand, uploadBrandLogo } from "@/lib/api";
 import type { Brand } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatNumber } from "@/lib/utils";
-import { Search, Tag, Package, X, Loader2, Pencil, ImageIcon } from "lucide-react";
+import { Search, Tag, Package, X, Loader2, Pencil, ImageIcon, Upload } from "lucide-react";
 
 export default function BrandsPage() {
   const [page, setPage] = useState(1);
@@ -50,6 +50,8 @@ export default function BrandsPage() {
   const [editMode, setEditMode] = useState(false);
   const [editForm, setEditForm] = useState({ name: "", logoUrl: "" });
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const logoFileRef = useRef<HTMLInputElement>(null);
 
   const handleSearch = () => {
     setSearchQuery(searchInput);
@@ -63,6 +65,23 @@ export default function BrandsPage() {
       name: brand.name,
       logoUrl: brand.logoUrl ?? "",
     });
+  };
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedBrand) return;
+    setUploading(true);
+    try {
+      const result = await uploadBrandLogo(selectedBrand.id, file);
+      setEditForm({ ...editForm, logoUrl: result.url });
+      setSelectedBrand({ ...selectedBrand, logoUrl: result.url });
+      refetch();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+      if (logoFileRef.current) logoFileRef.current.value = "";
+    }
   };
 
   const handleSave = async () => {
@@ -224,13 +243,31 @@ export default function BrandsPage() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium flex items-center gap-2">
-                    <ImageIcon className="h-4 w-4" /> Logo URL
+                    <ImageIcon className="h-4 w-4" /> Logo
                   </label>
-                  <Input
-                    value={editForm.logoUrl}
-                    onChange={(e) => setEditForm({ ...editForm, logoUrl: e.target.value })}
-                    placeholder="https://example.com/logo.png"
-                  />
+                  <div className="flex gap-2">
+                    <Input
+                      value={editForm.logoUrl}
+                      onChange={(e) => setEditForm({ ...editForm, logoUrl: e.target.value })}
+                      placeholder="https://example.com/logo.png"
+                      className="flex-1"
+                    />
+                    <input
+                      ref={logoFileRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleLogoUpload}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => logoFileRef.current?.click()}
+                      disabled={uploading}
+                    >
+                      {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                    </Button>
+                  </div>
                   {editForm.logoUrl && (
                     <div className="flex items-center gap-4 p-3 rounded-lg border bg-muted/50">
                       <span className="text-xs text-muted-foreground">Preview:</span>

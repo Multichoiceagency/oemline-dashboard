@@ -511,6 +511,54 @@ export const updateCategory = (id: number, data: { name?: string; code?: string;
     body: JSON.stringify(data),
   });
 
+// File Uploads
+export const uploadProductImage = async (productId: number, file: File): Promise<{ url: string; images: string[] }> => {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const url = `${API_BASE}/api/uploads/product/${productId}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "X-API-Key": API_KEY },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as Record<string, string>).error || `Upload failed: ${res.status}`);
+  }
+
+  return res.json();
+};
+
+export const uploadBrandLogo = async (brandId: number, file: File): Promise<{ url: string }> => {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const url = `${API_BASE}/api/uploads/brand/${brandId}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "X-API-Key": API_KEY },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as Record<string, string>).error || `Upload failed: ${res.status}`);
+  }
+
+  return res.json();
+};
+
+// InterCars Mapping Stats
+export interface MappingStats {
+  totalMappings: number;
+  topBrands: Array<{ brand: string; count: number }>;
+}
+
+export const getMappingStats = () =>
+  apiFetch<MappingStats>("/api/intercars/mapping-stats");
+
 export const getMatchLogs = (params?: {
   page?: number;
   limit?: number;
