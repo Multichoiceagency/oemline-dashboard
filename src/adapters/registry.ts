@@ -40,22 +40,16 @@ export async function loadAdaptersFromDb(): Promise<void> {
       continue;
     }
 
-    let apiKey = "";
+    let credentials = "";
     try {
-      const creds = JSON.parse(decryptCredentials(supplier.credentials)) as Record<string, string>;
-      apiKey = creds.apiKey ?? "";
+      credentials = decryptCredentials(supplier.credentials);
     } catch {
-      try {
-        const creds = JSON.parse(supplier.credentials) as Record<string, string>;
-        apiKey = creds.apiKey ?? "";
-      } catch {
-        logger.warn({ code: supplier.code }, "Failed to parse supplier credentials");
-        continue;
-      }
+      // Fallback: credentials stored as plaintext (e.g. during initial setup)
+      credentials = supplier.credentials;
     }
 
     adapterCache.set(supplier.code, {
-      adapter: new Constructor(supplier.baseUrl, apiKey),
+      adapter: new Constructor(supplier.baseUrl, credentials),
       updatedAt: supplier.updatedAt,
     });
 

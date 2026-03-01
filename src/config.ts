@@ -13,8 +13,18 @@ const envSchema = z.object({
   MEILI_URL: z.string().default("http://localhost:7700"),
   MEILI_MASTER_KEY: z.string().min(1),
 
-  // Supplier credentials are now stored encrypted in DB
-  // These are only used as fallback for initial setup
+  // TecDoc
+  TECDOC_API_KEY: z.string().default(""),
+  TECDOC_API_URL: z.string().default("https://webservice.tecalliance.services/pegasus-3-0/services/TecdocToCatDLB.jsonEndpoint"),
+
+  // InterCars OAuth2 (used for initial setup, then stored encrypted in DB)
+  INTERCARS_TOKEN_URL: z.string().default("https://is.webapi.intercars.eu/oauth2/token"),
+  INTERCARS_API_URL: z.string().default("https://api.webapi.intercars.eu/ic"),
+  INTERCARS_CLIENT_ID: z.string().default(""),
+  INTERCARS_CLIENT_SECRET: z.string().default(""),
+  INTERCARS_CUSTOMER_ID: z.string().default(""),
+  INTERCARS_PAYER_ID: z.string().default(""),
+  INTERCARS_BRANCH: z.string().default(""),
 });
 
 const parsed = envSchema.safeParse(process.env);
