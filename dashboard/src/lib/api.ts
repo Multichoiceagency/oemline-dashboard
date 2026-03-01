@@ -3,21 +3,33 @@ const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path}`;
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-Key": API_KEY,
-      ...init?.headers,
-    },
-  });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.message || body.error || `API error ${res.status}`);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": API_KEY,
+        ...init?.headers,
+      },
+    });
+  } catch (err) {
+    throw new Error(`Network error: ${err instanceof Error ? err.message : "fetch failed"}`);
   }
 
-  return res.json() as Promise<T>;
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    throw new Error(`API returned non-JSON (status ${res.status})`);
+  }
+
+  if (!res.ok) {
+    const msg = (body as Record<string, unknown>)?.message ?? (body as Record<string, unknown>)?.error ?? `HTTP ${res.status}`;
+    throw new Error(String(msg));
+  }
+
+  return body as T;
 }
 
 // Health
@@ -50,7 +62,7 @@ export interface Supplier {
 }
 
 export interface SuppliersResponse {
-  suppliers: Supplier[];
+  items: Supplier[];
   total: number;
   page: number;
   limit: number;
@@ -218,7 +230,7 @@ export interface Override {
 }
 
 export interface OverridesResponse {
-  overrides: Override[];
+  items: Override[];
   total: number;
   page: number;
   limit: number;
@@ -268,16 +280,20 @@ export interface MatchLog {
   brand: { name: string; code: string } | null;
 }
 
+export interface MatchLogStat {
+  method: string;
+  count: number;
+  avgDurationMs: number;
+  avgConfidence: number | null;
+}
+
 export interface MatchLogsResponse {
-  logs: MatchLog[];
+  items: MatchLog[];
   total: number;
   page: number;
   limit: number;
   totalPages: number;
-  stats: Record<
-    string,
-    { count: number; avgDuration: number; avgConfidence: number }
-  >;
+  stats: MatchLogStat[];
 }
 
 export const getMatchLogs = (params?: {

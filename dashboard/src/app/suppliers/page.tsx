@@ -185,7 +185,7 @@ export default function SuppliersPage() {
         <CardContent>
           {loading ? (
             <p className="text-muted-foreground py-8 text-center">Loading suppliers...</p>
-          ) : !data?.suppliers.length ? (
+          ) : !data?.items.length ? (
             <p className="text-muted-foreground py-8 text-center">
               No suppliers registered yet. Click &quot;Add Supplier&quot; to get started.
             </p>
@@ -204,7 +204,7 @@ export default function SuppliersPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.suppliers.map((s) => (
+                {data.items.map((s) => (
                   <TableRow key={s.id}>
                     <TableCell className="font-medium">{s.name}</TableCell>
                     <TableCell>

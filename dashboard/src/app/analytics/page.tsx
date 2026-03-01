@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useApi } from "@/lib/hooks";
 import { getMatchLogs } from "@/lib/api";
+import type { MatchLogStat } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -47,7 +48,7 @@ export default function AnalyticsPage() {
     [page, matchFilter, methodFilter]
   );
 
-  const stats = data?.stats ?? {};
+  const stats: MatchLogStat[] = data?.stats ?? [];
 
   return (
     <div className="space-y-6">
@@ -57,23 +58,23 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Stats cards */}
-      {Object.keys(stats).length > 0 && (
+      {stats.length > 0 && (
         <div className="grid gap-4 md:grid-cols-5">
-          {Object.entries(stats).map(([method, s]) => (
-            <Card key={method}>
+          {stats.map((s) => (
+            <Card key={s.method}>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium capitalize flex items-center gap-2">
-                  <div className={`h-2.5 w-2.5 rounded-full ${METHOD_COLORS[method] ?? "bg-gray-500"}`} />
-                  {method.replace("_", " ")}
+                  <div className={`h-2.5 w-2.5 rounded-full ${METHOD_COLORS[s.method] ?? "bg-gray-500"}`} />
+                  {s.method.replace("_", " ")}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{formatNumber(s.count)}</div>
                 <div className="flex justify-between text-xs text-muted-foreground mt-1">
                   <span className="flex items-center gap-1">
-                    <Clock className="h-3 w-3" /> {s.avgDuration.toFixed(0)}ms
+                    <Clock className="h-3 w-3" /> {s.avgDurationMs}ms
                   </span>
-                  <span>{(s.avgConfidence * 100).toFixed(0)}% confidence</span>
+                  <span>{s.avgConfidence != null ? `${(s.avgConfidence * 100).toFixed(0)}%` : "-"} confidence</span>
                 </div>
               </CardContent>
             </Card>
@@ -81,26 +82,26 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      {/* Confidence Distribution */}
-      {Object.keys(stats).length > 0 && (
+      {/* Method Distribution */}
+      {stats.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle>Method Distribution</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {Object.entries(stats).map(([method, s]) => {
-                const totalCount = Object.values(stats).reduce((sum, st) => sum + st.count, 0);
+              {stats.map((s) => {
+                const totalCount = stats.reduce((sum, st) => sum + st.count, 0);
                 const pct = totalCount > 0 ? (s.count / totalCount) * 100 : 0;
                 return (
-                  <div key={method} className="space-y-1">
+                  <div key={s.method} className="space-y-1">
                     <div className="flex justify-between text-sm">
-                      <span className="font-medium capitalize">{method.replace("_", " ")}</span>
+                      <span className="font-medium capitalize">{s.method.replace("_", " ")}</span>
                       <span className="text-muted-foreground">{pct.toFixed(1)}% ({formatNumber(s.count)})</span>
                     </div>
                     <div className="h-3 w-full rounded-full bg-muted">
                       <div
-                        className={`h-3 rounded-full ${METHOD_COLORS[method] ?? "bg-gray-500"}`}
+                        className={`h-3 rounded-full ${METHOD_COLORS[s.method] ?? "bg-gray-500"}`}
                         style={{ width: `${pct}%` }}
                       />
                     </div>
@@ -149,7 +150,7 @@ export default function AnalyticsPage() {
         <CardContent>
           {loading ? (
             <p className="text-muted-foreground text-center py-8">Loading...</p>
-          ) : !data?.logs.length ? (
+          ) : !data?.items.length ? (
             <p className="text-muted-foreground text-center py-8">No match logs found</p>
           ) : (
             <Table>
@@ -165,7 +166,7 @@ export default function AnalyticsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.logs.map((log) => (
+                {data.items.map((log) => (
                   <TableRow key={log.id}>
                     <TableCell className="font-mono text-xs">{log.query}</TableCell>
                     <TableCell>

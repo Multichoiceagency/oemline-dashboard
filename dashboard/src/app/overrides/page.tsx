@@ -141,7 +141,7 @@ export default function OverridesPage() {
         <CardContent>
           {loading ? (
             <p className="text-muted-foreground text-center py-8">Loading...</p>
-          ) : !data?.overrides.length ? (
+          ) : !data?.items.length ? (
             <p className="text-muted-foreground text-center py-8">No overrides created yet</p>
           ) : (
             <Table>
@@ -159,7 +159,7 @@ export default function OverridesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.overrides.map((o) => (
+                {data.items.map((o) => (
                   <TableRow key={o.id}>
                     <TableCell><Badge variant="outline">{o.supplier?.name ?? "-"}</Badge></TableCell>
                     <TableCell>{o.brand?.name ?? "-"}</TableCell>

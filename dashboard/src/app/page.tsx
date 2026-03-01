@@ -24,8 +24,8 @@ export default function DashboardPage() {
 
   useInterval(() => health.refetch(), 15000);
 
-  const activeSuppliers = suppliers.data?.suppliers.filter((s) => s.active).length ?? 0;
-  const totalProducts = suppliers.data?.suppliers.reduce((sum, s) => sum + (s._count?.productMaps ?? 0), 0) ?? 0;
+  const activeSuppliers = suppliers.data?.items.filter((s) => s.active).length ?? 0;
+  const totalProducts = suppliers.data?.items.reduce((sum, s) => sum + (s._count?.productMaps ?? 0), 0) ?? 0;
 
   return (
     <div className="space-y-8">
@@ -96,9 +96,9 @@ export default function DashboardPage() {
               <p className="text-sm text-muted-foreground">Loading...</p>
             ) : health.error ? (
               <p className="text-sm text-destructive">Failed to load: {health.error}</p>
-            ) : (
+            ) : health.data ? (
               <>
-                {Object.entries(health.data!.checks).map(([name, status]) => (
+                {Object.entries(health.data.checks).map(([name, status]) => (
                   <div key={name} className="flex items-center justify-between">
                     <span className="text-sm font-medium capitalize">{name}</span>
                     <Badge variant={status === "ok" ? "success" : "destructive"}>
@@ -115,11 +115,11 @@ export default function DashboardPage() {
                   <span className="text-sm font-medium">Uptime</span>
                   <span className="text-sm text-muted-foreground">
                     <Clock className="inline mr-1 h-3 w-3" />
-                    {Math.floor(health.data!.uptime / 3600)}h {Math.floor((health.data!.uptime % 3600) / 60)}m
+                    {Math.floor(health.data.uptime / 3600)}h {Math.floor((health.data.uptime % 3600) / 60)}m
                   </span>
                 </div>
               </>
-            )}
+            ) : null}
           </CardContent>
         </Card>
 
@@ -134,9 +134,9 @@ export default function DashboardPage() {
               <p className="text-sm text-muted-foreground">Loading...</p>
             ) : health.error ? (
               <p className="text-sm text-destructive">Failed to load</p>
-            ) : (
+            ) : health.data ? (
               <>
-                {Object.entries(health.data!.queues).map(([queue, depth]) => (
+                {Object.entries(health.data.queues).map(([queue, depth]) => (
                   <div key={queue} className="flex items-center justify-between">
                     <span className="text-sm font-medium capitalize">{queue} Queue</span>
                     <Badge variant={depth > 0 ? "warning" : "secondary"}>
@@ -144,50 +144,48 @@ export default function DashboardPage() {
                     </Badge>
                   </div>
                 ))}
-                {Object.keys(health.data!.circuits).length > 0 && (
-                  <>
-                    <div className="pt-2 border-t">
-                      <p className="text-sm font-medium mb-2">Circuit Breakers</p>
-                      {Object.entries(health.data!.circuits).map(([name, info]) => (
-                        <div key={name} className="flex items-center justify-between">
-                          <span className="text-sm">{name}</span>
-                          <Badge
-                            variant={
-                              info.state === "closed"
-                                ? "success"
-                                : info.state === "open"
-                                ? "destructive"
-                                : "warning"
-                            }
-                          >
-                            {info.state} ({info.failures} failures)
-                          </Badge>
-                        </div>
-                      ))}
-                    </div>
-                  </>
+                {health.data.circuits && Object.keys(health.data.circuits).length > 0 && (
+                  <div className="pt-2 border-t">
+                    <p className="text-sm font-medium mb-2">Circuit Breakers</p>
+                    {Object.entries(health.data.circuits).map(([name, info]) => (
+                      <div key={name} className="flex items-center justify-between">
+                        <span className="text-sm">{name}</span>
+                        <Badge
+                          variant={
+                            info.state === "closed"
+                              ? "success"
+                              : info.state === "open"
+                              ? "destructive"
+                              : "warning"
+                          }
+                        >
+                          {info.state} ({info.failures} failures)
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </>
-            )}
+            ) : null}
           </CardContent>
         </Card>
       </div>
 
       {/* Match Statistics */}
-      {matchLogs.data?.stats && Object.keys(matchLogs.data.stats).length > 0 && (
+      {matchLogs.data?.stats && matchLogs.data.stats.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle>Match Performance by Method</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 md:grid-cols-5">
-              {Object.entries(matchLogs.data.stats).map(([method, stats]) => (
-                <div key={method} className="space-y-1 rounded-lg border p-4">
-                  <p className="text-sm font-medium capitalize">{method.replace("_", " ")}</p>
-                  <p className="text-2xl font-bold">{formatNumber(stats.count)}</p>
+              {matchLogs.data.stats.map((stat) => (
+                <div key={stat.method} className="space-y-1 rounded-lg border p-4">
+                  <p className="text-sm font-medium capitalize">{stat.method.replace("_", " ")}</p>
+                  <p className="text-2xl font-bold">{formatNumber(stat.count)}</p>
                   <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>{stats.avgDuration.toFixed(0)}ms avg</span>
-                    <span>{(stats.avgConfidence * 100).toFixed(0)}% conf</span>
+                    <span>{stat.avgDurationMs}ms avg</span>
+                    <span>{stat.avgConfidence != null ? `${(stat.avgConfidence * 100).toFixed(0)}%` : "-"} conf</span>
                   </div>
                 </div>
               ))}
