@@ -109,7 +109,7 @@ export async function brandRoutes(app: FastifyInstance) {
           articleCountry: creds.articleCountry ?? "NL",
           providerId: creds.providerId ?? 22691,
           lang: "nl",
-          perPage: 0,
+          perPage: 1,
           page: 1,
           dataSupplierFacetOptions: {
             enabled: true,
