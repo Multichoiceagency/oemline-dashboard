@@ -298,10 +298,20 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         "InterCars pricing enrichment starting"
       );
 
+      // Test OAuth2 token first
+      try {
+        const testHeaders = await this.authHeaders();
+        logger.info({ supplier: this.code, hasToken: !!testHeaders.Authorization }, "InterCars OAuth2 token acquired");
+      } catch (authErr) {
+        logger.error({ err: authErr, supplier: this.code }, "InterCars OAuth2 token FAILED - cannot proceed");
+        return;
+      }
+
       const PAGE_SIZE = 500;
       let offset = 0;
       let totalUpdated = 0;
       let totalMatched = 0;
+      let totalApiErrors = 0;
 
       while (true) {
         // Match TecDoc products → IC CSV mappings via normalized brand + article_number.
@@ -379,6 +389,11 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
                   const stockData = (await stockResp.json()) as StockItem[] | { items?: StockItem[] };
                   const stockItems = Array.isArray(stockData) ? stockData : (stockData.items ?? []);
                   stockQty = stockItems.reduce((sum: number, s: StockItem) => sum + (s.availability ?? 0), 0);
+                } else {
+                  totalApiErrors++;
+                  if (totalApiErrors <= 3) {
+                    logger.warn({ status: stockResp.status, sku: product.tow_kod }, "IC stock API error");
+                  }
                 }
 
                 // Fetch pricing
@@ -391,6 +406,11 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
                     const pricing = Array.isArray(priceData) ? priceData[0] : priceData;
                     price = pricing?.customerPrice ?? pricing?.listPriceNet ?? null;
                     currency = pricing?.currency ?? "EUR";
+                  } else {
+                    totalApiErrors++;
+                    if (totalApiErrors <= 3) {
+                      logger.warn({ status: priceResp.status, sku: product.tow_kod }, "IC pricing API error");
+                    }
                   }
                 } catch {
                   // pricing is best-effort
@@ -428,7 +448,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
         // Log progress
         logger.info(
-          { supplier: this.code, matched: totalMatched, updated: totalUpdated, offset },
+          { supplier: this.code, matched: totalMatched, updated: totalUpdated, apiErrors: totalApiErrors, offset },
           "InterCars pricing enrichment progress"
         );
       }
