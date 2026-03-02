@@ -603,6 +603,107 @@ export const deleteStorageFile = (objectName: string) =>
     method: "DELETE",
   });
 
+// Finalized Products
+export interface IcMapping {
+  towKod: string;
+  icDescription: string;
+  icManufacturer: string;
+  icArticleNumber: string;
+  icEan: string | null;
+  icWeight: number | null;
+}
+
+export interface IcMappingDetail {
+  towKod: string;
+  icIndex: string;
+  articleNumber: string;
+  manufacturer: string;
+  description: string;
+  ean: string | null;
+  weight: number | null;
+  tecdocProd: number | null;
+  blockedReturn: boolean;
+}
+
+export interface FinalizedProduct {
+  id: number;
+  articleNo: string;
+  sku: string;
+  description: string;
+  imageUrl: string | null;
+  images: string[];
+  ean: string | null;
+  tecdocId: string | null;
+  oem: string | null;
+  genericArticle: string | null;
+  oemNumbers: string[];
+  price: number | null;
+  currency: string | null;
+  stock: number | null;
+  weight: number | null;
+  status: string;
+  brand: { id: number; name: string; code: string; logoUrl: string | null };
+  category: { id: number; name: string; code: string } | null;
+  supplier: { id: number; name: string; code: string };
+  icMapping: IcMapping | null;
+  updatedAt: string;
+  createdAt: string;
+}
+
+export interface FinalizedResponse {
+  items: FinalizedProduct[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export interface FinalizedStats {
+  totalProducts: number;
+  withPrice: number;
+  withStock: number;
+  withImage: number;
+  withIcMapping: number;
+  topBrands: Array<{
+    brand: { id: number; name: string; code: string; logoUrl: string | null };
+    count: number;
+  }>;
+  topCategories: Array<{
+    category: { id: number; name: string; code: string } | null;
+    count: number;
+  }>;
+}
+
+export interface FinalizedDetail extends Omit<FinalizedProduct, 'icMapping'> {
+  icMapping: IcMappingDetail[] | null;
+}
+
+export const getFinalized = (params?: {
+  page?: number;
+  limit?: number;
+  q?: string;
+  brand?: string;
+  category?: string;
+  supplier?: string;
+  hasStock?: string;
+  hasPrice?: string;
+  hasImage?: string;
+}) => {
+  const qs = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    });
+  }
+  return apiFetch<FinalizedResponse>(`/api/finalized?${qs}`);
+};
+
+export const getFinalizedStats = () =>
+  apiFetch<FinalizedStats>("/api/finalized/stats");
+
+export const getFinalizedProduct = (id: number) =>
+  apiFetch<FinalizedDetail>(`/api/finalized/${id}`);
+
 // InterCars Mapping Stats
 export interface MappingStats {
   totalMappings: number;

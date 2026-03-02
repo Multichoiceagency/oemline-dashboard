@@ -19,29 +19,34 @@ import {
   HardDrive,
   Moon,
   Sun,
+  ShoppingCart,
+  Globe,
 } from "lucide-react";
 import { useTheme } from "next-themes";
+import { useTranslation } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/suppliers", label: "Suppliers", icon: Truck },
-  { href: "/products", label: "Products", icon: Package },
-  { href: "/brands", label: "Brands", icon: Tag },
-  { href: "/categories", label: "Categories", icon: FolderTree },
-  { href: "/search", label: "Product Search", icon: Search },
-  { href: "/tecdoc", label: "TecDoc", icon: BookOpen },
-  { href: "/unmatched", label: "Unmatched", icon: AlertTriangle },
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/storage", label: "Storage", icon: HardDrive },
-  { href: "/overrides", label: "Overrides", icon: GitCompare },
-  { href: "/health", label: "System Health", icon: Activity },
-  { href: "/api-reference", label: "API Reference", icon: Code2 },
+  { href: "/", labelKey: "nav.dashboard", icon: LayoutDashboard },
+  { href: "/suppliers", labelKey: "nav.suppliers", icon: Truck },
+  { href: "/products", labelKey: "nav.products", icon: Package },
+  { href: "/brands", labelKey: "nav.brands", icon: Tag },
+  { href: "/categories", labelKey: "nav.categories", icon: FolderTree },
+  { href: "/search", labelKey: "nav.search", icon: Search },
+  { href: "/tecdoc", labelKey: "nav.tecdoc", icon: BookOpen },
+  { href: "/unmatched", labelKey: "nav.unmatched", icon: AlertTriangle },
+  { href: "/finalized", labelKey: "nav.finalized", icon: ShoppingCart },
+  { href: "/analytics", labelKey: "nav.analytics", icon: BarChart3 },
+  { href: "/storage", labelKey: "nav.storage", icon: HardDrive },
+  { href: "/overrides", labelKey: "nav.overrides", icon: GitCompare },
+  { href: "/health", labelKey: "nav.health", icon: Activity },
+  { href: "/api-reference", labelKey: "nav.apiReference", icon: Code2 },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
   const { theme, setTheme } = useTheme();
+  const { locale, setLocale, t } = useTranslation();
 
   return (
     <aside className="fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r bg-card">
@@ -55,7 +60,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      <nav className="flex-1 space-y-1 p-4">
+      <nav className="flex-1 space-y-1 overflow-y-auto p-4">
         {navItems.map((item) => {
           const isActive =
             pathname === item.href ||
@@ -72,13 +77,22 @@ export function Sidebar() {
               )}
             >
               <item.icon className="h-4 w-4" />
-              {item.label}
+              {t(item.labelKey)}
             </Link>
           );
         })}
       </nav>
 
-      <div className="border-t p-4">
+      <div className="border-t p-4 space-y-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start gap-2"
+          onClick={() => setLocale(locale === "nl" ? "en" : "nl")}
+        >
+          <Globe className="h-4 w-4" />
+          <span className="ml-2">{locale === "nl" ? "English" : "Nederlands"}</span>
+        </Button>
         <Button
           variant="ghost"
           size="sm"
@@ -87,7 +101,7 @@ export function Sidebar() {
         >
           <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
           <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-          <span className="ml-2">Toggle theme</span>
+          <span className="ml-2">{t("nav.toggleTheme")}</span>
         </Button>
       </div>
     </aside>
