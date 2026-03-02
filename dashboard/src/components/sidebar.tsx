@@ -22,9 +22,11 @@ import {
   ShoppingCart,
   Globe,
   Settings,
+  LogOut,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useTranslation } from "@/lib/i18n";
+import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
@@ -49,6 +51,12 @@ export function Sidebar() {
   const pathname = usePathname();
   const { theme, setTheme } = useTheme();
   const { locale, setLocale, t } = useTranslation();
+  const { email, logout } = useAuth();
+
+  const handleLogout = () => {
+    logout();
+    window.location.href = "/login";
+  };
 
   return (
     <aside className="fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r bg-card">
@@ -86,6 +94,9 @@ export function Sidebar() {
       </nav>
 
       <div className="border-t p-4 space-y-2">
+        {email && (
+          <p className="text-xs text-muted-foreground truncate px-3 pb-1">{email}</p>
+        )}
         <Button
           variant="ghost"
           size="sm"
@@ -104,6 +115,15 @@ export function Sidebar() {
           <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
           <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
           <span className="ml-2">{t("nav.toggleTheme")}</span>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start gap-2 text-destructive hover:text-destructive hover:bg-destructive/10"
+          onClick={handleLogout}
+        >
+          <LogOut className="h-4 w-4" />
+          <span className="ml-2">Sign Out</span>
         </Button>
       </div>
     </aside>

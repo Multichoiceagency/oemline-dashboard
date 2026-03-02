@@ -24,6 +24,7 @@ import { intercarsRoutes } from "./routes/intercars-mapping.js";
 import { uploadRoutes } from "./routes/uploads.js";
 import { finalizedRoutes } from "./routes/finalized.js";
 import { settingsRoutes } from "./routes/settings.js";
+import { authRoutes } from "./routes/auth.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { ensureBucket } from "./lib/minio.js";
 
@@ -55,7 +56,7 @@ await app.register(rateLimit, {
 
 app.addHook("onRequest", async (request, reply) => {
   const path = request.url;
-  if (path === "/health") return;
+  if (path === "/health" || path.startsWith("/api/auth/")) return;
 
   const apiKey = request.headers["x-api-key"];
   if (!apiKey || apiKey !== config.API_KEY) {
@@ -92,6 +93,7 @@ await app.register(intercarsRoutes, { prefix: "/api" });
 await app.register(uploadRoutes, { prefix: "/api" });
 await app.register(finalizedRoutes, { prefix: "/api" });
 await app.register(settingsRoutes, { prefix: "/api" });
+await app.register(authRoutes, { prefix: "/api" });
 
 app.setErrorHandler((error: Error & { statusCode?: number; issues?: unknown; validation?: unknown }, request, reply) => {
   // Zod validation errors → 400

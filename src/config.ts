@@ -26,6 +26,18 @@ const envSchema = z.object({
   INTERCARS_PAYER_ID: z.string().default(""),
   INTERCARS_BRANCH: z.string().default(""),
 
+  // SMTP / Email
+  SMTP_HOST: z.string().default("smtp.gmail.com"),
+  SMTP_PORT: z.coerce.number().default(587),
+  SMTP_USER: z.string().default(""),
+  SMTP_PASSWORD: z.string().default(""),
+  EMAIL_FROM: z.string().default("info@oemline.eu"),
+
+  // Auth
+  AUTH_ALLOWED_EMAILS: z.string().default(""),
+  AUTH_CODE_TTL: z.coerce.number().default(300),
+  AUTH_SESSION_TTL: z.coerce.number().default(86400),
+
   // MinIO / S3
   MINIO_ENDPOINT: z.string().default("minio-yosss0scgggwcco0cw4s0ck4.oemline.eu"),
   MINIO_PORT: z.coerce.number().default(443),
