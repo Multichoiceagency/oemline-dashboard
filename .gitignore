@@ -22,3 +22,6 @@ Thumbs.db
 ProductInformation_2026-02-26.csv
 *.csv
 *.csv.zip
+*.pdf
+docs-intercars/
+dashboard/tsconfig.tsbuildinfo

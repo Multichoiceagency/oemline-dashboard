@@ -394,6 +394,61 @@ export async function categoryRoutes(app: FastifyInstance) {
     return { totalLinked, groupsProcessed, totalCategories: categories.length };
   });
 
+  // Deduplicate categories with same name - merge into the one with most products
+  app.post("/categories/deduplicate", async () => {
+    // Find duplicate category names
+    const dupes = await prisma.$queryRaw<Array<{ name: string; cnt: bigint }>>`
+      SELECT name, COUNT(*) as cnt FROM categories
+      GROUP BY name HAVING COUNT(*) > 1
+      ORDER BY cnt DESC
+    `;
+
+    let merged = 0;
+    let deleted = 0;
+
+    for (const dupe of dupes) {
+      // Get all categories with this name, ordered by product count desc
+      const cats = await prisma.$queryRaw<Array<{ id: number; code: string; product_count: bigint }>>`
+        SELECT c.id, c.code, COUNT(pm.id) as product_count
+        FROM categories c
+        LEFT JOIN product_maps pm ON pm.category_id = c.id
+        WHERE c.name = ${dupe.name}
+        GROUP BY c.id, c.code
+        ORDER BY COUNT(pm.id) DESC, c.id ASC
+      `;
+
+      if (cats.length <= 1) continue;
+
+      const keeper = cats[0]; // Keep the one with most products
+      const toMerge = cats.slice(1);
+
+      for (const cat of toMerge) {
+        // Move products from duplicate to keeper
+        const moved = await prisma.$executeRawUnsafe(
+          `UPDATE product_maps SET category_id = $1 WHERE category_id = $2`,
+          keeper.id, cat.id
+        );
+        merged += Number(moved);
+
+        // Move children from duplicate to keeper
+        await prisma.$executeRawUnsafe(
+          `UPDATE categories SET parent_id = $1 WHERE parent_id = $2`,
+          keeper.id, cat.id
+        );
+
+        // Delete the duplicate
+        await prisma.category.delete({ where: { id: cat.id } });
+        deleted++;
+      }
+    }
+
+    return {
+      duplicateNames: dupes.length,
+      categoriesDeleted: deleted,
+      productsMerged: merged,
+    };
+  });
+
   // Update category
   app.patch("/categories/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
