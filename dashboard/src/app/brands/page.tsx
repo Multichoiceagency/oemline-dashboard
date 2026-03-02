@@ -327,6 +327,7 @@ export default function BrandsPage() {
                           <TableHead>Image</TableHead>
                           <TableHead>Article No.</TableHead>
                           <TableHead>SKU</TableHead>
+                          <TableHead>IC Code</TableHead>
                           <TableHead>EAN</TableHead>
                           <TableHead>Description</TableHead>
                           <TableHead>Price</TableHead>
@@ -347,6 +348,15 @@ export default function BrandsPage() {
                             </TableCell>
                             <TableCell className="font-mono text-xs">{p.articleNo}</TableCell>
                             <TableCell className="font-mono text-xs">{p.sku}</TableCell>
+                            <TableCell>
+                              {p.icCode ? (
+                                <Badge variant="outline" className="font-mono text-xs">
+                                  {p.icCode}
+                                </Badge>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">-</span>
+                              )}
+                            </TableCell>
                             <TableCell className="font-mono text-xs">{p.ean ?? "-"}</TableCell>
                             <TableCell className="max-w-[200px] truncate text-sm">{p.description || "-"}</TableCell>
                             <TableCell className="font-mono text-xs">

@@ -200,8 +200,45 @@ export async function productRoutes(app: FastifyInstance) {
       prisma.productMap.count({ where }),
     ]);
 
+    // Enrich with InterCars mapping (towKod) via lateral join
+    interface IcRow { product_id: number; tow_kod: string }
+    let icMap = new Map<number, string>();
+    if (items.length > 0) {
+      const ids = items.map((p) => p.id);
+      try {
+        const icRows = await prisma.$queryRawUnsafe<IcRow[]>(
+          `SELECT pm.id AS product_id, ic.tow_kod
+           FROM product_maps pm
+           JOIN brands b ON b.id = pm.brand_id
+           LEFT JOIN LATERAL (
+             SELECT im.tow_kod
+             FROM intercars_mappings im
+             WHERE UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
+                     = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+               AND (
+                 UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                   = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                 OR UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                   LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+                 OR UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                   LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+               )
+             LIMIT 1
+           ) ic ON true
+           WHERE pm.id = ANY($1::int[]) AND ic.tow_kod IS NOT NULL`,
+          ids
+        );
+        icMap = new Map(icRows.map((r) => [r.product_id, r.tow_kod]));
+      } catch {
+        // IC mapping lookup failed — continue without it
+      }
+    }
+
     return {
-      items,
+      items: items.map((p) => ({
+        ...p,
+        icCode: icMap.get(p.id) ?? null,
+      })),
       total,
       page,
       limit,
@@ -262,7 +299,63 @@ export async function productRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: "Product not found" });
     }
 
-    return product;
+    // Enrich with InterCars mapping(s)
+    interface IcDetailRow {
+      tow_kod: string;
+      ic_index: string;
+      article_number: string;
+      manufacturer: string;
+      description: string;
+      ean: string | null;
+      weight: number | null;
+    }
+    let icMapping: Array<{
+      towKod: string;
+      icIndex: string;
+      articleNumber: string;
+      manufacturer: string;
+      description: string;
+      ean: string | null;
+      weight: number | null;
+    }> | null = null;
+
+    try {
+      const icRows = await prisma.$queryRawUnsafe<IcDetailRow[]>(
+        `SELECT im.tow_kod, im.ic_index, im.article_number, im.manufacturer,
+                im.description, im.ean, im.weight
+         FROM intercars_mappings im
+         JOIN brands b ON b.id = $2
+         WHERE UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
+                 = UPPER(regexp_replace($1, '[^a-zA-Z0-9]', '', 'g'))
+           AND (
+             UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+               = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+             OR UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+               LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+             OR UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+               LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+           )
+         LIMIT 5`,
+        product.articleNo,
+        product.brandId
+      );
+
+      if (icRows.length > 0) {
+        icMapping = icRows.map((row) => ({
+          towKod: row.tow_kod,
+          icIndex: row.ic_index,
+          articleNumber: row.article_number,
+          manufacturer: row.manufacturer,
+          description: row.description,
+          ean: row.ean,
+          weight: row.weight,
+        }));
+      }
+    } catch {
+      // IC mapping lookup failed — continue without it
+    }
+
+    return { ...product, icCode: icMapping?.[0]?.towKod ?? null, icMapping };
   });
 
   // Update product

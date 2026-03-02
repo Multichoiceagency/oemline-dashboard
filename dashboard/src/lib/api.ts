@@ -319,6 +319,8 @@ export interface Product {
   supplier: { id: number; name: string; code: string };
   brand: { id: number; name: string; code: string };
   category?: { id: number; name: string; code: string } | null;
+  icCode: string | null;
+  icMapping?: IcMappingDetail[] | null;
 }
 
 export interface ProductsResponse {

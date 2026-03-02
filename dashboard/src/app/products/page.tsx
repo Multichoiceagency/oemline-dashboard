@@ -441,6 +441,7 @@ export default function ProductsPage() {
                   <TableHead>Article No.</TableHead>
                   <TableHead>Brand</TableHead>
                   <TableHead>Supplier</TableHead>
+                  <TableHead>IC Code</TableHead>
                   <TableHead>Description</TableHead>
                   <TableHead>Price</TableHead>
                   <TableHead>Stock</TableHead>
@@ -472,6 +473,15 @@ export default function ProductsPage() {
                     </TableCell>
                     <TableCell onClick={() => openDetail(p)}>
                       <Badge variant="secondary">{p.supplier?.name ?? "-"}</Badge>
+                    </TableCell>
+                    <TableCell onClick={() => openDetail(p)}>
+                      {p.icCode ? (
+                        <Badge variant="outline" className="font-mono text-xs">
+                          {p.icCode}
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
+                      )}
                     </TableCell>
                     <TableCell
                       className="max-w-[200px] truncate text-sm"
@@ -795,6 +805,7 @@ export default function ProductsPage() {
                     <DetailField label="Article No." value={selectedProduct.articleNo} mono />
                     <DetailField label="Brand" value={selectedProduct.brand?.name ?? "-"} />
                     <DetailField label="Supplier" value={selectedProduct.supplier?.name ?? "-"} />
+                    <DetailField label="InterCars Code" value={selectedProduct.icCode ?? "-"} mono />
                     <DetailField label="EAN" value={selectedProduct.ean ?? "-"} mono />
                     <DetailField label="TecDoc ID" value={selectedProduct.tecdocId ?? "-"} mono />
                     <DetailField label="OEM Number" value={selectedProduct.oem ?? "-"} mono />
@@ -847,6 +858,39 @@ export default function ProductsPage() {
                             {oem}
                           </Badge>
                         ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* InterCars Mapping */}
+                  {selectedProduct.icMapping && selectedProduct.icMapping.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-muted-foreground">InterCars Mapping</p>
+                      <div className="rounded-lg border overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>TOW Code</TableHead>
+                              <TableHead>IC Index</TableHead>
+                              <TableHead>Manufacturer</TableHead>
+                              <TableHead>Description</TableHead>
+                              <TableHead>EAN</TableHead>
+                              <TableHead>Weight</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {selectedProduct.icMapping.map((ic, i) => (
+                              <TableRow key={i}>
+                                <TableCell className="font-mono text-sm">{ic.towKod}</TableCell>
+                                <TableCell className="font-mono text-sm">{ic.icIndex}</TableCell>
+                                <TableCell>{ic.manufacturer}</TableCell>
+                                <TableCell className="max-w-[200px] truncate">{ic.description}</TableCell>
+                                <TableCell className="font-mono text-xs">{ic.ean ?? "-"}</TableCell>
+                                <TableCell>{ic.weight != null ? `${ic.weight} kg` : "-"}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
                       </div>
                     </div>
                   )}
