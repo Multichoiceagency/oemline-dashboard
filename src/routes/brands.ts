@@ -114,27 +114,90 @@ export async function brandRoutes(app: FastifyInstance) {
     return { updated, total, withTecdocId };
   });
 
-  // Set brand logos from existing product images (uses first product with image per brand)
+  // Fetch real brand logos from TecDoc API (getBrands with includeDataSupplierLogo)
   app.post("/brands/fetch-logos", async () => {
-    // Find brands without logos that have products with images
-    const results = await prisma.$queryRaw<Array<{ brand_id: number; image_url: string }>>`
-      SELECT DISTINCT ON (pm.brand_id) pm.brand_id, pm.image_url
-      FROM product_maps pm
-      JOIN brands b ON b.id = pm.brand_id
-      WHERE pm.image_url IS NOT NULL
-        AND pm.image_url != ''
-        AND b.logo_url IS NULL
-      ORDER BY pm.brand_id, pm.updated_at DESC
-    `;
+    const { config } = await import("../config.js");
 
-    let logosSet = 0;
-    for (const r of results) {
+    // Step 1: Fetch brand logos from TecDoc getBrands API
+    const tecdocUrl = "https://webservice.tecalliance.services/pegasus-3-0/services/TecdocToCatDLB.jsonEndpoint";
+    const tecdocKey = config.TECDOC_API_KEY;
+    if (!tecdocKey) {
+      return { error: "TECDOC_API_KEY not configured" };
+    }
+
+    const response = await fetch(tecdocUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Api-Key": tecdocKey },
+      body: JSON.stringify({
+        getBrands: {
+          providerId: 22691,
+          articleCountry: "NL",
+          lang: "nl",
+          includeAll: true,
+          includeDataSupplierLogo: true,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      return { error: `TecDoc API error: ${response.status}` };
+    }
+
+    const data = (await response.json()) as {
+      data?: { array?: Array<{
+        dataSupplierId: number;
+        mfrName: string;
+        dataSupplierLogo?: {
+          imageURL100?: string;
+          imageURL200?: string;
+          imageURL400?: string;
+          imageURL800?: string;
+        };
+      }> };
+    };
+
+    const tecdocBrands = data.data?.array ?? [];
+    logger.info({ count: tecdocBrands.length }, "Fetched TecDoc brands with logos");
+
+    // Step 2: Build tecdocId → logo URL map
+    const logoMap = new Map<number, string>();
+    const nameLogoMap = new Map<string, string>();
+    for (const tb of tecdocBrands) {
+      const logo = tb.dataSupplierLogo;
+      const url = logo?.imageURL400 ?? logo?.imageURL200 ?? logo?.imageURL100;
+      if (url) {
+        logoMap.set(tb.dataSupplierId, url);
+        nameLogoMap.set(tb.mfrName.toUpperCase(), url);
+      }
+    }
+
+    // Step 3: Update brands in our DB
+    const brands = await prisma.brand.findMany({
+      where: { name: { not: "Unknown" } },
+      select: { id: true, name: true, tecdocId: true },
+    });
+
+    let updated = 0;
+    let notFound = 0;
+
+    for (const brand of brands) {
+      // Try matching by tecdocId first, then by name
+      let logoUrl = brand.tecdocId ? logoMap.get(brand.tecdocId) : undefined;
+      if (!logoUrl) {
+        logoUrl = nameLogoMap.get(brand.name.toUpperCase());
+      }
+
+      if (!logoUrl) {
+        notFound++;
+        continue;
+      }
+
       try {
         await prisma.brand.update({
-          where: { id: r.brand_id },
-          data: { logoUrl: r.image_url },
+          where: { id: brand.id },
+          data: { logoUrl },
         });
-        logosSet++;
+        updated++;
       } catch {
         // skip
       }
@@ -143,7 +206,7 @@ export async function brandRoutes(app: FastifyInstance) {
     const total = await prisma.brand.count();
     const withLogo = await prisma.brand.count({ where: { logoUrl: { not: null } } });
 
-    return { logosSet, total, withLogo };
+    return { updated, notFound, tecdocBrands: tecdocBrands.length, total, withLogo };
   });
 
   // Update brand
