@@ -228,7 +228,7 @@ export default function FinalizedPage() {
 
       {/* Stats cards */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
           <Card>
             <CardContent className="pt-6">
               <div className="flex items-center gap-2">
@@ -236,6 +236,26 @@ export default function FinalizedPage() {
                 <span className="text-sm text-muted-foreground">{t("finalized.total")}</span>
               </div>
               <p className="text-2xl font-bold mt-1">{formatNumber(stats.totalProducts)}</p>
+            </CardContent>
+          </Card>
+          <Card className={stats.indexStats ? (stats.indexStats.numberOfDocuments === stats.totalProducts ? "border-emerald-500/50" : "border-amber-500/50") : ""}>
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-2">
+                <Search className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm text-muted-foreground">Geindexeerd</span>
+              </div>
+              <p className="text-2xl font-bold mt-1">
+                {stats.indexStats ? formatNumber(stats.indexStats.numberOfDocuments) : "—"}
+              </p>
+              {stats.indexStats && (
+                <p className={`text-xs ${stats.indexStats.numberOfDocuments === stats.totalProducts ? "text-emerald-500" : "text-amber-500"}`}>
+                  {stats.indexStats.isIndexing ? "Bezig met indexeren..." : (
+                    stats.indexStats.numberOfDocuments === stats.totalProducts
+                      ? "100% geindexeerd"
+                      : `${stats.totalProducts > 0 ? Math.round((stats.indexStats.numberOfDocuments / stats.totalProducts) * 100) : 0}% van totaal`
+                  )}
+                </p>
+              )}
             </CardContent>
           </Card>
           <Card>
@@ -287,6 +307,42 @@ export default function FinalizedPage() {
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {/* Index field distribution */}
+      {stats?.indexStats && Object.keys(stats.indexStats.fieldDistribution).length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Search className="h-4 w-4" />
+              Meilisearch Index — Velden Verdeling
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+              {Object.entries(stats.indexStats.fieldDistribution)
+                .sort(([, a], [, b]) => b - a)
+                .map(([field, count]) => {
+                  const pct = stats.indexStats!.numberOfDocuments > 0
+                    ? Math.round((count / stats.indexStats!.numberOfDocuments) * 100)
+                    : 0;
+                  return (
+                    <div key={field} className="rounded-lg border p-3">
+                      <p className="text-xs font-mono text-muted-foreground truncate">{field}</p>
+                      <p className="text-lg font-bold">{formatNumber(count)}</p>
+                      <div className="mt-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${pct === 100 ? "bg-emerald-500" : pct > 50 ? "bg-blue-500" : "bg-amber-500"}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">{pct}%</p>
+                    </div>
+                  );
+                })}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Search and Filters */}

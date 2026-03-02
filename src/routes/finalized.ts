@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { getAllSettings } from "./settings.js";
+import { meili, PRODUCTS_INDEX } from "../lib/meilisearch.js";
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -308,6 +309,19 @@ export async function finalizedRoutes(app: FastifyInstance) {
       count: c._count.id,
     }));
 
+    // Meilisearch index stats
+    let indexStats = { numberOfDocuments: 0, isIndexing: false, fieldDistribution: {} as Record<string, number> };
+    try {
+      const meiliStats = await meili.index(PRODUCTS_INDEX).getStats();
+      indexStats = {
+        numberOfDocuments: meiliStats.numberOfDocuments,
+        isIndexing: meiliStats.isIndexing,
+        fieldDistribution: meiliStats.fieldDistribution as Record<string, number>,
+      };
+    } catch (err) {
+      logger.warn({ err }, "Failed to fetch Meilisearch index stats");
+    }
+
     return {
       totalProducts,
       withPrice,
@@ -316,6 +330,7 @@ export async function finalizedRoutes(app: FastifyInstance) {
       withIcMapping,
       topBrands,
       topCategories,
+      indexStats,
     };
   });
 

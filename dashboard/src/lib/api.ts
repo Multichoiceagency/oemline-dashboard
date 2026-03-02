@@ -703,6 +703,11 @@ export interface FinalizedStats {
     category: { id: number; name: string; code: string } | null;
     count: number;
   }>;
+  indexStats?: {
+    numberOfDocuments: number;
+    isIndexing: boolean;
+    fieldDistribution: Record<string, number>;
+  };
 }
 
 export interface FinalizedDetail extends Omit<FinalizedProduct, 'icMapping'> {
