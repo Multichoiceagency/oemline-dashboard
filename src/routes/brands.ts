@@ -123,6 +123,9 @@ export async function brandRoutes(app: FastifyInstance) {
     }
 
     const data = (await response.json()) as Record<string, unknown>;
+    const topKeys = Object.keys(data);
+    logger.info({ topKeys }, "TecDoc brand sync response keys");
+
     const dsf = data.dataSupplierFacets;
 
     let suppliers: Array<Record<string, unknown>> = [];
@@ -133,6 +136,21 @@ export async function brandRoutes(app: FastifyInstance) {
       for (const val of Object.values(obj)) {
         if (Array.isArray(val)) { suppliers = val; break; }
       }
+    }
+
+    // If no dataSupplierFacets, try to extract from the raw article data
+    // TecDoc may return brands in a different format
+    if (suppliers.length === 0) {
+      // Debug: return what we got
+      return {
+        updated: 0, created: 0, logosDownloaded: 0, total: 0,
+        debug: {
+          topKeys,
+          dsfType: dsf === null ? "null" : typeof dsf,
+          dsfIsArray: Array.isArray(dsf),
+          responseSample: JSON.stringify(data).slice(0, 2000),
+        },
+      };
     }
 
     logger.info({ supplierCount: suppliers.length }, "TecDoc data suppliers fetched");
