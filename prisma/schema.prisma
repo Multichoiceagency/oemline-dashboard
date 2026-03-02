@@ -194,6 +194,14 @@ model IntercarsMapping {
   @@map("intercars_mappings")
 }
 
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
+
 model Unmatched {
   id         Int       @id @default(autoincrement())
   supplierId Int       @map("supplier_id")

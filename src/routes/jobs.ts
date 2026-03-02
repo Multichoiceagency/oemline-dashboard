@@ -76,40 +76,32 @@ export async function jobRoutes(app: FastifyInstance) {
     return { jobId: job.id, queue: "index", status: "queued" };
   });
 
-  // Debug: check Redis connection and raw job data
+  // Debug: check Redis connection and queue state (non-destructive)
   app.get("/jobs/debug", async () => {
     const { redis } = await import("../lib/redis.js");
 
-    // Check raw Redis keys for BullMQ
-    const syncKeys = await redis.keys("bull:sync:*");
-    const matchKeys = await redis.keys("bull:match:*");
-    const indexKeys = await redis.keys("bull:index:*");
+    const pingResult = await redis.ping();
 
-    // Try to get a specific job
-    const job = await syncQueue.add("debug-test", { test: true });
-    const jobId = job.id;
-
-    // Wait 1 second and check
-    await new Promise((r) => setTimeout(r, 1000));
-
-    const retrieved = await syncQueue.getJob(jobId!);
-    const state = retrieved ? await retrieved.getState() : "not-found";
-
-    // Cleanup test job
-    if (retrieved) await retrieved.remove();
+    // Use BullMQ's built-in methods instead of redis.keys()
+    const [syncCounts, matchCounts, indexCounts] = await Promise.all([
+      syncQueue.getJobCounts("active", "completed", "delayed", "failed", "waiting", "prioritized"),
+      matchQueue.getJobCounts("active", "completed", "delayed", "failed", "waiting", "prioritized"),
+      indexQueue.getJobCounts("active", "completed", "delayed", "failed", "waiting", "prioritized"),
+    ]);
 
     return {
-      redisConnected: true,
-      syncKeys: syncKeys.length,
-      matchKeys: matchKeys.length,
-      indexKeys: indexKeys.length,
-      testJob: { id: jobId, state, exists: !!retrieved },
-      sampleKeys: syncKeys.slice(0, 10),
+      redisConnected: pingResult === "PONG",
+      sync: syncCounts,
+      match: matchCounts,
+      index: indexCounts,
     };
   });
 
   // Import InterCars CSV mapping (from local file or MinIO)
-  app.post("/jobs/import-intercars-csv", async (request) => {
+  // Extend timeout: CSV import processes ~565K rows and can take minutes
+  app.post("/jobs/import-intercars-csv", {
+    onRequest: async (request) => { request.raw.socket.setTimeout(300_000); },
+  }, async (request) => {
     const { prisma } = await import("../lib/prisma.js");
     const { logger } = await import("../lib/logger.js");
     const { createReadStream, existsSync } = await import("node:fs");

@@ -387,6 +387,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
         // Use /inventory/quote (POST) for combined stock + pricing per batch
         const BATCH_SIZE = 20;
+        const retryTracker = new Map<string, number>();
         for (let i = 0; i < matchedProducts.length; i += BATCH_SIZE) {
           const batch = matchedProducts.slice(i, i + BATCH_SIZE);
 
@@ -465,12 +466,22 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
                 }
               }
             } else if (quoteResp.status === 429) {
-              // Rate limited — wait and retry batch
+              // Rate limited — wait and retry (max 3 times per batch)
               totalApiErrors++;
-              logger.warn({ supplier: this.code }, "IC rate limited, waiting 60s");
-              await new Promise((r) => setTimeout(r, 60_000));
-              i -= BATCH_SIZE; // Retry this batch
-              continue;
+              const retryKey = `retry_${i}`;
+              const retryCount = (retryTracker.get(retryKey) ?? 0) + 1;
+              retryTracker.set(retryKey, retryCount);
+
+              if (retryCount <= 3) {
+                const waitSec = retryCount * 30; // 30s, 60s, 90s
+                logger.warn({ supplier: this.code, retryCount, waitSec }, "IC rate limited, backing off");
+                await new Promise((r) => setTimeout(r, waitSec * 1000));
+                i -= BATCH_SIZE; // Retry this batch
+                continue;
+              }
+
+              logger.error({ supplier: this.code }, "IC rate limit retries exhausted for batch, skipping");
+              retryTracker.delete(retryKey);
             } else {
               totalApiErrors++;
               if (totalApiErrors <= 5) {

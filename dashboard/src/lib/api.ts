@@ -638,6 +638,8 @@ export interface FinalizedProduct {
   genericArticle: string | null;
   oemNumbers: string[];
   price: number | null;
+  priceWithMargin: number | null;
+  priceWithTax: number | null;
   currency: string | null;
   stock: number | null;
   weight: number | null;
@@ -656,6 +658,10 @@ export interface FinalizedResponse {
   page: number;
   limit: number;
   totalPages: number;
+  pricing?: {
+    taxRate: number;
+    marginPercentage: number;
+  };
 }
 
 export interface FinalizedStats {
@@ -703,6 +709,39 @@ export const getFinalizedStats = () =>
 
 export const getFinalizedProduct = (id: number) =>
   apiFetch<FinalizedDetail>(`/api/finalized/${id}`);
+
+// Settings
+export interface PricingSettings {
+  taxRate: number;
+  marginPercentage: number;
+  currency: string;
+}
+
+export interface PricingPreview {
+  settings: { taxRate: number; marginPercentage: number };
+  preview: Array<{
+    articleNo: string;
+    brand: string;
+    description: string;
+    basePrice: number;
+    withMargin: number;
+    withTax: number;
+    currency: string;
+  }>;
+}
+
+export const getSettings = () => apiFetch<PricingSettings>("/api/settings");
+
+export const updateSettings = (data: Partial<PricingSettings>) =>
+  apiFetch<PricingSettings>("/api/settings", {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+
+export const getPricingPreview = (limit?: number) => {
+  const qs = limit ? `?limit=${limit}` : "";
+  return apiFetch<PricingPreview>(`/api/settings/pricing-preview${qs}`);
+};
 
 // InterCars Mapping Stats
 export interface MappingStats {

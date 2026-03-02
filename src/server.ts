@@ -23,6 +23,7 @@ import { storefrontRoutes } from "./routes/storefront.js";
 import { intercarsRoutes } from "./routes/intercars-mapping.js";
 import { uploadRoutes } from "./routes/uploads.js";
 import { finalizedRoutes } from "./routes/finalized.js";
+import { settingsRoutes } from "./routes/settings.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { ensureBucket } from "./lib/minio.js";
 
@@ -90,8 +91,30 @@ await app.register(storefrontRoutes, { prefix: "/api" });
 await app.register(intercarsRoutes, { prefix: "/api" });
 await app.register(uploadRoutes, { prefix: "/api" });
 await app.register(finalizedRoutes, { prefix: "/api" });
+await app.register(settingsRoutes, { prefix: "/api" });
 
-app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
+app.setErrorHandler((error: Error & { statusCode?: number; issues?: unknown; validation?: unknown }, request, reply) => {
+  // Zod validation errors → 400
+  if (error.name === "ZodError" && "issues" in error) {
+    request.log.warn({ err: error, reqId: request.id }, "Validation error");
+    return reply.code(400).send({
+      error: "Validation Error",
+      statusCode: 400,
+      issues: (error as unknown as { issues: unknown }).issues,
+      reqId: request.id,
+    });
+  }
+
+  // Fastify validation errors → 400
+  if (error.validation) {
+    request.log.warn({ err: error, reqId: request.id }, "Request validation error");
+    return reply.code(400).send({
+      error: error.message,
+      statusCode: 400,
+      reqId: request.id,
+    });
+  }
+
   request.log.error({ err: error, reqId: request.id }, "Request error");
   const statusCode = error.statusCode ?? 500;
   reply.code(statusCode).send({

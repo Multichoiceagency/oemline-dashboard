@@ -32,6 +32,7 @@ export async function ensureNormalizedIndexes(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_pm_ean_norm ON product_maps (regexp_replace(ean, '[^0-9]', '', 'g')) WHERE ean IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_im_article_norm ON intercars_mappings (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')))`,
     `CREATE INDEX IF NOT EXISTS idx_im_manufacturer_norm ON intercars_mappings (UPPER(regexp_replace(manufacturer, '[^a-zA-Z0-9]', '', 'g')))`,
+    `CREATE INDEX IF NOT EXISTS idx_brands_name_norm ON brands (UPPER(regexp_replace(name, '[^a-zA-Z0-9]', '', 'g')))`,
   ];
 
   for (const sql of indexes) {

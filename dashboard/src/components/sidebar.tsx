@@ -21,6 +21,7 @@ import {
   Sun,
   ShoppingCart,
   Globe,
+  Settings,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useTranslation } from "@/lib/i18n";
@@ -39,6 +40,7 @@ const navItems = [
   { href: "/analytics", labelKey: "nav.analytics", icon: BarChart3 },
   { href: "/storage", labelKey: "nav.storage", icon: HardDrive },
   { href: "/overrides", labelKey: "nav.overrides", icon: GitCompare },
+  { href: "/settings", labelKey: "nav.settings", icon: Settings },
   { href: "/health", labelKey: "nav.health", icon: Activity },
   { href: "/api-reference", labelKey: "nav.apiReference", icon: Code2 },
 ];

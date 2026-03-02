@@ -180,9 +180,73 @@ const ENDPOINTS: EndpointDef[] = [
     ],
     response: '{ items: [{ id, query, sku, method, confidence, matched, durationMs, createdAt, supplier, brand }], total, page, limit, totalPages, stats: [{ method, count, avgDurationMs, avgConfidence }] }',
   },
+  // Finalized Products (Storefront API)
+  {
+    method: "GET",
+    path: "/api/finalized",
+    description: "Paginated finalized products with pricing (margin + tax applied), stock, and InterCars mapping",
+    category: "Storefront",
+    params: [
+      { name: "page", type: "number", required: false, description: "Page number (default: 1)" },
+      { name: "limit", type: "number", required: false, description: "Items per page (default: 50, max: 250)" },
+      { name: "q", type: "string", required: false, description: "Search by article, SKU, EAN, OEM, description" },
+      { name: "brand", type: "string", required: false, description: "Filter by brand code" },
+      { name: "category", type: "string", required: false, description: "Filter by category code" },
+      { name: "supplier", type: "string", required: false, description: "Filter by supplier code" },
+      { name: "hasStock", type: "string", required: false, description: "Filter: true (in stock), false (out of stock)" },
+      { name: "hasPrice", type: "string", required: false, description: "Filter: true (has price), false (no price)" },
+      { name: "hasImage", type: "string", required: false, description: "Filter: true (has image), false (no image)" },
+    ],
+    response: '{ items: [{ id, articleNo, sku, description, imageUrl, images, ean, price, priceWithMargin, priceWithTax, currency, stock, weight, brand, category, supplier, icMapping }], total, page, limit, totalPages, pricing: { taxRate, marginPercentage } }',
+    example: "/api/finalized?limit=10&hasStock=true&hasPrice=true",
+  },
+  {
+    method: "GET",
+    path: "/api/finalized/stats",
+    description: "Summary statistics for all finalized products",
+    category: "Storefront",
+    response: '{ totalProducts, withPrice, withStock, withImage, withIcMapping, topBrands: [{ brand, count }], topCategories: [{ category, count }] }',
+  },
+  {
+    method: "GET",
+    path: "/api/finalized/:id",
+    description: "Single product with full details including InterCars mapping and calculated prices",
+    category: "Storefront",
+    response: '{ id, articleNo, sku, description, imageUrl, images, ean, tecdocId, oem, oemNumbers, price, priceWithMargin, priceWithTax, currency, stock, weight, brand, category, supplier, icMapping: [{ towKod, icIndex, manufacturer, description, ean, weight }] }',
+  },
+  // Settings
+  {
+    method: "GET",
+    path: "/api/settings",
+    description: "Get current pricing settings (tax rate, margin, currency)",
+    category: "Settings",
+    response: '{ taxRate: number, marginPercentage: number, currency: string }',
+  },
+  {
+    method: "PATCH",
+    path: "/api/settings",
+    description: "Update pricing settings",
+    category: "Settings",
+    params: [
+      { name: "taxRate", type: "number", required: false, description: "Tax/BTW percentage (e.g. 21)" },
+      { name: "marginPercentage", type: "number", required: false, description: "Margin markup percentage (e.g. 20)" },
+      { name: "currency", type: "string", required: false, description: "Currency code (e.g. EUR)" },
+    ],
+    response: '{ taxRate, marginPercentage, currency }',
+  },
+  {
+    method: "GET",
+    path: "/api/settings/pricing-preview",
+    description: "Preview how pricing settings affect real product prices",
+    category: "Settings",
+    params: [
+      { name: "limit", type: "number", required: false, description: "Number of preview products (default: 5, max: 20)" },
+    ],
+    response: '{ settings: { taxRate, marginPercentage }, preview: [{ articleNo, brand, basePrice, withMargin, withTax, currency }] }',
+  },
 ];
 
-const CATEGORIES = ["System", "Search", "TecDoc", "Suppliers", "Overrides", "Unmatched", "Analytics"];
+const CATEGORIES = ["System", "Search", "TecDoc", "Suppliers", "Storefront", "Settings", "Overrides", "Unmatched", "Analytics"];
 
 const METHOD_COLORS: Record<string, string> = {
   GET: "bg-green-500/10 text-green-600 border-green-500/20",
@@ -393,10 +457,15 @@ export default function ApiReferencePage() {
               <p className="text-muted-foreground mt-1">{`// data.results → [{ supplier, brand, articleNo, description, price, stock }]`}</p>
             </div>
           </div>
-          <div className="grid gap-3 md:grid-cols-3 mt-4">
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 mt-4">
+            <div className="rounded-lg border p-3">
+              <p className="text-sm font-medium">Finalized Products</p>
+              <p className="text-xs text-muted-foreground mt-1">Complete product catalog with prices (margin + tax applied), stock, and IC mapping. Use this for the storefront.</p>
+              <code className="text-xs font-mono text-primary mt-2 block">GET /api/finalized</code>
+            </div>
             <div className="rounded-lg border p-3">
               <p className="text-sm font-medium">Product Search</p>
-              <p className="text-xs text-muted-foreground mt-1">Search by OEM, article number, EAN, or free text. Returns results from all active suppliers + TecDoc cross-reference.</p>
+              <p className="text-xs text-muted-foreground mt-1">Search by OEM, article number, EAN, or free text across all active suppliers.</p>
               <code className="text-xs font-mono text-primary mt-2 block">GET /api/search?q=...</code>
             </div>
             <div className="rounded-lg border p-3">
@@ -405,9 +474,9 @@ export default function ApiReferencePage() {
               <code className="text-xs font-mono text-primary mt-2 block">GET /api/tecdoc/search?q=...</code>
             </div>
             <div className="rounded-lg border p-3">
-              <p className="text-sm font-medium">Supplier Data</p>
-              <p className="text-xs text-muted-foreground mt-1">List suppliers, trigger catalog syncs, manage overrides.</p>
-              <code className="text-xs font-mono text-primary mt-2 block">GET /api/suppliers</code>
+              <p className="text-sm font-medium">Pricing Settings</p>
+              <p className="text-xs text-muted-foreground mt-1">Get/update tax rate, margin percentage, and currency settings.</p>
+              <code className="text-xs font-mono text-primary mt-2 block">GET /api/settings</code>
             </div>
           </div>
         </CardContent>

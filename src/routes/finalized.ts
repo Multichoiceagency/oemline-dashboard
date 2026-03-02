@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { getAllSettings } from "./settings.js";
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -105,39 +106,43 @@ export async function finalizedRoutes(app: FastifyInstance) {
       prisma.productMap.count({ where }),
     ]);
 
-    // Fetch IC mappings for returned products via raw SQL join
+    // Fetch IC mappings for returned products via LATERAL join (one mapping per product)
     let icMappings = new Map<number, IcMappingRow>();
     if (items.length > 0) {
       try {
         const productIds = items.map((p) => p.id);
         const icRows = await prisma.$queryRawUnsafe<IcMappingRow[]>(
           `SELECT pm.id AS product_id,
-                  im.tow_kod,
-                  im.description AS ic_description,
-                  im.manufacturer AS ic_manufacturer,
-                  im.article_number AS ic_article_number,
-                  im.ean AS ic_ean,
-                  im.weight AS ic_weight
+                  ic.tow_kod,
+                  ic.description AS ic_description,
+                  ic.manufacturer AS ic_manufacturer,
+                  ic.article_number AS ic_article_number,
+                  ic.ean AS ic_ean,
+                  ic.weight AS ic_weight
            FROM product_maps pm
            JOIN brands b ON b.id = pm.brand_id
-           JOIN intercars_mappings im ON
-             UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
-               = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
-             AND (
-               UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
-                 = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
-               OR (
-                 LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 3
-                 AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
-                   LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+           LEFT JOIN LATERAL (
+             SELECT im.tow_kod, im.description, im.manufacturer, im.article_number, im.ean, im.weight
+             FROM intercars_mappings im
+             WHERE UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
+                     = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+               AND (
+                 UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                   = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                 OR (
+                   LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 3
+                   AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                     LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+                 )
+                 OR (
+                   LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 3
+                   AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                     LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+                 )
                )
-               OR (
-                 LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 3
-                 AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
-                   LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
-               )
-             )
-           WHERE pm.id = ANY($1::int[])`,
+             LIMIT 1
+           ) ic ON true
+           WHERE pm.id = ANY($1::int[]) AND ic.tow_kod IS NOT NULL`,
           productIds
         );
         for (const row of icRows) {
@@ -148,8 +153,21 @@ export async function finalizedRoutes(app: FastifyInstance) {
       }
     }
 
+    // Fetch pricing settings for calculated prices
+    const settings = await getAllSettings();
+    const taxRate = parseFloat(settings.tax_rate ?? "21") / 100;
+    const marginPct = parseFloat(settings.margin_percentage ?? "0") / 100;
+
     const finalizedItems = items.map((p) => {
       const ic = icMappings.get(p.id);
+      const basePrice = p.price;
+      let priceWithMargin: number | null = null;
+      let priceWithTax: number | null = null;
+      if (basePrice != null) {
+        priceWithMargin = Math.round(basePrice * (1 + marginPct) * 100) / 100;
+        priceWithTax = Math.round(priceWithMargin * (1 + taxRate) * 100) / 100;
+      }
+
       return {
         id: p.id,
         articleNo: p.articleNo,
@@ -162,7 +180,9 @@ export async function finalizedRoutes(app: FastifyInstance) {
         oem: p.oem,
         genericArticle: p.genericArticle,
         oemNumbers: p.oemNumbers,
-        price: p.price,
+        price: basePrice,
+        priceWithMargin,
+        priceWithTax,
         currency: p.currency,
         stock: p.stock,
         weight: p.weight,
@@ -191,6 +211,10 @@ export async function finalizedRoutes(app: FastifyInstance) {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
+      pricing: {
+        taxRate: taxRate * 100,
+        marginPercentage: marginPct * 100,
+      },
     };
   });
 
@@ -226,33 +250,30 @@ export async function finalizedRoutes(app: FastifyInstance) {
       }),
     ]);
 
-    // Fetch IC mapping count via raw SQL
+    // IC mapping count — use products that have price from IC sync (proxy for mapping)
+    // This avoids the expensive regex JOIN on every stats request
     let withIcMapping = 0;
     try {
-      const icResult = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
-        `SELECT COUNT(DISTINCT pm.id) AS count
-         FROM product_maps pm
-         JOIN brands b ON b.id = pm.brand_id
-         JOIN intercars_mappings im ON
-           UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
-             = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
-           AND (
-             UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
-               = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
-             OR (
-               LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 3
-               AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
-                 LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
-             )
-             OR (
-               LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 3
-               AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
-                 LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
-             )
-           )
-         WHERE pm.status = 'active'`
-      );
-      withIcMapping = Number(icResult[0]?.count ?? 0);
+      withIcMapping = await prisma.productMap.count({
+        where: {
+          status: "active",
+          price: { not: null },
+          supplier: { code: "intercars" },
+        },
+      });
+      // Fallback: if no IC supplier, count products with price that have a matching IC record
+      if (withIcMapping === 0) {
+        const icResult = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+          `SELECT COUNT(*) AS count FROM intercars_mappings`
+        );
+        const icTotal = Number(icResult[0]?.count ?? 0);
+        // If IC mappings exist, use a lightweight estimate: products with price set by IC sync
+        if (icTotal > 0) {
+          withIcMapping = await prisma.productMap.count({
+            where: { status: "active", price: { not: null } },
+          });
+        }
+      }
     } catch (err) {
       logger.warn({ err }, "Failed to count IC mappings for finalized stats");
     }
@@ -376,6 +397,19 @@ export async function finalizedRoutes(app: FastifyInstance) {
       logger.warn({ err, productId }, "Failed to fetch IC mapping for finalized product");
     }
 
+    // Calculate prices with margin and tax
+    const settings = await getAllSettings();
+    const taxRate = parseFloat(settings.tax_rate ?? "21") / 100;
+    const marginPct = parseFloat(settings.margin_percentage ?? "0") / 100;
+
+    const basePrice = product.price;
+    let priceWithMargin: number | null = null;
+    let priceWithTax: number | null = null;
+    if (basePrice != null) {
+      priceWithMargin = Math.round(basePrice * (1 + marginPct) * 100) / 100;
+      priceWithTax = Math.round(priceWithMargin * (1 + taxRate) * 100) / 100;
+    }
+
     return {
       id: product.id,
       articleNo: product.articleNo,
@@ -388,7 +422,9 @@ export async function finalizedRoutes(app: FastifyInstance) {
       oem: product.oem,
       genericArticle: product.genericArticle,
       oemNumbers: product.oemNumbers,
-      price: product.price,
+      price: basePrice,
+      priceWithMargin,
+      priceWithTax,
       currency: product.currency,
       stock: product.stock,
       weight: product.weight,
