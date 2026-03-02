@@ -385,28 +385,31 @@ export async function intercarsRoutes(app: FastifyInstance) {
       stockResult = { error: String(err) };
     }
 
-    // Step 4: Try multiple pricing API endpoints
-    const pricingEndpoints = [
-      `/dropshipping/pricing/quote?sku=${encodeURIComponent(testSku)}&quantity=1`,
-      `/dropshipping/pricing?sku=${encodeURIComponent(testSku)}&quantity=1`,
-      `/pricing/quote?sku=${encodeURIComponent(testSku)}&quantity=1`,
-      `/pricing/price?sku=${encodeURIComponent(testSku)}&quantity=1`,
-      `/pricing?sku=${encodeURIComponent(testSku)}&quantity=1`,
-      `/dropshipping/price?sku=${encodeURIComponent(testSku)}&quantity=1`,
-      `/inventory/pricing?sku=${encodeURIComponent(testSku)}`,
-      `/inventory/price?sku=${encodeURIComponent(testSku)}`,
+    // Step 4: Try pricing API with POST method (discovered via 405 on GET)
+    const pricingAttempts: Array<{ method: string; url: string; bodyPayload?: string; status: number; responseBody: string; ok: boolean }> = [];
+
+    // Try POST /pricing/quote with JSON body
+    const postEndpoints = [
+      { path: "/pricing/quote", body: JSON.stringify({ skus: [testSku], quantity: 1 }) },
+      { path: "/pricing/quote", body: JSON.stringify({ sku: testSku, quantity: 1 }) },
+      { path: "/pricing/quote", body: JSON.stringify([{ sku: testSku, quantity: 1 }]) },
+      { path: "/pricing", body: JSON.stringify({ skus: [testSku] }) },
+      { path: "/dropshipping/pricing/quote", body: JSON.stringify({ sku: testSku, quantity: 1 }) },
     ];
 
-    const pricingResults: Array<{ url: string; status: number; body: string; ok: boolean }> = [];
-    for (const endpoint of pricingEndpoints) {
+    for (const ep of postEndpoints) {
       try {
-        const url = `${apiUrl}${endpoint}`;
-        const resp = await fetch(url, { headers });
+        const url = `${apiUrl}${ep.path}`;
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: ep.body,
+        });
         const body = await resp.text();
-        pricingResults.push({ url, status: resp.status, body: body.slice(0, 500), ok: resp.ok });
-        if (resp.ok) break; // Stop if we found a working endpoint
+        pricingAttempts.push({ method: "POST", url, bodyPayload: ep.body, status: resp.status, responseBody: body.slice(0, 1000), ok: resp.ok });
+        if (resp.ok) break;
       } catch (err) {
-        pricingResults.push({ url: `${apiUrl}${endpoint}`, status: 0, body: String(err), ok: false });
+        pricingAttempts.push({ method: "POST", url: `${apiUrl}${ep.path}`, status: 0, responseBody: String(err), ok: false });
       }
     }
 
@@ -414,7 +417,7 @@ export async function intercarsRoutes(app: FastifyInstance) {
       step1_token: { success: true, tokenLength: accessToken.length },
       testSku,
       step2_stock: stockResult,
-      step3_pricing_attempts: pricingResults,
+      step3_pricing_attempts: pricingAttempts,
       config: {
         apiUrl,
         customerId: customerId || "(empty)",
