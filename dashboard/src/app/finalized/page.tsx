@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useApi, useInterval } from "@/lib/hooks";
 import {
   getFinalized,
@@ -9,6 +9,8 @@ import {
   getBrands,
   getCategories,
   getSuppliers,
+  updateProduct,
+  uploadProductImage,
 } from "@/lib/api";
 import type { FinalizedProduct, FinalizedDetail } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
@@ -34,6 +36,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -52,6 +55,8 @@ import {
   ChevronRight,
   Tag,
   Eye,
+  Pencil,
+  Upload,
 } from "lucide-react";
 
 export default function FinalizedPage() {
@@ -95,10 +100,76 @@ export default function FinalizedPage() {
   const { data: suppliersData } = useApi(() => getSuppliers({ limit: 50 }), []);
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const { data: detail, loading: loadingDetail } = useApi(
+  const { data: detail, loading: loadingDetail, refetch: refetchDetail } = useApi(
     () => (selectedId ? getFinalizedProduct(selectedId) : Promise.resolve(null)),
     [selectedId]
   );
+
+  // Edit mode state
+  const [editMode, setEditMode] = useState(false);
+  const [editForm, setEditForm] = useState({
+    description: "",
+    imageUrl: "",
+    price: "",
+    currency: "EUR",
+    stock: "",
+    genericArticle: "",
+    status: "active",
+  });
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const imageFileRef = useRef<HTMLInputElement>(null);
+
+  const openEdit = (product: FinalizedDetail) => {
+    setEditMode(true);
+    setEditForm({
+      description: product.description || "",
+      imageUrl: product.imageUrl || "",
+      price: product.price != null ? String(product.price) : "",
+      currency: product.currency || "EUR",
+      stock: product.stock != null ? String(product.stock) : "",
+      genericArticle: product.genericArticle || "",
+      status: product.status || "active",
+    });
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedId) return;
+    setUploading(true);
+    try {
+      const result = await uploadProductImage(selectedId, file);
+      setEditForm((prev) => ({ ...prev, imageUrl: result.url }));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+      if (imageFileRef.current) imageFileRef.current.value = "";
+    }
+  };
+
+  const handleSave = async () => {
+    if (!selectedId) return;
+    setSaving(true);
+    try {
+      await updateProduct(selectedId, {
+        description: editForm.description,
+        imageUrl: editForm.imageUrl || null,
+        price: editForm.price ? parseFloat(editForm.price) : null,
+        currency: editForm.currency || "EUR",
+        stock: editForm.stock ? parseInt(editForm.stock, 10) : null,
+        genericArticle: editForm.genericArticle || null,
+        status: editForm.status,
+      });
+      setEditMode(false);
+      refetchDetail();
+      refetch();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to update product");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleSearch = useCallback(() => {
     setSearchQuery(searchInput);
@@ -405,12 +476,12 @@ export default function FinalizedPage() {
       )}
 
       {/* Detail Dialog */}
-      <Dialog open={selectedId !== null} onOpenChange={(open) => !open && setSelectedId(null)}>
+      <Dialog open={selectedId !== null} onOpenChange={(open) => { if (!open) { setSelectedId(null); setEditMode(false); } }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Package className="h-5 w-5" />
-              {t("finalized.productDetails")}
+              {editMode ? "Edit Product" : t("finalized.productDetails")}
             </DialogTitle>
           </DialogHeader>
           {loadingDetail ? (
@@ -418,8 +489,175 @@ export default function FinalizedPage() {
               <Loader2 className="h-8 w-8 animate-spin" />
             </div>
           ) : detail ? (
-            <ProductDetail product={detail} />
+            editMode ? (
+              <div className="space-y-4 py-4">
+                {/* Image upload */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium flex items-center gap-2">
+                    <ImageIcon className="h-4 w-4" /> Product Image
+                  </label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={editForm.imageUrl}
+                      onChange={(e) => setEditForm({ ...editForm, imageUrl: e.target.value })}
+                      placeholder="https://example.com/product.jpg"
+                      className="flex-1"
+                    />
+                    <input
+                      ref={imageFileRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleImageUpload}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => imageFileRef.current?.click()}
+                      disabled={uploading}
+                    >
+                      {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                  {editForm.imageUrl && (
+                    <div className="flex items-center gap-4 p-3 rounded-lg border bg-muted/50">
+                      <span className="text-xs text-muted-foreground">Preview:</span>
+                      <img src={editForm.imageUrl} alt="Preview" className="h-20 w-20 object-contain rounded" />
+                    </div>
+                  )}
+                </div>
+
+                {/* Description */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Description</label>
+                  <Input
+                    value={editForm.description}
+                    onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                  />
+                </div>
+
+                {/* Generic Article */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Generic Article</label>
+                  <Input
+                    value={editForm.genericArticle}
+                    onChange={(e) => setEditForm({ ...editForm, genericArticle: e.target.value })}
+                    placeholder="e.g. Brake Pad Set"
+                  />
+                </div>
+
+                {/* Pricing & Stock */}
+                <div className="rounded-lg border p-4 space-y-4">
+                  <h4 className="text-sm font-semibold flex items-center gap-2">
+                    <DollarSign className="h-4 w-4" /> Pricing & Stock
+                  </h4>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Price</label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={editForm.price}
+                        onChange={(e) => setEditForm({ ...editForm, price: e.target.value })}
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Currency</label>
+                      <Select
+                        value={editForm.currency}
+                        onValueChange={(v) => setEditForm({ ...editForm, currency: v })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="EUR">EUR</SelectItem>
+                          <SelectItem value="USD">USD</SelectItem>
+                          <SelectItem value="GBP">GBP</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Stock</label>
+                      <Input
+                        type="number"
+                        value={editForm.stock}
+                        onChange={(e) => setEditForm({ ...editForm, stock: e.target.value })}
+                        placeholder="0"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Status */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Status</label>
+                  <Select
+                    value={editForm.status}
+                    onValueChange={(v) => setEditForm({ ...editForm, status: v })}
+                  >
+                    <SelectTrigger className="w-[200px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">Active</SelectItem>
+                      <SelectItem value="inactive">Inactive</SelectItem>
+                      <SelectItem value="discontinued">Discontinued</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Read-only info */}
+                <div className="grid grid-cols-2 gap-4 text-sm border-t pt-4">
+                  <div>
+                    <span className="text-muted-foreground">Article No.:</span>{" "}
+                    <span className="font-mono">{detail.articleNo}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">SKU:</span>{" "}
+                    <span className="font-mono">{detail.sku}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Brand:</span>{" "}
+                    {detail.brand?.name}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Supplier:</span>{" "}
+                    {detail.supplier?.name}
+                  </div>
+                  {detail.icMapping && detail.icMapping.length > 0 && (
+                    <div>
+                      <span className="text-muted-foreground">InterCars Code:</span>{" "}
+                      <span className="font-mono text-blue-600">{detail.icMapping[0].towKod}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <ProductDetail product={detail} />
+            )
           ) : null}
+
+          {detail && !loadingDetail && (
+            <DialogFooter>
+              {editMode ? (
+                <>
+                  <Button variant="outline" onClick={() => setEditMode(false)} disabled={saving}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleSave} disabled={saving}>
+                    {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Save Changes
+                  </Button>
+                </>
+              ) : (
+                <Button onClick={() => openEdit(detail)}>
+                  <Pencil className="mr-2 h-4 w-4" /> Edit Product
+                </Button>
+              )}
+            </DialogFooter>
+          )}
         </DialogContent>
       </Dialog>
     </div>
