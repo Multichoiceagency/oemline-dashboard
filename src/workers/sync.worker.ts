@@ -2,7 +2,7 @@ import { Job } from "bullmq";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { getAdapter } from "../adapters/registry.js";
+import { getAdapterOrLoad } from "../adapters/registry.js";
 import { indexQueue } from "./queues.js";
 import type { SupplierCatalogItem } from "../types/index.js";
 
@@ -15,7 +15,7 @@ const UPSERT_BATCH_SIZE = 200;
 
 export async function processSyncJob(job: Job<SyncJobData>): Promise<void> {
   const { supplierCode, cursor } = job.data;
-  const adapter = getAdapter(supplierCode);
+  const adapter = await getAdapterOrLoad(supplierCode);
 
   if (!adapter) {
     throw new Error(`Unknown supplier: ${supplierCode}`);

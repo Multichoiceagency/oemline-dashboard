@@ -71,6 +71,19 @@ export function getAdapter(code: string): SupplierAdapter | undefined {
   return adapterCache.get(code)?.adapter;
 }
 
+/**
+ * Get adapter with lazy-load fallback: if not in cache, try loading from DB.
+ * Use this in workers where adapters may not be loaded at startup.
+ */
+export async function getAdapterOrLoad(code: string): Promise<SupplierAdapter | undefined> {
+  const cached = adapterCache.get(code)?.adapter;
+  if (cached) return cached;
+
+  // Try loading all adapters from DB
+  await loadAdaptersFromDb();
+  return adapterCache.get(code)?.adapter;
+}
+
 export function getAllAdapters(): SupplierAdapter[] {
   return Array.from(adapterCache.values()).map((c) => c.adapter);
 }
