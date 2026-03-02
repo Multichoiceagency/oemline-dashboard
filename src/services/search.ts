@@ -152,9 +152,9 @@ export async function searchProducts(params: SupplierSearchParams): Promise<Sear
         tecdocId: (h.tecdocId as string) ?? null,
         oem: (h.oem as string) ?? null,
         description: (h.description as string) ?? "",
-        price: null,
-        stock: null,
-        currency: "EUR",
+        price: (h.price as number) ?? null,
+        stock: (h.stock as number) ?? null,
+        currency: (h.currency as string) ?? "EUR",
       };
     });
   } catch (err) {
@@ -281,5 +281,7 @@ function buildMeiliFilter(params: SupplierSearchParams): string[] {
   if (params.brand) filters.push(`brand = "${sanitizeFilterValue(params.brand)}"`);
   if (params.ean) filters.push(`ean = "${sanitizeFilterValue(params.ean)}"`);
   if (params.tecdocId) filters.push(`tecdocId = "${sanitizeFilterValue(params.tecdocId)}"`);
+  if (params.oem) filters.push(`oem = "${sanitizeFilterValue(params.oem)}"`);
+  filters.push('status = "active"');
   return filters;
 }

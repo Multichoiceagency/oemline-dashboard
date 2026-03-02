@@ -33,30 +33,43 @@ export async function processIndexJob(job: Job<IndexJobData>): Promise<void> {
       include: {
         supplier: { select: { code: true, name: true } },
         brand: { select: { code: true, name: true } },
+        category: { select: { code: true, name: true } },
       },
     });
 
     if (products.length === 0) break;
 
-    const documents = products.map((p) => ({
-      id: `${p.supplier.code}_${p.sku}`,
-      supplier: p.supplier.code,
-      supplierName: p.supplier.name,
-      sku: p.sku,
-      brand: p.brand.name,
-      brandCode: p.brand.code,
-      articleNo: p.articleNo,
-      ean: p.ean ?? "",
-      tecdocId: p.tecdocId ?? "",
-      oem: p.oem ?? "",
-      description: p.description,
-      imageUrl: p.imageUrl ?? "",
-      genericArticle: p.genericArticle ?? "",
-      price: p.price,
-      stock: p.stock,
-      status: p.status,
-      createdAt: p.createdAt.toISOString(),
-    }));
+    const documents = products.map((p) => {
+      const oemNumbers = Array.isArray(p.oemNumbers) ? (p.oemNumbers as string[]) : [];
+      const images = Array.isArray(p.images) ? (p.images as string[]) : [];
+
+      return {
+        id: `${p.supplier.code}_${p.sku}`,
+        supplier: p.supplier.code,
+        supplierName: p.supplier.name,
+        sku: p.sku,
+        brand: p.brand.name,
+        brandCode: p.brand.code,
+        articleNo: p.articleNo,
+        ean: p.ean ?? "",
+        tecdocId: p.tecdocId ?? "",
+        oem: p.oem ?? "",
+        oemNumbers,
+        description: p.description,
+        imageUrl: p.imageUrl ?? "",
+        images,
+        genericArticle: p.genericArticle ?? "",
+        category: p.category?.name ?? "",
+        categoryCode: p.category?.code ?? "",
+        price: p.price ?? 0,
+        currency: p.currency ?? "EUR",
+        stock: p.stock ?? 0,
+        weight: p.weight ?? 0,
+        status: p.status,
+        createdAt: p.createdAt.toISOString(),
+        updatedAt: p.updatedAt.toISOString(),
+      };
+    });
 
     await meili.index(PRODUCTS_INDEX).addDocuments(documents);
 

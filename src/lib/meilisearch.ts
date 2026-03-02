@@ -14,9 +14,40 @@ export async function ensureProductsIndex(): Promise<void> {
   await meili.createIndex(PRODUCTS_INDEX, { primaryKey: "id" }).catch(() => {});
 
   await index.updateSettings({
-    searchableAttributes: ["sku", "brand", "articleNo", "ean", "description"],
-    filterableAttributes: ["supplier", "brand", "ean", "tecdocId"],
-    sortableAttributes: ["brand", "sku", "createdAt"],
+    searchableAttributes: [
+      "sku",
+      "brand",
+      "articleNo",
+      "ean",
+      "oem",
+      "oemNumbers",
+      "description",
+      "genericArticle",
+      "category",
+      "supplierName",
+    ],
+    filterableAttributes: [
+      "supplier",
+      "brand",
+      "brandCode",
+      "ean",
+      "tecdocId",
+      "oem",
+      "status",
+      "category",
+      "categoryCode",
+      "genericArticle",
+      "currency",
+    ],
+    sortableAttributes: [
+      "brand",
+      "sku",
+      "price",
+      "stock",
+      "weight",
+      "createdAt",
+      "updatedAt",
+    ],
     rankingRules: [
       "words",
       "typo",
