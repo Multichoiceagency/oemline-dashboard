@@ -368,7 +368,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
             if (groupTotal > 0 && page * perPage >= groupTotal) break;
 
             page++;
-            await new Promise((r) => setTimeout(r, 200));
+            await new Promise((r) => setTimeout(r, 50));
           } catch {
             // Hit page limit or API error, move to next group
             break;
@@ -445,7 +445,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
 
         if (articles.length < perPage) break;
         page++;
-        await new Promise((r) => setTimeout(r, 200));
+        await new Promise((r) => setTimeout(r, 50));
       } catch {
         break;
       }

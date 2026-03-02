@@ -23,9 +23,9 @@ const GRACEFUL_SHUTDOWN_MS = 15_000;
 
 const syncWorker = new Worker("sync", processSyncJob, {
   connection,
-  concurrency: 2,
-  limiter: { max: 5, duration: 60_000 },
-  stalledInterval: 30_000,
+  concurrency: 4,
+  limiter: { max: 10, duration: 60_000 },
+  stalledInterval: 60_000,
 });
 
 const matchWorker = new Worker("match", processRematchJob, {

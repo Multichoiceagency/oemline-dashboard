@@ -11,7 +11,7 @@ interface SyncJobData {
   cursor?: string;
 }
 
-const UPSERT_BATCH_SIZE = 200;
+const UPSERT_BATCH_SIZE = 500;
 
 export async function processSyncJob(job: Job<SyncJobData>): Promise<void> {
   const { supplierCode, cursor } = job.data;

@@ -5,10 +5,10 @@ import { syncQueue, matchQueue, indexQueue } from "./queues.js";
 /**
  * Sets up repeatable jobs for continuous sync, match, and index operations.
  *
- * Schedule:
- * - Sync:  Every 30 minutes for each active supplier (continuous catalog sync)
- * - Match: Every 30 minutes for each active supplier (match new products)
- * - Index: Every 1 hour (search index rebuild)
+ * Schedule (aggressive for initial ~2M product sync):
+ * - Sync:  Every 5 minutes for each active supplier (quick recovery on failure)
+ * - Match: Every 10 minutes for each active supplier
+ * - Index: Every 15 minutes (search index rebuild)
  *
  * Also runs an initial sync/match/index on startup.
  */
@@ -40,40 +40,40 @@ export async function startScheduler(): Promise<void> {
   logger.info({ supplierCount: suppliers.length }, "Scheduling jobs for active suppliers");
 
   for (const supplier of suppliers) {
-    // Schedule repeating sync: every 30 minutes (continuous)
+    // Schedule repeating sync: every 5 minutes (aggressive for 2M product catalog)
     await syncQueue.add(
       `sync-${supplier.code}`,
       { supplierCode: supplier.code },
       {
-        repeat: { every: 30 * 60 * 1000 }, // 30 minutes
+        repeat: { every: 5 * 60 * 1000 }, // 5 minutes
         jobId: `sync-repeat-${supplier.code}`,
       }
     );
 
-    // Schedule repeating match: every 30 minutes
+    // Schedule repeating match: every 10 minutes
     await matchQueue.add(
       `match-${supplier.code}`,
       { supplierCode: supplier.code },
       {
-        repeat: { every: 30 * 60 * 1000 }, // 30 minutes
+        repeat: { every: 10 * 60 * 1000 }, // 10 minutes
         jobId: `match-repeat-${supplier.code}`,
       }
     );
 
-    logger.info({ supplier: supplier.code }, "Scheduled sync (30m) and match (30m)");
+    logger.info({ supplier: supplier.code }, "Scheduled sync (5m) and match (10m)");
   }
 
-  // Schedule repeating index rebuild: every 1 hour
+  // Schedule repeating index rebuild: every 15 minutes
   await indexQueue.add(
     "reindex-all",
     {},
     {
-      repeat: { every: 60 * 60 * 1000 }, // 1 hour
+      repeat: { every: 15 * 60 * 1000 }, // 15 minutes
       jobId: "index-repeat-all",
     }
   );
 
-  logger.info("Scheduled index rebuild (1h)");
+  logger.info("Scheduled index rebuild (15m)");
 
   // Fire initial jobs immediately for all suppliers
   for (const supplier of suppliers) {
