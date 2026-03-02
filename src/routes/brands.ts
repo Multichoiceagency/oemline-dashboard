@@ -79,199 +79,71 @@ export async function brandRoutes(app: FastifyInstance) {
     return brand;
   });
 
-  // Sync brands from TecDoc (fetches tecdocId and logos where available)
-  app.post("/brands/sync-tecdoc", async (request, reply) => {
-    const supplier = await prisma.supplier.findUnique({ where: { code: "tecdoc" } });
-    if (!supplier) {
-      return reply.code(404).send({ error: "TecDoc supplier not found" });
-    }
-
-    let creds: { apiKey: string; providerId?: number; articleCountry?: string } = { apiKey: "" };
-    try {
-      let raw = supplier.credentials as string;
-      try { raw = decryptCredentials(raw); } catch { /* plaintext fallback */ }
-      creds = JSON.parse(raw);
-    } catch {
-      return reply.code(500).send({ error: "Invalid TecDoc credentials" });
-    }
-
-    const tecdocUrl = supplier.baseUrl || "https://webservice.tecalliance.services/pegasus-3-0/services/TecdocToCatDLB.jsonEndpoint";
-
-    // Use dataSupplierFacetOptions to discover all brands/manufacturers
-    const response = await fetch(tecdocUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Api-Key": creds.apiKey,
-      },
-      body: JSON.stringify({
-        getArticles: {
-          articleCountry: creds.articleCountry ?? "NL",
-          providerId: creds.providerId ?? 22691,
-          lang: "nl",
-          perPage: 1,
-          page: 1,
-          dataSupplierFacetOptions: {
-            enabled: true,
-          },
-        },
-      }),
-    });
-
-    if (!response.ok) {
-      return reply.code(502).send({ error: `TecDoc API error: ${response.status}` });
-    }
-
-    const data = (await response.json()) as Record<string, unknown>;
-    const topKeys = Object.keys(data);
-    logger.info({ topKeys }, "TecDoc brand sync response keys");
-
-    const dsf = data.dataSupplierFacets;
-
-    let suppliers: Array<Record<string, unknown>> = [];
-    if (Array.isArray(dsf)) {
-      suppliers = dsf;
-    } else if (dsf && typeof dsf === "object") {
-      const obj = dsf as Record<string, unknown>;
-      for (const val of Object.values(obj)) {
-        if (Array.isArray(val)) { suppliers = val; break; }
-      }
-    }
-
-    // If no dataSupplierFacets, try to extract from the raw article data
-    // TecDoc may return brands in a different format
-    if (suppliers.length === 0) {
-      // Debug: return what we got
-      return {
-        updated: 0, created: 0, logosDownloaded: 0, total: 0,
-        debug: {
-          topKeys,
-          dsfType: dsf === null ? "null" : typeof dsf,
-          dsfIsArray: Array.isArray(dsf),
-          responseSample: JSON.stringify(data).slice(0, 2000),
-        },
-      };
-    }
-
-    logger.info({ supplierCount: suppliers.length }, "TecDoc data suppliers fetched");
+  // Sync brands: set tecdocId from product data (uses distinct tecdoc_id from product_maps)
+  app.post("/brands/sync-tecdoc", async () => {
+    // Get distinct tecdocId -> brand mappings from product_maps
+    const mappings = await prisma.$queryRaw<Array<{ brand_id: number; tecdoc_id: string; brand_name: string }>>`
+      SELECT DISTINCT ON (b.id) pm.brand_id, pm.tecdoc_id, b.name as brand_name
+      FROM product_maps pm
+      JOIN brands b ON b.id = pm.brand_id
+      WHERE pm.tecdoc_id IS NOT NULL
+        AND pm.tecdoc_id != ''
+        AND b.tecdoc_id IS NULL
+      ORDER BY b.id, pm.created_at DESC
+    `;
 
     let updated = 0;
-    let created = 0;
-    let logosDownloaded = 0;
-
-    for (const ds of suppliers) {
-      const dataSupplierId = ds.dataSupplierId as number | undefined;
-      const dataSupplierName = (ds.mfrName ?? ds.dataSupplierName ?? ds.name ?? "") as string;
-      const matchCount = (ds.matchCount ?? ds.count ?? 0) as number;
-
-      if (!dataSupplierId || !dataSupplierName) continue;
-
-      // Try to find existing brand by name (normalized)
-      const code = dataSupplierName.toLowerCase().replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_");
+    for (const m of mappings) {
+      const tecdocId = parseInt(m.tecdoc_id, 10);
+      if (isNaN(tecdocId)) continue;
       try {
-        const existing = await prisma.brand.findUnique({ where: { code } });
-        if (existing) {
-          await prisma.brand.update({
-            where: { code },
-            data: { tecdocId: dataSupplierId },
-          });
-          updated++;
-        } else {
-          await prisma.brand.create({
-            data: { name: dataSupplierName, code, tecdocId: dataSupplierId },
-          });
-          created++;
-        }
-      } catch (err) {
-        logger.warn({ err, code, name: dataSupplierName }, "Brand sync failed");
+        await prisma.brand.update({
+          where: { id: m.brand_id },
+          data: { tecdocId },
+        });
+        updated++;
+      } catch {
+        // skip conflict
       }
     }
 
-    logger.info({ updated, created, logosDownloaded, total: suppliers.length }, "Brand sync completed");
-    return { updated, created, logosDownloaded, total: suppliers.length };
+    // Count total brands
+    const total = await prisma.brand.count();
+    const withTecdocId = await prisma.brand.count({ where: { tecdocId: { not: null } } });
+
+    return { updated, total, withTecdocId };
   });
 
-  // Fetch brand logos from TecDoc for all brands with tecdocId
-  app.post("/brands/fetch-logos", async (request, reply) => {
-    const supplier = await prisma.supplier.findUnique({ where: { code: "tecdoc" } });
-    if (!supplier) {
-      return reply.code(404).send({ error: "TecDoc supplier not found" });
-    }
+  // Set brand logos from existing product images (uses first product with image per brand)
+  app.post("/brands/fetch-logos", async () => {
+    // Find brands without logos that have products with images
+    const results = await prisma.$queryRaw<Array<{ brand_id: number; image_url: string }>>`
+      SELECT DISTINCT ON (pm.brand_id) pm.brand_id, pm.image_url
+      FROM product_maps pm
+      JOIN brands b ON b.id = pm.brand_id
+      WHERE pm.image_url IS NOT NULL
+        AND pm.image_url != ''
+        AND b.logo_url IS NULL
+      ORDER BY pm.brand_id, pm.updated_at DESC
+    `;
 
-    let creds: { apiKey: string; providerId?: number; articleCountry?: string } = { apiKey: "" };
-    try {
-      let raw = supplier.credentials as string;
-      try { raw = decryptCredentials(raw); } catch { /* plaintext fallback */ }
-      creds = JSON.parse(raw);
-    } catch {
-      return reply.code(500).send({ error: "Invalid TecDoc credentials" });
-    }
-
-    const tecdocUrl = supplier.baseUrl || "https://webservice.tecalliance.services/pegasus-3-0/services/TecdocToCatDLB.jsonEndpoint";
-
-    // Get brands without logos that have tecdocId
-    const brands = await prisma.brand.findMany({
-      where: { tecdocId: { not: null }, logoUrl: null },
-      select: { id: true, name: true, code: true, tecdocId: true },
-    });
-
-    logger.info({ brands: brands.length }, "Fetching logos for brands");
-
-    let logosFound = 0;
-
-    // Fetch article images for each brand to discover manufacturer logos
-    for (const brand of brands) {
+    let logosSet = 0;
+    for (const r of results) {
       try {
-        // Get one article to check for brand logo
-        const response = await fetch(tecdocUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Api-Key": creds.apiKey,
-          },
-          body: JSON.stringify({
-            getArticles: {
-              articleCountry: creds.articleCountry ?? "NL",
-              providerId: creds.providerId ?? 22691,
-              lang: "nl",
-              perPage: 1,
-              page: 1,
-              dataSupplierId: brand.tecdocId,
-              includeImages: true,
-            },
-          }),
+        await prisma.brand.update({
+          where: { id: r.brand_id },
+          data: { logoUrl: r.image_url },
         });
-
-        if (!response.ok) continue;
-
-        const data = (await response.json()) as Record<string, unknown>;
-        const articles = (data.articles ?? []) as Array<Record<string, unknown>>;
-
-        if (articles.length === 0) continue;
-
-        // Check if article has images - use the first image as a proxy for the brand
-        const art = articles[0];
-        const images = art.images as Array<Record<string, unknown>> | undefined;
-        if (images && images.length > 0) {
-          const img = images[0];
-          const logoUrl = (img.imageURL200 ?? img.imageURL400 ?? img.imageURL100 ?? "") as string;
-          if (logoUrl) {
-            await prisma.brand.update({
-              where: { id: brand.id },
-              data: { logoUrl },
-            });
-            logosFound++;
-          }
-        }
-
-        // Rate limit
-        await new Promise((r) => setTimeout(r, 200));
-      } catch (err) {
-        logger.warn({ err, brandId: brand.id }, "Failed to fetch brand logo");
+        logosSet++;
+      } catch {
+        // skip
       }
     }
 
-    return { brandsChecked: brands.length, logosFound };
+    const total = await prisma.brand.count();
+    const withLogo = await prisma.brand.count({ where: { logoUrl: { not: null } } });
+
+    return { logosSet, total, withLogo };
   });
 
   // Update brand

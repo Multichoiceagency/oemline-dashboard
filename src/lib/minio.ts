@@ -62,6 +62,13 @@ export async function uploadFile(
 }
 
 /**
+ * Download a file from MinIO as a readable stream.
+ */
+export async function getObjectStream(objectName: string): Promise<NodeJS.ReadableStream> {
+  return minioClient.getObject(BUCKET, objectName);
+}
+
+/**
  * Delete a file from MinIO.
  */
 export async function deleteFile(objectName: string): Promise<void> {

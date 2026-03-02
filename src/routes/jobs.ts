@@ -108,16 +108,17 @@ export async function jobRoutes(app: FastifyInstance) {
     };
   });
 
-  // Import InterCars CSV mapping
+  // Import InterCars CSV mapping (from local file or MinIO)
   app.post("/jobs/import-intercars-csv", async (request) => {
     const { prisma } = await import("../lib/prisma.js");
     const { logger } = await import("../lib/logger.js");
-    const { createReadStream } = await import("node:fs");
+    const { createReadStream, existsSync } = await import("node:fs");
     const { createInterface } = await import("node:readline");
     const { Prisma } = await import("@prisma/client");
     const { resolve } = await import("node:path");
+    const { getObjectStream } = await import("../lib/minio.js");
 
-    const body = (request.body ?? {}) as { csvPath?: string };
+    const body = (request.body ?? {}) as { csvPath?: string; minioKey?: string };
     const csvPath = body.csvPath || resolve(process.cwd(), "ProductInformation_2026-02-26.csv");
 
     // Create table if not exists
@@ -139,12 +140,26 @@ export async function jobRoutes(app: FastifyInstance) {
     await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS idx_ic_map_mfr_art ON intercars_mappings (manufacturer, article_number)`);
     await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS idx_ic_map_art ON intercars_mappings (article_number)`);
 
-    // Stream the CSV in background
+    // Stream the CSV - from MinIO if minioKey provided, otherwise local file
     const BATCH_SIZE = 5000;
     let batch: Array<{ towKod: string; icIndex: string; articleNumber: string; manufacturer: string; tecdocProd: number | null; description: string; ean: string | null; weight: number | null; blockedReturn: boolean }> = [];
     let totalImported = 0;
 
-    const stream = createReadStream(csvPath, { encoding: "utf-8" });
+    let stream: NodeJS.ReadableStream;
+    if (body.minioKey) {
+      logger.info({ minioKey: body.minioKey }, "Reading CSV from MinIO");
+      stream = await getObjectStream(body.minioKey);
+    } else if (existsSync(csvPath)) {
+      stream = createReadStream(csvPath, { encoding: "utf-8" });
+    } else {
+      // Try default MinIO path
+      logger.info("No local CSV found, trying MinIO files/ProductInformation.csv");
+      try {
+        stream = await getObjectStream("files/ProductInformation_2026-02-26.csv");
+      } catch {
+        return { error: "CSV file not found locally or in MinIO. Provide csvPath or minioKey parameter." };
+      }
+    }
     const rl = createInterface({ input: stream, crlfDelay: Infinity });
     let lineNum = 0;
 
