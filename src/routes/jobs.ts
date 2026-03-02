@@ -260,6 +260,31 @@ export async function jobRoutes(app: FastifyInstance) {
 
     return { queued: jobs.length, jobs };
   });
+
+  // Clean a queue: remove completed/failed/waiting jobs
+  app.delete("/jobs/:queue/clean", async (request) => {
+    const { queue } = request.params as { queue: string };
+    const q = getQueue(queue);
+    if (!q) return { error: "Unknown queue" };
+
+    const { type } = (request.query ?? {}) as { type?: string };
+
+    const results: Record<string, number> = {};
+    if (!type || type === "failed") {
+      const removed = await q.clean(0, 1000, "failed");
+      results.failed = removed.length;
+    }
+    if (!type || type === "waiting") {
+      const removed = await q.clean(0, 1000, "wait");
+      results.waiting = removed.length;
+    }
+    if (type === "completed") {
+      const removed = await q.clean(0, 1000, "completed");
+      results.completed = removed.length;
+    }
+
+    return { cleaned: results };
+  });
 }
 
 function getQueue(name: string) {
