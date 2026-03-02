@@ -100,7 +100,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
    */
   private async tecdocFetch(body: Record<string, unknown>): Promise<unknown> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 60_000); // 60s timeout for bulk ops
+    const timer = setTimeout(() => controller.abort(), 120_000); // 120s timeout for bulk ops
 
     try {
       const response = await fetch(this.tecdocUrl, {
@@ -335,6 +335,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
       let totalYielded = 0;
       const perPage = 100;
       const MAX_PAGES_PER_GROUP = 100; // TecDoc's hard limit
+      let fetchDelay = 50; // Adaptive delay — starts low, increases on errors
 
       for (let gi = startGroupIdx; gi < groups.length; gi++) {
         const group = groups[gi];
@@ -342,6 +343,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
 
         let page = gi === startGroupIdx ? startPage : 1;
         let groupYielded = 0;
+        let consecutiveErrors = 0;
 
         while (page <= MAX_PAGES_PER_GROUP) {
           try {
@@ -362,15 +364,41 @@ export class TecDocAdapter extends BaseSupplierAdapter {
             groupYielded += items.length;
             totalYielded += items.length;
 
+            // Success — gradually reduce delay back toward minimum
+            consecutiveErrors = 0;
+            if (fetchDelay > 50) {
+              fetchDelay = Math.max(50, Math.floor(fetchDelay * 0.8));
+            }
+
             if (articles.length < perPage) break;
 
             const groupTotal = result.totalMatchingArticles ?? 0;
             if (groupTotal > 0 && page * perPage >= groupTotal) break;
 
             page++;
-            await new Promise((r) => setTimeout(r, 50));
-          } catch {
-            // Hit page limit or API error, move to next group
+            await new Promise((r) => setTimeout(r, fetchDelay));
+          } catch (err) {
+            consecutiveErrors++;
+            const isTimeout = err instanceof Error && (err.name === "AbortError" || err.message.includes("timeout") || err.message.includes("abort"));
+
+            if (isTimeout || consecutiveErrors <= 3) {
+              // Increase delay and retry the same page
+              fetchDelay = Math.min(5000, fetchDelay * 2);
+              const waitMs = fetchDelay * consecutiveErrors;
+              logger.warn(
+                { supplier: this.code, group: group.assemblyGroupName, page, attempt: consecutiveErrors, waitMs, isTimeout },
+                "TecDoc request failed, retrying with backoff"
+              );
+              await new Promise((r) => setTimeout(r, waitMs));
+              // Don't increment page — retry same page
+              continue;
+            }
+
+            // Too many consecutive errors — skip to next group
+            logger.error(
+              { supplier: this.code, group: group.assemblyGroupName, page, errors: consecutiveErrors },
+              "TecDoc group skipped after repeated failures"
+            );
             break;
           }
         }

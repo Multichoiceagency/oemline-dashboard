@@ -25,7 +25,8 @@ const syncWorker = new Worker("sync", processSyncJob, {
   connection,
   concurrency: 4,
   limiter: { max: 10, duration: 60_000 },
-  stalledInterval: 60_000,
+  stalledInterval: 300_000, // 5 min — sync jobs run for hours
+  lockDuration: 600_000,    // 10 min lock to prevent premature stalling
 });
 
 const matchWorker = new Worker("match", processRematchJob, {

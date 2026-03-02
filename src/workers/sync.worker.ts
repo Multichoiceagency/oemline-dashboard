@@ -39,6 +39,9 @@ export async function processSyncJob(job: Job<SyncJobData>): Promise<void> {
   for await (const batch of catalogIterator) {
     batchCount++;
 
+    // Extend lock to prevent stalling during long sync operations
+    try { await job.extendLock(job.token!, 600_000); } catch { /* ok */ }
+
     // Resolve brands first
     await ensureBrands(batch);
 
