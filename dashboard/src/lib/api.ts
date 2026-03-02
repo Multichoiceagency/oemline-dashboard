@@ -395,6 +395,29 @@ export const importProducts = (data: {
 export const getProductStats = () =>
   apiFetch<ProductStats>("/api/products/stats");
 
+// TecDoc Vehicle Linkages
+export interface VehicleLinkage {
+  linkingTargetId: number;
+  description: string;
+  mfrName: string;
+  vehicleModelSeriesName: string;
+  beginYearMonth: string | null;
+  endYearMonth: string | null;
+  typeName: string;
+  subTypeName: string;
+  capacity: string | null;
+  power: string | null;
+  fuelType: string | null;
+}
+
+export interface VehicleLinkagesResponse {
+  linkages: VehicleLinkage[];
+  total: number;
+}
+
+export const getTecDocLinkages = (articleId: number) =>
+  apiFetch<VehicleLinkagesResponse>(`/api/tecdoc/linkages?articleId=${articleId}`);
+
 export const populateTecDoc = (queries: string[]) =>
   apiFetch<{ imported: number; updated: number; total: number }>(
     "/api/tecdoc/populate",

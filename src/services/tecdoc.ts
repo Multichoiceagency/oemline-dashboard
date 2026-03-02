@@ -43,6 +43,42 @@ interface GetArticlesResponse {
   status?: number;
 }
 
+/**
+ * Response from getArticleLinkedAllLinkingTarget4
+ */
+interface LinkagesResponse {
+  data?: {
+    array?: Array<{
+      linkingTargetId?: number;
+      linkingTargetDescription?: string;
+      mfrName?: string;
+      vehicleModelSeriesName?: string;
+      beginYearMonth?: string;
+      endYearMonth?: string;
+      typeName?: string;
+      subTypeName?: string;
+      capacity?: string;
+      power?: string;
+      fuelType?: string;
+    }>;
+  };
+  status?: number;
+}
+
+export interface VehicleLinkage {
+  linkingTargetId: number;
+  description: string;
+  mfrName: string;
+  vehicleModelSeriesName: string;
+  beginYearMonth: string | null;
+  endYearMonth: string | null;
+  typeName: string;
+  subTypeName: string;
+  capacity: string | null;
+  power: string | null;
+  fuelType: string | null;
+}
+
 export interface TecDocProduct {
   articleNumber: string;
   brand: string;
@@ -206,6 +242,51 @@ export class TecDocService {
       logger.error({ err, query }, "TecDoc searchFreeText failed");
       return { articles: [], total: 0 };
     }
+  }
+
+  /**
+   * Get vehicle linkages for an article (which vehicles is this part for)
+   */
+  async getArticleLinkages(articleId: number): Promise<VehicleLinkage[]> {
+    const cached = await cacheGet<VehicleLinkage[]>("tecdoc", ["linkages", String(articleId)]);
+    if (cached) return cached;
+
+    try {
+      const result = (await this.request(
+        "getArticleLinkedAllLinkingTarget4",
+        {
+          articleId,
+          linkingTargetType: "V", // Vehicles
+          perPage: 100,
+          page: 1,
+        }
+      )) as LinkagesResponse;
+
+      const linkages = this.mapLinkages(result);
+      await cacheSet("tecdoc", ["linkages", String(articleId)], linkages);
+      return linkages;
+    } catch (err) {
+      logger.error({ err, articleId }, "TecDoc getArticleLinkages failed");
+      return [];
+    }
+  }
+
+  private mapLinkages(result: LinkagesResponse): VehicleLinkage[] {
+    const items = result.data?.array ?? [];
+
+    return items.map((a) => ({
+      linkingTargetId: a.linkingTargetId ?? 0,
+      description: a.linkingTargetDescription ?? "",
+      mfrName: a.mfrName ?? "",
+      vehicleModelSeriesName: a.vehicleModelSeriesName ?? "",
+      beginYearMonth: a.beginYearMonth ?? null,
+      endYearMonth: a.endYearMonth ?? null,
+      typeName: a.typeName ?? "",
+      subTypeName: a.subTypeName ?? "",
+      capacity: a.capacity ?? null,
+      power: a.power ?? null,
+      fuelType: a.fuelType ?? null,
+    }));
   }
 
   private mapDirectSearch(result: DirectSearchResponse): TecDocProduct[] {

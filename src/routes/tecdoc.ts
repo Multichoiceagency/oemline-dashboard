@@ -54,6 +54,35 @@ export async function tecdocRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  // Get vehicle linkages for an article
+  app.get("/tecdoc/linkages", async (request, reply) => {
+    const schema = z.object({
+      articleId: z.coerce.number().int().min(1),
+    });
+
+    const parsed = schema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "Bad Request",
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    const { articleId } = parsed.data;
+    const tecdoc = getTecDocService();
+
+    try {
+      const linkages = await tecdoc.getArticleLinkages(articleId);
+      return reply.send({ linkages, total: linkages.length });
+    } catch (err) {
+      request.log.error({ err }, "TecDoc linkages error");
+      return reply.code(502).send({
+        error: "TecDoc API error",
+        message: err instanceof Error ? err.message : "Unknown error",
+      });
+    }
+  });
+
   // Populate DB with TecDoc search results
   app.post("/tecdoc/populate", async (request, reply) => {
     const schema = z.object({

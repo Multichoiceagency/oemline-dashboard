@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useApi, useInterval } from "@/lib/hooks";
 import {
   getFinalized,
@@ -11,8 +11,9 @@ import {
   getSuppliers,
   updateProduct,
   uploadProductImage,
+  getTecDocLinkages,
 } from "@/lib/api";
-import type { FinalizedProduct, FinalizedDetail } from "@/lib/api";
+import type { FinalizedProduct, FinalizedDetail, VehicleLinkage } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -57,6 +58,10 @@ import {
   Eye,
   Pencil,
   Upload,
+  Trash2,
+  Car,
+  Star,
+  Plus,
 } from "lucide-react";
 
 export default function FinalizedPage() {
@@ -110,6 +115,7 @@ export default function FinalizedPage() {
   const [editForm, setEditForm] = useState({
     description: "",
     imageUrl: "",
+    images: [] as string[],
     price: "",
     currency: "EUR",
     stock: "",
@@ -125,6 +131,7 @@ export default function FinalizedPage() {
     setEditForm({
       description: product.description || "",
       imageUrl: product.imageUrl || "",
+      images: product.images ?? [],
       price: product.price != null ? String(product.price) : "",
       currency: product.currency || "EUR",
       stock: product.stock != null ? String(product.stock) : "",
@@ -134,18 +141,39 @@ export default function FinalizedPage() {
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !selectedId) return;
+    const files = e.target.files;
+    if (!files || files.length === 0 || !selectedId) return;
     setUploading(true);
     try {
-      const result = await uploadProductImage(selectedId, file);
-      setEditForm((prev) => ({ ...prev, imageUrl: result.url }));
+      for (const file of Array.from(files)) {
+        const result = await uploadProductImage(selectedId, file);
+        setEditForm((prev) => ({
+          ...prev,
+          images: [...prev.images, result.url],
+          imageUrl: prev.imageUrl || result.url,
+        }));
+      }
+      refetchDetail();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(false);
       if (imageFileRef.current) imageFileRef.current.value = "";
     }
+  };
+
+  const removeImage = (url: string) => {
+    setEditForm((prev) => {
+      const newImages = prev.images.filter((img) => img !== url);
+      const newPrimary = prev.imageUrl === url
+        ? (newImages[0] ?? "")
+        : prev.imageUrl;
+      return { ...prev, images: newImages, imageUrl: newPrimary };
+    });
+  };
+
+  const setPrimaryImage = (url: string) => {
+    setEditForm((prev) => ({ ...prev, imageUrl: url }));
   };
 
   const handleSave = async () => {
@@ -155,6 +183,7 @@ export default function FinalizedPage() {
       await updateProduct(selectedId, {
         description: editForm.description,
         imageUrl: editForm.imageUrl || null,
+        images: editForm.images,
         price: editForm.price ? parseFloat(editForm.price) : null,
         currency: editForm.currency || "EUR",
         stock: editForm.stock ? parseInt(editForm.stock, 10) : null,
@@ -491,22 +520,74 @@ export default function FinalizedPage() {
           ) : detail ? (
             editMode ? (
               <div className="space-y-4 py-4">
-                {/* Image upload */}
-                <div className="space-y-2">
+                {/* Image Gallery Management */}
+                <div className="space-y-3">
                   <label className="text-sm font-medium flex items-center gap-2">
-                    <ImageIcon className="h-4 w-4" /> Product Image
+                    <ImageIcon className="h-4 w-4" /> Product Images
                   </label>
+
+                  {/* Existing images grid */}
+                  {editForm.images.length > 0 ? (
+                    <div className="grid grid-cols-4 gap-3">
+                      {editForm.images.map((url, i) => (
+                        <div
+                          key={i}
+                          className={`relative group rounded-lg border-2 overflow-hidden ${
+                            url === editForm.imageUrl
+                              ? "border-blue-500 ring-2 ring-blue-200"
+                              : "border-muted hover:border-muted-foreground/30"
+                          }`}
+                        >
+                          <img
+                            src={url}
+                            alt={`Product image ${i + 1}`}
+                            className="h-24 w-full object-contain bg-white p-1"
+                          />
+                          {url === editForm.imageUrl && (
+                            <div className="absolute top-1 left-1">
+                              <Badge className="bg-blue-500 text-[10px] px-1 py-0">
+                                <Star className="h-2.5 w-2.5 mr-0.5" /> Primary
+                              </Badge>
+                            </div>
+                          )}
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100">
+                            {url !== editForm.imageUrl && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="secondary"
+                                className="h-7 text-xs"
+                                onClick={() => setPrimaryImage(url)}
+                              >
+                                <Star className="h-3 w-3" />
+                              </Button>
+                            )}
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              className="h-7 text-xs"
+                              onClick={() => removeImage(url)}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-24 rounded-lg border-2 border-dashed border-muted text-muted-foreground text-sm">
+                      No images yet
+                    </div>
+                  )}
+
+                  {/* Upload button */}
                   <div className="flex gap-2">
-                    <Input
-                      value={editForm.imageUrl}
-                      onChange={(e) => setEditForm({ ...editForm, imageUrl: e.target.value })}
-                      placeholder="https://example.com/product.jpg"
-                      className="flex-1"
-                    />
                     <input
                       ref={imageFileRef}
                       type="file"
                       accept="image/*"
+                      multiple
                       className="hidden"
                       onChange={handleImageUpload}
                     />
@@ -515,16 +596,18 @@ export default function FinalizedPage() {
                       variant="outline"
                       onClick={() => imageFileRef.current?.click()}
                       disabled={uploading}
+                      className="w-full"
                     >
-                      {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                      {uploading ? (
+                        <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Uploading...</>
+                      ) : (
+                        <><Plus className="h-4 w-4 mr-2" /> Upload Images</>
+                      )}
                     </Button>
                   </div>
-                  {editForm.imageUrl && (
-                    <div className="flex items-center gap-4 p-3 rounded-lg border bg-muted/50">
-                      <span className="text-xs text-muted-foreground">Preview:</span>
-                      <img src={editForm.imageUrl} alt="Preview" className="h-20 w-20 object-contain rounded" />
-                    </div>
-                  )}
+                  <p className="text-[11px] text-muted-foreground">
+                    Click an image to set as primary. Supports multiple file upload.
+                  </p>
                 </div>
 
                 {/* Description */}
@@ -746,6 +829,31 @@ function ProductDetail({ product }: { product: FinalizedDetail }) {
   const { t } = useTranslation();
   const cur = product.currency === "EUR" ? "\u20AC" : product.currency ?? "";
 
+  // Vehicle applicability from TecDoc
+  const [linkages, setLinkages] = useState<VehicleLinkage[]>([]);
+  const [loadingLinkages, setLoadingLinkages] = useState(false);
+  const [linkagesLoaded, setLinkagesLoaded] = useState(false);
+
+  const loadLinkages = async () => {
+    if (!product.tecdocId || linkagesLoaded) return;
+    setLoadingLinkages(true);
+    try {
+      const result = await getTecDocLinkages(parseInt(product.tecdocId, 10));
+      setLinkages(result.linkages);
+    } catch {
+      // TecDoc linkage lookup failed — not critical
+    } finally {
+      setLoadingLinkages(false);
+      setLinkagesLoaded(true);
+    }
+  };
+
+  // Auto-load linkages when product has tecdocId
+  useEffect(() => {
+    if (product.tecdocId) loadLinkages();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product.tecdocId]);
+
   return (
     <div className="space-y-6">
       {/* Image + Basic Info */}
@@ -898,6 +1006,65 @@ function ProductDetail({ product }: { product: FinalizedDetail }) {
               />
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Vehicle Applicability */}
+      {product.tecdocId && (
+        <div>
+          <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+            <Car className="h-4 w-4" /> Toepasbaarheid (Voertuigen)
+          </h4>
+          {!linkagesLoaded ? (
+            <Button variant="outline" size="sm" onClick={loadLinkages} disabled={loadingLinkages}>
+              {loadingLinkages ? (
+                <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Laden...</>
+              ) : (
+                <><Car className="h-4 w-4 mr-2" /> Toepasbaarheid laden</>
+              )}
+            </Button>
+          ) : loadingLinkages ? (
+            <div className="flex justify-center py-4">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : linkages.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Geen voertuigkoppelingen gevonden in TecDoc</p>
+          ) : (
+            <div className="rounded-lg border overflow-hidden max-h-[300px] overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Merk</TableHead>
+                    <TableHead>Model</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Bouwjaar</TableHead>
+                    <TableHead>Motor</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {linkages.map((v, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="font-medium text-sm">{v.mfrName}</TableCell>
+                      <TableCell className="text-sm">{v.vehicleModelSeriesName}</TableCell>
+                      <TableCell className="text-sm max-w-[200px] truncate">
+                        {v.description || v.typeName}
+                      </TableCell>
+                      <TableCell className="text-xs font-mono">
+                        {v.beginYearMonth && v.endYearMonth
+                          ? `${v.beginYearMonth} - ${v.endYearMonth}`
+                          : v.beginYearMonth
+                          ? `${v.beginYearMonth} -`
+                          : "-"}
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {[v.capacity, v.power, v.fuelType].filter(Boolean).join(" / ") || "-"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </div>
       )}
 

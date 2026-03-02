@@ -35,6 +35,7 @@ const updateSchema = z.object({
   description: z.string().optional(),
   brandId: z.number().int().optional(),
   imageUrl: z.string().nullable().optional(),
+  images: z.array(z.string()).optional(),
   price: z.number().nullable().optional(),
   currency: z.string().nullable().optional(),
   stock: z.number().int().nullable().optional(),
