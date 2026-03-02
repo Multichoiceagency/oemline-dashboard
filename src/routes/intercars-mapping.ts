@@ -385,29 +385,36 @@ export async function intercarsRoutes(app: FastifyInstance) {
       stockResult = { error: String(err) };
     }
 
-    // Step 4: Call pricing API
-    let pricingResult: Record<string, unknown> = {};
-    try {
-      const priceUrl = `${apiUrl}/dropshipping/pricing/quote?sku=${encodeURIComponent(testSku)}&quantity=1`;
-      const priceResp = await fetch(priceUrl, { headers });
-      const priceBody = await priceResp.text();
-      pricingResult = {
-        url: priceUrl,
-        status: priceResp.status,
-        statusText: priceResp.statusText,
-        headers: Object.fromEntries(priceResp.headers.entries()),
-        body: priceBody.slice(0, 2000),
-        ok: priceResp.ok,
-      };
-    } catch (err) {
-      pricingResult = { error: String(err) };
+    // Step 4: Try multiple pricing API endpoints
+    const pricingEndpoints = [
+      `/dropshipping/pricing/quote?sku=${encodeURIComponent(testSku)}&quantity=1`,
+      `/dropshipping/pricing?sku=${encodeURIComponent(testSku)}&quantity=1`,
+      `/pricing/quote?sku=${encodeURIComponent(testSku)}&quantity=1`,
+      `/pricing/price?sku=${encodeURIComponent(testSku)}&quantity=1`,
+      `/pricing?sku=${encodeURIComponent(testSku)}&quantity=1`,
+      `/dropshipping/price?sku=${encodeURIComponent(testSku)}&quantity=1`,
+      `/inventory/pricing?sku=${encodeURIComponent(testSku)}`,
+      `/inventory/price?sku=${encodeURIComponent(testSku)}`,
+    ];
+
+    const pricingResults: Array<{ url: string; status: number; body: string; ok: boolean }> = [];
+    for (const endpoint of pricingEndpoints) {
+      try {
+        const url = `${apiUrl}${endpoint}`;
+        const resp = await fetch(url, { headers });
+        const body = await resp.text();
+        pricingResults.push({ url, status: resp.status, body: body.slice(0, 500), ok: resp.ok });
+        if (resp.ok) break; // Stop if we found a working endpoint
+      } catch (err) {
+        pricingResults.push({ url: `${apiUrl}${endpoint}`, status: 0, body: String(err), ok: false });
+      }
     }
 
     return {
       step1_token: { success: true, tokenLength: accessToken.length },
       testSku,
       step2_stock: stockResult,
-      step3_pricing: pricingResult,
+      step3_pricing_attempts: pricingResults,
       config: {
         apiUrl,
         customerId: customerId || "(empty)",
