@@ -388,13 +388,14 @@ export async function intercarsRoutes(app: FastifyInstance) {
     // Step 4: Try pricing API with POST method (discovered via 405 on GET)
     const pricingAttempts: Array<{ method: string; url: string; bodyPayload?: string; status: number; responseBody: string; ok: boolean }> = [];
 
-    // Try POST /pricing/quote with JSON body
+    // Try POST /pricing/quote with various body formats
     const postEndpoints = [
-      { path: "/pricing/quote", body: JSON.stringify({ skus: [testSku], quantity: 1 }) },
-      { path: "/pricing/quote", body: JSON.stringify({ sku: testSku, quantity: 1 }) },
-      { path: "/pricing/quote", body: JSON.stringify([{ sku: testSku, quantity: 1 }]) },
-      { path: "/pricing", body: JSON.stringify({ skus: [testSku] }) },
-      { path: "/dropshipping/pricing/quote", body: JSON.stringify({ sku: testSku, quantity: 1 }) },
+      { path: "/pricing/quote", body: JSON.stringify({ items: [{ sku: testSku, quantity: 1 }] }), ct: "application/json" },
+      { path: "/pricing/quote", body: JSON.stringify({ skuNumbers: [testSku], quantity: 1 }), ct: "application/json" },
+      { path: "/pricing/quote", body: JSON.stringify([{ skuNumber: testSku, quantity: 1 }]), ct: "application/json" },
+      { path: "/pricing/quote", body: `sku=${encodeURIComponent(testSku)}&quantity=1`, ct: "application/x-www-form-urlencoded" },
+      { path: "/pricing/quote", body: JSON.stringify({ skuList: [{ skuNumber: testSku, quantity: 1 }] }), ct: "application/json" },
+      { path: "/pricing/quote", body: JSON.stringify({ articles: [{ articleNumber: testSku, quantity: 1 }] }), ct: "application/json" },
     ];
 
     for (const ep of postEndpoints) {
@@ -402,7 +403,7 @@ export async function intercarsRoutes(app: FastifyInstance) {
         const url = `${apiUrl}${ep.path}`;
         const resp = await fetch(url, {
           method: "POST",
-          headers: { ...headers, "Content-Type": "application/json" },
+          headers: { ...headers, "Content-Type": ep.ct || "application/json" },
           body: ep.body,
         });
         const body = await resp.text();
