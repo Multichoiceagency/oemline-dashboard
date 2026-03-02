@@ -22,6 +22,7 @@ import { jobRoutes } from "./routes/jobs.js";
 import { storefrontRoutes } from "./routes/storefront.js";
 import { intercarsRoutes } from "./routes/intercars-mapping.js";
 import { uploadRoutes } from "./routes/uploads.js";
+import { finalizedRoutes } from "./routes/finalized.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { ensureBucket } from "./lib/minio.js";
 
@@ -88,6 +89,7 @@ await app.register(jobRoutes, { prefix: "/api" });
 await app.register(storefrontRoutes, { prefix: "/api" });
 await app.register(intercarsRoutes, { prefix: "/api" });
 await app.register(uploadRoutes, { prefix: "/api" });
+await app.register(finalizedRoutes, { prefix: "/api" });
 
 app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
   request.log.error({ err: error, reqId: request.id }, "Request error");

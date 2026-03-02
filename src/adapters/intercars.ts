@@ -169,29 +169,21 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
       if (items.length === 0) return [];
 
-      const priceMap = new Map<string, PricingItem>();
-      for (const item of items.slice(0, 20)) {
-        const itemSku = item.sku ?? item.index;
+      // Deduplicate by SKU (stock API returns multiple warehouse entries)
+      const skuMap = new Map<string, { item: StockItem; totalStock: number }>();
+      for (const item of items) {
+        const itemSku = item.sku ?? item.index ?? "";
         if (!itemSku) continue;
-
-        try {
-          const priceUrl = `${this.apiUrl}/dropshipping/pricing/quote?sku=${encodeURIComponent(itemSku)}&quantity=1`;
-          const priceResponse = await this.fetchWithTimeout(priceUrl, { headers });
-
-          if (priceResponse.ok) {
-            const priceData = (await priceResponse.json()) as PricingItem | PricingItem[];
-            const pricing = Array.isArray(priceData) ? priceData[0] : priceData;
-            if (pricing) priceMap.set(itemSku, pricing);
-          }
-        } catch {
-          // pricing lookup is best-effort
+        const existing = skuMap.get(itemSku);
+        if (existing) {
+          existing.totalStock += item.availability ?? 0;
+        } else {
+          skuMap.set(itemSku, { item, totalStock: item.availability ?? 0 });
         }
       }
 
-      return items.map((item) => {
+      return Array.from(skuMap.values()).map(({ item, totalStock }) => {
         const itemSku = item.sku ?? item.index ?? "";
-        const pricing = priceMap.get(itemSku);
-
         return {
           supplier: this.code,
           sku: itemSku,
@@ -201,9 +193,9 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
           tecdocId: item.tecdoc ?? null,
           oem: null,
           description: item.description ?? "",
-          price: pricing?.customerPrice ?? pricing?.listPriceNet ?? null,
-          stock: item.availability ?? null,
-          currency: pricing?.currency ?? "EUR",
+          price: null, // Pricing API currently unavailable
+          stock: totalStock,
+          currency: "EUR",
         };
       });
     } catch (err) {
@@ -212,26 +204,10 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
     }
   }
 
-  async getPrice(sku: string): Promise<{ price: number; currency: string } | null> {
-    try {
-      const headers = await this.authHeaders();
-      const url = `${this.apiUrl}/dropshipping/pricing/quote?sku=${encodeURIComponent(sku)}&quantity=1`;
-
-      const response = await this.fetchWithTimeout(url, { headers });
-
-      if (!response.ok) return null;
-
-      const data = (await response.json()) as PricingItem | PricingItem[];
-      const pricing = Array.isArray(data) ? data[0] : data;
-
-      const price = pricing?.customerPrice ?? pricing?.listPriceNet;
-      if (price == null) return null;
-
-      return { price, currency: pricing?.currency ?? "EUR" };
-    } catch (err) {
-      logger.error({ err, supplier: this.code, sku }, "InterCars getPrice failed");
-      return null;
-    }
+  async getPrice(_sku: string): Promise<{ price: number; currency: string } | null> {
+    // IC pricing API (/pricing/quote) currently returns 500 errors
+    // TODO: Re-enable when IC fixes their pricing endpoint
+    return null;
   }
 
   async getStock(sku: string): Promise<{ quantity: number; available: boolean } | null> {
@@ -367,8 +343,9 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         totalMatched += matchedProducts.length;
         offset += PAGE_SIZE;
 
-        // Batch fetch stock and pricing, then DIRECTLY UPDATE the TecDoc product
-        const BATCH_SIZE = 30;
+        // Fetch stock from IC API, then DIRECTLY UPDATE the TecDoc product
+        // NOTE: Pricing endpoint (/pricing/quote) returns 500 on IC side — stock-only for now
+        const BATCH_SIZE = 20;
         for (let i = 0; i < matchedProducts.length; i += BATCH_SIZE) {
           const batch = matchedProducts.slice(i, i + BATCH_SIZE);
 
@@ -377,10 +354,6 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
             for (const product of batch) {
               try {
-                let stockQty: number | null = null;
-                let price: number | null = null;
-                let currency = "EUR";
-
                 // Fetch stock
                 const stockUrl = `${this.apiUrl}/inventory/stock?sku=${encodeURIComponent(product.tow_kod)}`;
                 const stockResp = await this.syncFetch(stockUrl, headers);
@@ -388,58 +361,40 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
                 if (stockResp.ok) {
                   const stockData = (await stockResp.json()) as StockItem[] | { items?: StockItem[] };
                   const stockItems = Array.isArray(stockData) ? stockData : (stockData.items ?? []);
-                  stockQty = stockItems.reduce((sum: number, s: StockItem) => sum + (s.availability ?? 0), 0);
-                } else {
-                  totalApiErrors++;
-                  if (totalApiErrors <= 3) {
-                    logger.warn({ status: stockResp.status, sku: product.tow_kod }, "IC stock API error");
-                  }
-                }
+                  const stockQty = stockItems.reduce((sum: number, s: StockItem) => sum + (s.availability ?? 0), 0);
 
-                // Fetch pricing
-                try {
-                  const priceUrl = `${this.apiUrl}/dropshipping/pricing/quote?sku=${encodeURIComponent(product.tow_kod)}&quantity=1`;
-                  const priceResp = await this.syncFetch(priceUrl, headers);
-
-                  if (priceResp.ok) {
-                    const priceData = (await priceResp.json()) as PricingItem | PricingItem[];
-                    const pricing = Array.isArray(priceData) ? priceData[0] : priceData;
-                    price = pricing?.customerPrice ?? pricing?.listPriceNet ?? null;
-                    currency = pricing?.currency ?? "EUR";
-                  } else {
-                    totalApiErrors++;
-                    if (totalApiErrors <= 3) {
-                      logger.warn({ status: priceResp.status, sku: product.tow_kod }, "IC pricing API error");
-                    }
-                  }
-                } catch {
-                  // pricing is best-effort
-                }
-
-                // DIRECTLY UPDATE the TecDoc product with price/stock
-                if (price !== null || stockQty !== null) {
+                  // Update product with stock + EAN from IC CSV
                   await prisma.$executeRawUnsafe(
                     `UPDATE product_maps SET
-                      price = COALESCE($1, price),
-                      stock = COALESCE($2, stock),
-                      currency = COALESCE($3, currency),
-                      ean = COALESCE($4, ean),
+                      stock = $1,
+                      ean = COALESCE($2, ean),
                       updated_at = NOW()
-                    WHERE id = $5`,
-                    price,
+                    WHERE id = $3`,
                     stockQty,
-                    currency,
                     product.ic_ean,
                     product.product_id
                   );
                   totalUpdated++;
+                } else if (stockResp.status === 429) {
+                  // Rate limited — wait and retry
+                  totalApiErrors++;
+                  logger.warn({ supplier: this.code }, "IC rate limited, waiting 60s");
+                  await new Promise((r) => setTimeout(r, 60_000));
+                  // Retry this item by decrementing
+                  continue;
+                } else {
+                  totalApiErrors++;
+                  if (totalApiErrors <= 5) {
+                    const body = await stockResp.text().catch(() => "");
+                    logger.warn({ status: stockResp.status, sku: product.tow_kod, body: body.slice(0, 200) }, "IC stock API error");
+                  }
                 }
               } catch {
                 // Skip individual item errors
               }
 
-              // Rate limit between API calls
-              await new Promise((r) => setTimeout(r, 50));
+              // Rate limit: 200ms between calls to avoid 429
+              await new Promise((r) => setTimeout(r, 200));
             }
           } catch (err) {
             logger.warn({ err, supplier: this.code }, "InterCars batch fetch failed");

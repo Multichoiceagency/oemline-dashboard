@@ -385,40 +385,56 @@ export async function intercarsRoutes(app: FastifyInstance) {
       stockResult = { error: String(err) };
     }
 
-    // Step 4: Try pricing API with POST method (discovered via 405 on GET)
-    const pricingAttempts: Array<{ method: string; url: string; bodyPayload?: string; status: number; responseBody: string; ok: boolean }> = [];
+    // Step 4: Test /inventory/quote (combined stock + pricing, from Postman docs)
+    let inventoryQuoteResult: Record<string, unknown> = {};
+    try {
+      const quoteUrl = `${apiUrl}/inventory/quote`;
+      const quoteBody = JSON.stringify({ lines: [{ sku: testSku, quantity: 1 }] });
+      const quoteResp = await fetch(quoteUrl, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: quoteBody,
+      });
+      const quoteRespBody = await quoteResp.text();
+      inventoryQuoteResult = {
+        url: quoteUrl,
+        requestBody: quoteBody,
+        status: quoteResp.status,
+        body: quoteRespBody.slice(0, 2000),
+        ok: quoteResp.ok,
+      };
+    } catch (err) {
+      inventoryQuoteResult = { error: String(err) };
+    }
 
-    // Try POST /pricing/quote with various body formats
-    const postEndpoints = [
-      { path: "/pricing/quote", body: JSON.stringify({ items: [{ sku: testSku, quantity: 1 }] }), ct: "application/json" },
-      { path: "/pricing/quote", body: JSON.stringify({ skuNumbers: [testSku], quantity: 1 }), ct: "application/json" },
-      { path: "/pricing/quote", body: JSON.stringify([{ skuNumber: testSku, quantity: 1 }]), ct: "application/json" },
-      { path: "/pricing/quote", body: `sku=${encodeURIComponent(testSku)}&quantity=1`, ct: "application/x-www-form-urlencoded" },
-      { path: "/pricing/quote", body: JSON.stringify({ skuList: [{ skuNumber: testSku, quantity: 1 }] }), ct: "application/json" },
-      { path: "/pricing/quote", body: JSON.stringify({ articles: [{ articleNumber: testSku, quantity: 1 }] }), ct: "application/json" },
-    ];
-
-    for (const ep of postEndpoints) {
-      try {
-        const url = `${apiUrl}${ep.path}`;
-        const resp = await fetch(url, {
-          method: "POST",
-          headers: { ...headers, "Content-Type": ep.ct || "application/json" },
-          body: ep.body,
-        });
-        const body = await resp.text();
-        pricingAttempts.push({ method: "POST", url, bodyPayload: ep.body, status: resp.status, responseBody: body.slice(0, 1000), ok: resp.ok });
-        if (resp.ok) break;
-      } catch (err) {
-        pricingAttempts.push({ method: "POST", url: `${apiUrl}${ep.path}`, status: 0, responseBody: String(err), ok: false });
-      }
+    // Step 5: Test /pricing/quote with correct body format from Postman
+    let pricingQuoteResult: Record<string, unknown> = {};
+    try {
+      const priceUrl = `${apiUrl}/pricing/quote`;
+      const priceBody = JSON.stringify({ lines: [{ sku: testSku, quantity: 1 }] });
+      const priceResp = await fetch(priceUrl, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: priceBody,
+      });
+      const priceRespBody = await priceResp.text();
+      pricingQuoteResult = {
+        url: priceUrl,
+        requestBody: priceBody,
+        status: priceResp.status,
+        body: priceRespBody.slice(0, 2000),
+        ok: priceResp.ok,
+      };
+    } catch (err) {
+      pricingQuoteResult = { error: String(err) };
     }
 
     return {
       step1_token: { success: true, tokenLength: accessToken.length },
       testSku,
       step2_stock: stockResult,
-      step3_pricing_attempts: pricingAttempts,
+      step3_inventory_quote: inventoryQuoteResult,
+      step4_pricing_quote: pricingQuoteResult,
       config: {
         apiUrl,
         customerId: customerId || "(empty)",
