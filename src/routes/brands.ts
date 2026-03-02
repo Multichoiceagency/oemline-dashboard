@@ -159,54 +159,95 @@ export async function brandRoutes(app: FastifyInstance) {
     const tecdocBrands = data.data?.array ?? [];
     logger.info({ count: tecdocBrands.length }, "Fetched TecDoc brands with logos");
 
-    // Step 2: Build tecdocId → logo URL map
-    const logoMap = new Map<number, string>();
-    const nameLogoMap = new Map<string, string>();
+    // Step 2: Build tecdocId → brand info map
+    const tecdocBrandMap = new Map<number, { name: string; logoUrl: string | null }>();
+    const nameLogoMap = new Map<string, { dataSupplierId: number; logoUrl: string | null }>();
     for (const tb of tecdocBrands) {
       const logo = tb.dataSupplierLogo;
-      const url = logo?.imageURL400 ?? logo?.imageURL200 ?? logo?.imageURL100;
-      if (url) {
-        logoMap.set(tb.dataSupplierId, url);
-        nameLogoMap.set(tb.mfrName.toUpperCase(), url);
+      const logoUrl = logo?.imageURL400 ?? logo?.imageURL200 ?? logo?.imageURL100 ?? null;
+      tecdocBrandMap.set(tb.dataSupplierId, { name: tb.mfrName, logoUrl });
+      nameLogoMap.set(tb.mfrName.toUpperCase(), { dataSupplierId: tb.dataSupplierId, logoUrl });
+    }
+
+    // Step 3: Load existing brands and build lookup maps
+    const existingBrands = await prisma.brand.findMany({
+      select: { id: true, name: true, code: true, tecdocId: true },
+    });
+
+    const existingByTecdocId = new Map<number, (typeof existingBrands)[0]>();
+    const existingByName = new Map<string, (typeof existingBrands)[0]>();
+    for (const b of existingBrands) {
+      if (b.tecdocId) existingByTecdocId.set(b.tecdocId, b);
+      existingByName.set(b.name.toUpperCase(), b);
+    }
+
+    let updated = 0;
+    let created = 0;
+    let notFound = 0;
+
+    // Step 4: Create missing brands from TecDoc and update logos for all
+    for (const [dataSupplierId, info] of tecdocBrandMap) {
+      const { name, logoUrl } = info;
+      const code = name.toLowerCase().replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+
+      // Check if brand already exists (by tecdocId or name)
+      let existing = existingByTecdocId.get(dataSupplierId) ?? existingByName.get(name.toUpperCase());
+
+      if (existing) {
+        // Update logo and tecdocId if needed
+        const updates: Record<string, unknown> = {};
+        if (logoUrl) updates.logoUrl = logoUrl;
+        if (!existing.tecdocId) updates.tecdocId = dataSupplierId;
+
+        if (Object.keys(updates).length > 0) {
+          try {
+            await prisma.brand.update({ where: { id: existing.id }, data: updates });
+            updated++;
+          } catch {
+            // skip conflict
+          }
+        }
+      } else {
+        // Create new brand from TecDoc
+        try {
+          await prisma.brand.create({
+            data: { name, code, tecdocId: dataSupplierId, logoUrl },
+          });
+          created++;
+        } catch {
+          // Might conflict on code — try with suffix
+          try {
+            await prisma.brand.create({
+              data: { name, code: `${code}_${dataSupplierId}`, tecdocId: dataSupplierId, logoUrl },
+            });
+            created++;
+          } catch {
+            notFound++;
+          }
+        }
       }
     }
 
-    // Step 3: Update brands in our DB
-    const brands = await prisma.brand.findMany({
-      where: { name: { not: "Unknown" } },
-      select: { id: true, name: true, tecdocId: true },
-    });
-
-    let updated = 0;
-    let notFound = 0;
-
-    for (const brand of brands) {
-      // Try matching by tecdocId first, then by name
-      let logoUrl = brand.tecdocId ? logoMap.get(brand.tecdocId) : undefined;
-      if (!logoUrl) {
-        logoUrl = nameLogoMap.get(brand.name.toUpperCase());
-      }
-
-      if (!logoUrl) {
-        notFound++;
-        continue;
-      }
-
-      try {
-        await prisma.brand.update({
-          where: { id: brand.id },
-          data: { logoUrl },
-        });
-        updated++;
-      } catch {
-        // skip
+    // Also update logos for brands not in TecDoc's brand list (match by name)
+    for (const brand of existingBrands) {
+      if (brand.name === "Unknown") continue;
+      const match = nameLogoMap.get(brand.name.toUpperCase());
+      if (match?.logoUrl && !existingByTecdocId.has(brand.tecdocId ?? -1)) {
+        try {
+          const updates: Record<string, unknown> = { logoUrl: match.logoUrl };
+          if (!brand.tecdocId) updates.tecdocId = match.dataSupplierId;
+          await prisma.brand.update({ where: { id: brand.id }, data: updates });
+          updated++;
+        } catch {
+          // skip
+        }
       }
     }
 
     const total = await prisma.brand.count();
     const withLogo = await prisma.brand.count({ where: { logoUrl: { not: null } } });
 
-    return { updated, notFound, tecdocBrands: tecdocBrands.length, total, withLogo };
+    return { updated, created, notFound, tecdocBrands: tecdocBrands.length, total, withLogo };
   });
 
   // Update brand
