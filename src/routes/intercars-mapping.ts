@@ -283,6 +283,141 @@ export async function intercarsRoutes(app: FastifyInstance) {
     };
   });
 
+  // Test IC API call: authenticate + fetch stock + pricing for a single TOW_KOD
+  app.get("/intercars/test-api", async (request) => {
+    const { sku } = request.query as { sku?: string };
+
+    // Get IC supplier credentials
+    const supplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });
+    if (!supplier) return { error: "InterCars supplier not found" };
+
+    let creds: Record<string, string> = {};
+    try {
+      const { decryptCredentials } = await import("../lib/crypto.js");
+      let raw = supplier.credentials as string;
+      try { raw = decryptCredentials(raw); } catch { /* plaintext */ }
+      creds = JSON.parse(raw);
+    } catch (err) {
+      return { error: "Failed to parse IC credentials", detail: String(err) };
+    }
+
+    const clientId = creds.clientId || process.env.INTERCARS_CLIENT_ID || "";
+    const clientSecret = creds.clientSecret || process.env.INTERCARS_CLIENT_SECRET || "";
+    const tokenUrl = creds.tokenUrl || "https://is.webapi.intercars.eu/oauth2/token";
+    const apiUrl = supplier.baseUrl || "https://api.webapi.intercars.eu/ic";
+    const customerId = creds.customerId || process.env.INTERCARS_CUSTOMER_ID || "";
+    const payerId = creds.payerId || process.env.INTERCARS_PAYER_ID || "";
+    const branch = creds.branch || process.env.INTERCARS_BRANCH || "";
+
+    // Step 1: Get OAuth2 token
+    let accessToken = "";
+    let tokenError = "";
+    try {
+      const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+      const tokenResp = await fetch(tokenUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: `Basic ${basicAuth}`,
+        },
+        body: "grant_type=client_credentials&scope=allinone",
+      });
+
+      const tokenBody = await tokenResp.text();
+      if (!tokenResp.ok) {
+        tokenError = `${tokenResp.status}: ${tokenBody}`;
+      } else {
+        const tokenData = JSON.parse(tokenBody);
+        accessToken = tokenData.access_token;
+      }
+    } catch (err) {
+      tokenError = String(err);
+    }
+
+    if (!accessToken) {
+      return {
+        step1_token: { success: false, error: tokenError },
+        config: { tokenUrl, apiUrl, clientId: clientId ? `${clientId.slice(0, 4)}...` : "(empty)", hasSecret: !!clientSecret, customerId, payerId, branch },
+      };
+    }
+
+    // Step 2: Find a test SKU if none provided
+    let testSku = sku;
+    if (!testSku) {
+      const sample = await prisma.$queryRawUnsafe<Array<{ tow_kod: string }>>(
+        `SELECT tow_kod FROM intercars_mappings ORDER BY RANDOM() LIMIT 1`
+      );
+      testSku = sample[0]?.tow_kod;
+    }
+
+    if (!testSku) {
+      return {
+        step1_token: { success: true, tokenLength: accessToken.length },
+        error: "No SKU to test. Provide ?sku=XXX or import IC CSV first",
+      };
+    }
+
+    // Build auth headers
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "Accept-Language": "en",
+    };
+    if (customerId) headers["X-Customer-Id"] = customerId;
+    if (payerId) headers["X-Payer-Id"] = payerId;
+    if (branch) headers["X-Branch"] = branch;
+
+    // Step 3: Call stock API
+    let stockResult: Record<string, unknown> = {};
+    try {
+      const stockUrl = `${apiUrl}/inventory/stock?sku=${encodeURIComponent(testSku)}`;
+      const stockResp = await fetch(stockUrl, { headers });
+      const stockBody = await stockResp.text();
+      stockResult = {
+        url: stockUrl,
+        status: stockResp.status,
+        statusText: stockResp.statusText,
+        headers: Object.fromEntries(stockResp.headers.entries()),
+        body: stockBody.slice(0, 2000),
+        ok: stockResp.ok,
+      };
+    } catch (err) {
+      stockResult = { error: String(err) };
+    }
+
+    // Step 4: Call pricing API
+    let pricingResult: Record<string, unknown> = {};
+    try {
+      const priceUrl = `${apiUrl}/dropshipping/pricing/quote?sku=${encodeURIComponent(testSku)}&quantity=1`;
+      const priceResp = await fetch(priceUrl, { headers });
+      const priceBody = await priceResp.text();
+      pricingResult = {
+        url: priceUrl,
+        status: priceResp.status,
+        statusText: priceResp.statusText,
+        headers: Object.fromEntries(priceResp.headers.entries()),
+        body: priceBody.slice(0, 2000),
+        ok: priceResp.ok,
+      };
+    } catch (err) {
+      pricingResult = { error: String(err) };
+    }
+
+    return {
+      step1_token: { success: true, tokenLength: accessToken.length },
+      testSku,
+      step2_stock: stockResult,
+      step3_pricing: pricingResult,
+      config: {
+        apiUrl,
+        customerId: customerId || "(empty)",
+        payerId: payerId || "(empty)",
+        branch: branch || "(empty)",
+        headersUsed: Object.keys(headers),
+      },
+    };
+  });
+
   // Clean up old IC duplicate product_maps (products with IC supplier_id that duplicate TecDoc products)
   app.delete("/intercars/cleanup-duplicates", async () => {
     const icSupplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });
