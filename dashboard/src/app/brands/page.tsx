@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { useApi } from "@/lib/hooks";
+import { useApi, useInterval } from "@/lib/hooks";
 import { getBrands, getProducts, updateBrand, uploadBrandLogo } from "@/lib/api";
 import type { Brand } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,6 +35,9 @@ export default function BrandsPage() {
     () => getBrands({ page, limit: 50, q: searchQuery || undefined }),
     [page, searchQuery]
   );
+
+  // Auto-refresh brands every 30 seconds
+  useInterval(() => { refetch(); }, 30_000);
 
   // Brand detail
   const [selectedBrand, setSelectedBrand] = useState<Brand | null>(null);

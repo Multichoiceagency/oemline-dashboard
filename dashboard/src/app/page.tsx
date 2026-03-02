@@ -83,6 +83,7 @@ export default function DashboardPage() {
   useInterval(() => {
     health.refetch();
     jobs.refetch();
+    suppliers.refetch();
   }, 10000);
 
   const activeSuppliers = suppliers.data?.items.filter((s) => s.active).length ?? 0;

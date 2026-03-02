@@ -10,13 +10,20 @@ export function useApi<T>(
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const mountedRef = useRef(true);
+  const hasDataRef = useRef(false);
 
   const refetch = useCallback(() => {
-    setLoading(true);
+    // Only show loading spinner on initial fetch, not background refreshes
+    if (!hasDataRef.current) {
+      setLoading(true);
+    }
     setError(null);
     fetcher()
       .then((d) => {
-        if (mountedRef.current) setData(d);
+        if (mountedRef.current) {
+          setData(d);
+          hasDataRef.current = true;
+        }
       })
       .catch((e) => {
         if (mountedRef.current) setError(e instanceof Error ? e.message : "Unknown error");
@@ -29,6 +36,8 @@ export function useApi<T>(
 
   useEffect(() => {
     mountedRef.current = true;
+    hasDataRef.current = false;
+    setLoading(true);
     refetch();
     return () => {
       mountedRef.current = false;

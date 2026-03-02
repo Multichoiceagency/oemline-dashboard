@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { useApi } from "@/lib/hooks";
+import { useApi, useInterval } from "@/lib/hooks";
 import {
   getFinalized,
   getFinalizedStats,
@@ -66,7 +66,7 @@ export default function FinalizedPage() {
   const [priceFilter, setPriceFilter] = useState("");
   const [imageFilter, setImageFilter] = useState("");
 
-  const { data, loading } = useApi(
+  const { data, loading, refetch } = useApi(
     () =>
       getFinalized({
         page,
@@ -82,7 +82,13 @@ export default function FinalizedPage() {
     [page, searchQuery, brandFilter, categoryFilter, supplierFilter, stockFilter, priceFilter, imageFilter]
   );
 
-  const { data: stats } = useApi(() => getFinalizedStats(), []);
+  const { data: stats, refetch: refetchStats } = useApi(() => getFinalizedStats(), []);
+
+  // Auto-refresh data and stats every 30 seconds
+  useInterval(() => {
+    refetch();
+    refetchStats();
+  }, 30_000);
 
   const { data: brandsData } = useApi(() => getBrands({ limit: 250 }), []);
   const { data: categoriesData } = useApi(() => getCategories({ limit: 250 }), []);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
-import { useApi } from "@/lib/hooks";
+import { useApi, useInterval } from "@/lib/hooks";
 import {
   getProducts,
   updateProduct,
@@ -89,6 +89,9 @@ export default function ProductsPage() {
     () => getSuppliers({ limit: 100, active: "all" }),
     []
   );
+
+  // Auto-refresh products every 30 seconds
+  useInterval(() => { refetch(); }, 30_000);
 
   // Detail/Edit dialog
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
