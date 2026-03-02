@@ -282,4 +282,20 @@ export async function intercarsRoutes(app: FastifyInstance) {
       note: "TecDoc products that have a matching IC CSV entry (flexible brand matching)",
     };
   });
+
+  // Clean up old IC duplicate product_maps (products with IC supplier_id that duplicate TecDoc products)
+  app.delete("/intercars/cleanup-duplicates", async () => {
+    const icSupplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });
+    if (!icSupplier) return { error: "InterCars supplier not found" };
+
+    // Count before
+    const before = await prisma.productMap.count({ where: { supplierId: icSupplier.id } });
+
+    // Delete all product_maps with IC supplier_id (these are old duplicates)
+    const deleted = await prisma.productMap.deleteMany({
+      where: { supplierId: icSupplier.id },
+    });
+
+    return { deleted: deleted.count, before };
+  });
 }
