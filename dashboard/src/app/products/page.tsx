@@ -441,7 +441,6 @@ export default function ProductsPage() {
                   <TableHead>Article No.</TableHead>
                   <TableHead>Brand</TableHead>
                   <TableHead>Supplier</TableHead>
-                  <TableHead>IC Code</TableHead>
                   <TableHead>Description</TableHead>
                   <TableHead>Price</TableHead>
                   <TableHead>Stock</TableHead>
@@ -466,22 +465,16 @@ export default function ProductsPage() {
                       onClick={() => openDetail(p)}
                     >
                       <div>{p.articleNo}</div>
-                      <div className="text-muted-foreground">{p.sku}</div>
+                      <div className="text-muted-foreground">SKU: {p.sku}</div>
+                      {p.icCode && (
+                        <div className="text-blue-600">IC: {p.icCode}</div>
+                      )}
                     </TableCell>
                     <TableCell onClick={() => openDetail(p)}>
                       <Badge variant="outline">{p.brand?.name ?? "-"}</Badge>
                     </TableCell>
                     <TableCell onClick={() => openDetail(p)}>
                       <Badge variant="secondary">{p.supplier?.name ?? "-"}</Badge>
-                    </TableCell>
-                    <TableCell onClick={() => openDetail(p)}>
-                      {p.icCode ? (
-                        <Badge variant="outline" className="font-mono text-xs">
-                          {p.icCode}
-                        </Badge>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">-</span>
-                      )}
                     </TableCell>
                     <TableCell
                       className="max-w-[200px] truncate text-sm"

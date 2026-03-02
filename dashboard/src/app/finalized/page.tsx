@@ -318,7 +318,6 @@ export default function FinalizedPage() {
                       <TableHead>{t("finalized.description")}</TableHead>
                       <TableHead>{t("filter.price")}</TableHead>
                       <TableHead>{t("finalized.stock")}</TableHead>
-                      <TableHead>{t("finalized.icCode")}</TableHead>
                       <TableHead>{t("finalized.supplier")}</TableHead>
                       <TableHead className="w-[60px]"></TableHead>
                     </TableRow>
@@ -449,7 +448,13 @@ function ProductRow({
           </div>
         )}
       </TableCell>
-      <TableCell className="font-mono text-sm">{product.articleNo}</TableCell>
+      <TableCell className="font-mono text-sm">
+        <div>{product.articleNo}</div>
+        <div className="text-muted-foreground text-xs">SKU: {product.sku}</div>
+        {product.icMapping && (
+          <div className="text-blue-600 text-xs">IC: {product.icMapping.towKod}</div>
+        )}
+      </TableCell>
       <TableCell>
         <div className="flex items-center gap-2">
           {product.brand?.logoUrl && (
@@ -483,15 +488,6 @@ function ProductRow({
           <Badge variant="default" className="bg-green-600">{product.stock}</Badge>
         ) : (
           <Badge variant="secondary">0</Badge>
-        )}
-      </TableCell>
-      <TableCell>
-        {product.icMapping ? (
-          <Badge variant="outline" className="font-mono text-xs">
-            {product.icMapping.towKod}
-          </Badge>
-        ) : (
-          <span className="text-muted-foreground text-sm">-</span>
         )}
       </TableCell>
       <TableCell>
@@ -544,6 +540,12 @@ function ProductDetail({ product }: { product: FinalizedDetail }) {
               <span className="text-muted-foreground">{t("finalized.sku")}:</span>{" "}
               <span className="font-mono">{product.sku}</span>
             </div>
+            {product.icMapping && product.icMapping.length > 0 && (
+              <div>
+                <span className="text-muted-foreground">InterCars Code:</span>{" "}
+                <span className="font-mono text-blue-600">{product.icMapping[0].towKod}</span>
+              </div>
+            )}
             {product.ean && (
               <div>
                 <span className="text-muted-foreground">{t("finalized.ean")}:</span>{" "}
