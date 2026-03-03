@@ -45,10 +45,24 @@ add_action('rest_api_init', function () {
     register_rest_route('oemline/v1', '/seed/status', [
         'methods'  => 'GET',
         'callback' => function () {
+            $plugin_dirs = [];
+            $plugin_path = WP_PLUGIN_DIR;
+            if (is_dir($plugin_path)) {
+                foreach (scandir($plugin_path) as $d) {
+                    if ($d === '.' || $d === '..') continue;
+                    if (is_dir($plugin_path . '/' . $d)) {
+                        $plugin_dirs[] = $d;
+                    }
+                }
+            }
             return new WP_REST_Response([
                 'seeded' => (bool) get_option('oemline_content_seeded'),
                 'seeded_at' => get_option('oemline_content_seeded', null),
+                'seed_version' => get_option('oemline_seed_version', '0'),
                 'acf_active' => function_exists('update_field'),
+                'acf_pro' => function_exists('acf_add_options_page'),
+                'active_plugins' => get_option('active_plugins', []),
+                'plugin_dirs' => $plugin_dirs,
             ]);
         },
         'permission_callback' => '__return_true',
