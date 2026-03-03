@@ -9,13 +9,48 @@
  * Or automatically on first admin load if ACF PRO is installed and content hasn't been seeded yet.
  */
 
-// Auto-seed on first admin load if ACF is available and not yet seeded
-add_action('admin_init', function () {
+// Auto-seed on first admin load if ACF is available and not yet seeded.
+// Uses acf/init (priority 20) to ensure ACF options pages are registered first.
+add_action('acf/init', function () {
+    if (!is_admin()) return;
     if (get_option('oemline_content_seeded')) return;
     if (!function_exists('update_field')) return;
     // Run auto-seed
     oemline_run_seed();
-}, 999);
+}, 20);
+
+// REST API endpoint to trigger seed remotely
+add_action('rest_api_init', function () {
+    register_rest_route('oemline/v1', '/seed', [
+        'methods'  => 'POST',
+        'callback' => function () {
+            if (!function_exists('update_field')) {
+                return new WP_REST_Response(['error' => 'ACF PRO not active'], 500);
+            }
+            $result = oemline_run_seed();
+            return new WP_REST_Response([
+                'success' => $result,
+                'seeded_at' => get_option('oemline_content_seeded', null),
+            ]);
+        },
+        'permission_callback' => function () {
+            return current_user_can('manage_options');
+        },
+    ]);
+
+    // GET endpoint to check seed status (no auth required)
+    register_rest_route('oemline/v1', '/seed/status', [
+        'methods'  => 'GET',
+        'callback' => function () {
+            return new WP_REST_Response([
+                'seeded' => (bool) get_option('oemline_content_seeded'),
+                'seeded_at' => get_option('oemline_content_seeded', null),
+                'acf_active' => function_exists('update_field'),
+            ]);
+        },
+        'permission_callback' => '__return_true',
+    ]);
+});
 
 // Add admin menu item for manual seeding
 add_action('admin_menu', function () {
