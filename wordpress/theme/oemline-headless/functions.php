@@ -260,7 +260,7 @@ add_action('rest_api_init', function () {
             }
 
             $menu = $menus[0];
-            $fields = get_fields($menu->ID);
+            $fields = function_exists('get_fields') ? get_fields($menu->ID) : [];
 
             return new WP_REST_Response([
                 'id'       => $menu->ID,
@@ -291,7 +291,7 @@ add_action('rest_api_init', function () {
             }
 
             $page = $pages[0];
-            $fields = get_fields($page->ID);
+            $fields = function_exists('get_fields') ? get_fields($page->ID) : [];
 
             return new WP_REST_Response([
                 'id'          => $page->ID,
@@ -328,10 +328,19 @@ add_action('rest_api_init', function () {
                 return new WP_REST_Response(['error' => 'Global not found'], 404);
             }
 
+            if (!function_exists('get_fields')) {
+                return new WP_REST_Response([
+                    'slug'   => $slug,
+                    'fields' => [],
+                    'notice' => 'ACF PRO not active — install ACF PRO to manage content',
+                ]);
+            }
+
             $fields = get_fields('option');
 
             return new WP_REST_Response([
                 'slug'   => $slug,
+                'acf'    => $fields ?: [],
                 'fields' => $fields ?: [],
             ]);
         },

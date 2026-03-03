@@ -25,6 +25,7 @@ add_action('after_setup_theme', function () {
 // Auto-activate required plugins
 add_action('admin_init', function () {
     $required_plugins = [
+        'advanced-custom-fields/acf.php',
         'woocommerce/woocommerce.php',
         'mollie-payments-for-woocommerce/mollie-payments-for-woocommerce.php',
         'acf-to-rest-api/class-acf-to-rest-api.php',
