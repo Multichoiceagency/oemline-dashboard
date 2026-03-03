@@ -62,6 +62,21 @@ export async function brandRoutes(app: FastifyInstance) {
     };
   });
 
+  // Update brand fields (tecdocId, name, logoUrl)
+  app.patch("/brands/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as { tecdocId?: number | null; name?: string; logoUrl?: string };
+    const brand = await prisma.brand.update({
+      where: { id: parseInt(id, 10) },
+      data: {
+        ...(body.tecdocId !== undefined && { tecdocId: body.tecdocId }),
+        ...(body.name !== undefined && { name: body.name }),
+        ...(body.logoUrl !== undefined && { logoUrl: body.logoUrl }),
+      },
+    });
+    return brand;
+  });
+
   // Get single brand with top products
   app.get("/brands/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
