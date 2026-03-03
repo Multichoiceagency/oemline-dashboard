@@ -13,6 +13,29 @@ import { processStockJob } from "./workers/stock.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 
+/**
+ * WORKER_QUEUES env var controls which queues this worker instance handles.
+ * Comma-separated list: "sync,match,index,pricing,stock"
+ *
+ * Examples:
+ *   WORKER_QUEUES=pricing,stock     → dedicated pricing+stock worker (no scheduler)
+ *   WORKER_QUEUES=sync,match,index  → dedicated sync/match/index worker (runs scheduler)
+ *   (not set)                       → all queues + scheduler (default)
+ *
+ * WORKER_CONCURRENCY overrides concurrency per queue (default varies by queue type).
+ */
+const WORKER_QUEUES = process.env.WORKER_QUEUES
+  ? new Set(process.env.WORKER_QUEUES.split(",").map((q) => q.trim().toLowerCase()))
+  : null; // null = all queues
+
+const isAllQueues = WORKER_QUEUES === null;
+const handles = (q: string) => isAllQueues || WORKER_QUEUES!.has(q);
+
+// In dedicated pricing/stock mode, run more concurrent API calls
+const isDedicatedPricing = WORKER_QUEUES?.has("pricing") && !WORKER_QUEUES?.has("sync");
+const pricingConcurrency = isDedicatedPricing ? 6 : 2;
+const stockConcurrency = isDedicatedPricing ? 6 : 2;
+
 const connection = {
   host: redisConfig.host,
   port: redisConfig.port,
@@ -21,43 +44,54 @@ const connection = {
   maxRetriesPerRequest: null,
 };
 
-const GRACEFUL_SHUTDOWN_MS = 15_000;
+const GRACEFUL_SHUTDOWN_MS = 30_000;
 
-const syncWorker = new Worker("sync", processSyncJob, {
-  connection,
-  concurrency: 4,
-  limiter: { max: 10, duration: 60_000 },
-  stalledInterval: 300_000, // 5 min — sync jobs run for hours
-  lockDuration: 600_000,    // 10 min lock to prevent premature stalling
-});
+// Build worker list based on WORKER_QUEUES
+const workers: Worker[] = [];
 
-const matchWorker = new Worker("match", processRematchJob, {
-  connection,
-  concurrency: 3,
-  stalledInterval: 30_000,
-});
+if (handles("sync")) {
+  workers.push(new Worker("sync", processSyncJob, {
+    connection,
+    concurrency: 4,
+    limiter: { max: 10, duration: 60_000 },
+    stalledInterval: 300_000,
+    lockDuration: 600_000,
+  }));
+}
 
-const indexWorker = new Worker("index", processIndexJob, {
-  connection,
-  concurrency: 1,
-  stalledInterval: 60_000,
-});
+if (handles("match")) {
+  workers.push(new Worker("match", processRematchJob, {
+    connection,
+    concurrency: 3,
+    stalledInterval: 30_000,
+  }));
+}
 
-const pricingWorker = new Worker("pricing", processPricingJob, {
-  connection,
-  concurrency: 2,
-  stalledInterval: 300_000,
-  lockDuration: 600_000,
-});
+if (handles("index")) {
+  workers.push(new Worker("index", processIndexJob, {
+    connection,
+    concurrency: 1,
+    stalledInterval: 60_000,
+  }));
+}
 
-const stockWorker = new Worker("stock", processStockJob, {
-  connection,
-  concurrency: 2,
-  stalledInterval: 300_000,
-  lockDuration: 600_000,
-});
+if (handles("pricing")) {
+  workers.push(new Worker("pricing", processPricingJob, {
+    connection,
+    concurrency: pricingConcurrency,
+    stalledInterval: 300_000,
+    lockDuration: 600_000,
+  }));
+}
 
-const workers = [syncWorker, matchWorker, indexWorker, pricingWorker, stockWorker];
+if (handles("stock")) {
+  workers.push(new Worker("stock", processStockJob, {
+    connection,
+    concurrency: stockConcurrency,
+    stalledInterval: 300_000,
+    lockDuration: 600_000,
+  }));
+}
 
 for (const worker of workers) {
   worker.on("completed", (job) => {
@@ -94,7 +128,6 @@ async function shutdown(): Promise<void> {
   }, GRACEFUL_SHUTDOWN_MS);
 
   try {
-    // Close workers — waits for active jobs to finish
     await Promise.all(workers.map((w) => w.close()));
     await disconnectRedis();
     await disconnectPrisma();
@@ -126,12 +159,16 @@ try {
   });
 
   logger.info(
-    { queues: workers.map((w) => w.name) },
+    { queues: workers.map((w) => w.name), dedicated: WORKER_QUEUES ? [...WORKER_QUEUES] : "all" },
     "Workers started"
   );
 
-  // Start the scheduler to enqueue repeating sync/match/index jobs
-  await startScheduler();
+  // Only the primary worker (handles sync) runs the scheduler to avoid duplicate jobs
+  if (handles("sync")) {
+    await startScheduler();
+  } else {
+    logger.info({ queues: workers.map((w) => w.name) }, "Dedicated worker — scheduler skipped");
+  }
 } catch (err) {
   logger.error(err, "Failed to start workers");
   process.exit(1);
