@@ -24,8 +24,13 @@ add_action('after_setup_theme', function () {
 
 // Auto-activate required plugins
 add_action('admin_init', function () {
+    // Prefer ACF PRO if installed, fallback to ACF Free
+    $acf_plugin = file_exists(WP_PLUGIN_DIR . '/advanced-custom-fields-pro/acf.php')
+        ? 'advanced-custom-fields-pro/acf.php'
+        : 'advanced-custom-fields/acf.php';
+
     $required_plugins = [
-        'advanced-custom-fields-pro/acf.php',
+        $acf_plugin,
         'woocommerce/woocommerce.php',
         'mollie-payments-for-woocommerce/mollie-payments-for-woocommerce.php',
         'acf-to-rest-api/class-acf-to-rest-api.php',
@@ -38,6 +43,16 @@ add_action('admin_init', function () {
     $active_plugins = get_option('active_plugins', []);
     $changed = false;
 
+    // Remove plugins from active list if they don't exist on disk
+    foreach ($active_plugins as $key => $plugin) {
+        if (!file_exists(WP_PLUGIN_DIR . '/' . $plugin)) {
+            unset($active_plugins[$key]);
+            $changed = true;
+            error_log("[OEMline] Removed missing plugin from active list: {$plugin}");
+        }
+    }
+
+    // Activate required plugins
     foreach ($required_plugins as $plugin) {
         if (!in_array($plugin, $active_plugins, true)) {
             $plugin_file = WP_PLUGIN_DIR . '/' . $plugin;
@@ -50,6 +65,7 @@ add_action('admin_init', function () {
     }
 
     if ($changed) {
+        $active_plugins = array_values($active_plugins); // reindex
         update_option('active_plugins', $active_plugins);
     }
 });
