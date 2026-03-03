@@ -44,7 +44,7 @@ export async function processPricingJob(job: Job<PricingJobData>): Promise<void>
     }>>(
       `SELECT id, ic_sku FROM product_maps
        WHERE ic_sku IS NOT NULL AND status = 'active'
-       ORDER BY updated_at ASC
+       ORDER BY id ASC
        LIMIT ${batchSize} OFFSET ${offset}`
     );
 

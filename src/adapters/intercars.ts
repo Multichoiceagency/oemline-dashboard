@@ -379,6 +379,9 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         totalNewMatches += aliasMatches.length;
       }
 
+      // Yield heartbeat so BullMQ can extend the job lock during long-running phases
+      yield [];
+
       // Strategy A: Brand + article_number (flexible brand matching with lowered prefix threshold)
       logger.info({ supplier: this.code }, "Phase 1A: Matching by brand + article number...");
       const brandMatches = await prisma.$queryRawUnsafe<Array<{
@@ -433,6 +436,8 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         totalNewMatches += brandMatches.length;
       }
 
+      yield []; // Heartbeat for BullMQ lock extension
+
       // Strategy B: EAN match (products without icSku that have an EAN matching IC CSV)
       logger.info({ supplier: this.code }, "Phase 1B: Matching by EAN...");
       const eanMatches = await prisma.$queryRawUnsafe<Array<{
@@ -473,6 +478,8 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         }
         totalNewMatches += eanMatches.length;
       }
+
+      yield []; // Heartbeat for BullMQ lock extension
 
       // Strategy C: TecDoc product ID match
       logger.info({ supplier: this.code }, "Phase 1C: Matching by TecDoc product ID...");
@@ -516,26 +523,36 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         totalNewMatches += tecdocMatches.length;
       }
 
+      yield []; // Heartbeat for BullMQ lock extension
+
       // Strategy D: Article number only (no brand check, but only when article is unique in IC)
-      logger.info({ supplier: this.code }, "Phase 1D: Matching by unique article number...");
+      // Uses a CTE to pre-compute unique articles — avoids the O(N×M) correlated subquery
+      logger.info({ supplier: this.code }, "Phase 1D: Matching by unique article number (CTE)...");
       const articleOnlyMatches = await prisma.$queryRawUnsafe<Array<{
         product_id: number;
         tow_kod: string;
         ic_ean: string | null;
         ic_weight: number | null;
       }>>(
-        `SELECT DISTINCT ON (pm.id)
-          pm.id as product_id,
-          im.tow_kod,
-          im.ean as ic_ean,
-          im.weight as ic_weight
+        `WITH unique_articles AS (
+          SELECT
+            UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')) AS norm_article,
+            MIN(tow_kod) AS tow_kod,
+            MIN(ean) AS ic_ean,
+            MIN(weight) AS ic_weight
+          FROM intercars_mappings
+          GROUP BY UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g'))
+          HAVING COUNT(*) = 1
+        )
+        SELECT
+          pm.id AS product_id,
+          ua.tow_kod,
+          ua.ic_ean,
+          ua.ic_weight
         FROM product_maps pm
-        JOIN intercars_mappings im ON
-          UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+        JOIN unique_articles ua ON
+          UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g')) = ua.norm_article
         WHERE pm.status = 'active' AND pm.ic_sku IS NULL
-          AND (SELECT COUNT(*) FROM intercars_mappings im2
-               WHERE UPPER(regexp_replace(im2.article_number, '[^a-zA-Z0-9]', '', 'g'))
-                   = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))) = 1
         ORDER BY pm.id`
       );
 
@@ -558,6 +575,8 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         }
         totalNewMatches += articleOnlyMatches.length;
       }
+
+      yield []; // Heartbeat for BullMQ lock extension
 
       logger.info(
         { supplier: this.code, totalNewMatches, aliasMatches: aliasMatches.length, brandMatches: brandMatches.length, eanMatches: eanMatches.length, tecdocMatches: tecdocMatches.length, articleOnlyMatches: articleOnlyMatches.length },
@@ -630,6 +649,11 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
           { supplier: this.code, updated: totalUpdated, apiErrors: totalApiErrors, offset },
           "Price/stock refresh progress"
         );
+
+        // Yield heartbeat every 10 outer batches (every 5000 products) for BullMQ lock extension
+        if ((offset / PAGE_SIZE) % 10 === 0) {
+          yield [];
+        }
       }
 
       // Yield one empty batch so the sync worker knows we ran

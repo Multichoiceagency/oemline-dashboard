@@ -167,6 +167,9 @@ export async function jobRoutes(app: FastifyInstance) {
     `);
     await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS idx_ic_map_mfr_art ON intercars_mappings (manufacturer, article_number)`);
     await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS idx_ic_map_art ON intercars_mappings (article_number)`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS idx_im_article_norm ON intercars_mappings (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')))`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS idx_im_ean_norm ON intercars_mappings (UPPER(TRIM(ean))) WHERE ean IS NOT NULL`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS idx_im_tecdoc_prod ON intercars_mappings (tecdoc_prod) WHERE tecdoc_prod IS NOT NULL`);
 
     // Stream the CSV - from MinIO if minioKey provided, otherwise local file
     const BATCH_SIZE = 5000;
@@ -266,6 +269,49 @@ export async function jobRoutes(app: FastifyInstance) {
     logger.info({ totalImported, totalLines: lineNum }, "InterCars CSV import completed");
 
     return { imported: totalImported, totalLines: lineNum };
+  });
+
+  // Create expression indexes to speed up IC matching queries
+  // Run this once after initial data load — creates indexes on normalized article numbers
+  app.post("/jobs/optimize-db", async () => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { logger } = await import("../lib/logger.js");
+
+    logger.info("Creating expression indexes for IC matching optimization...");
+
+    const indexes = [
+      // Normalized article number on intercars_mappings — used by all 4 matching strategies
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_im_article_norm
+        ON intercars_mappings (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')))`,
+      // Normalized article number on product_maps (unmatched only)
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pm_article_norm_unmatched
+        ON product_maps (UPPER(regexp_replace(article_no, '[^a-zA-Z0-9]', '', 'g')))
+        WHERE status = 'active' AND ic_sku IS NULL`,
+      // Normalized EAN on intercars_mappings
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_im_ean_norm
+        ON intercars_mappings (UPPER(TRIM(ean)))
+        WHERE ean IS NOT NULL`,
+      // tecdoc_prod on intercars_mappings for Strategy C
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_im_tecdoc_prod
+        ON intercars_mappings (tecdoc_prod)
+        WHERE tecdoc_prod IS NOT NULL`,
+    ];
+
+    const results: Array<{ index: string; status: string }> = [];
+    for (const sql of indexes) {
+      const indexName = sql.match(/idx_\w+/)?.[0] ?? "unknown";
+      try {
+        await prisma.$executeRawUnsafe(sql);
+        results.push({ index: indexName, status: "created" });
+        logger.info({ index: indexName }, "Expression index created");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        results.push({ index: indexName, status: `error: ${msg}` });
+        logger.warn({ index: indexName, err }, "Index creation failed (may already exist)");
+      }
+    }
+
+    return { indexes: results };
   });
 
   // Trigger sync for ALL active suppliers

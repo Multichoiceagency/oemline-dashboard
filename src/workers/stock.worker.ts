@@ -43,7 +43,7 @@ export async function processStockJob(job: Job<StockJobData>): Promise<void> {
     }>>(
       `SELECT id, ic_sku FROM product_maps
        WHERE ic_sku IS NOT NULL AND status = 'active'
-       ORDER BY updated_at ASC
+       ORDER BY id ASC
        LIMIT ${batchSize} OFFSET ${offset}`
     );
 
