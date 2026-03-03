@@ -445,6 +445,260 @@ export async function intercarsRoutes(app: FastifyInstance) {
     };
   });
 
+  // ============ Brand Alias Management ============
+
+  // List all brand aliases for InterCars
+  app.get("/intercars/brand-aliases", async () => {
+    const icSupplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });
+    if (!icSupplier) return { error: "InterCars supplier not found" };
+
+    const aliases = await prisma.supplierBrandRule.findMany({
+      where: { supplierId: icSupplier.id, active: true },
+      include: { brand: { select: { id: true, name: true, code: true } } },
+      orderBy: { supplierBrand: "asc" },
+    });
+
+    return {
+      total: aliases.length,
+      aliases: aliases.map((a) => ({
+        id: a.id,
+        supplierBrand: a.supplierBrand,
+        tecdocBrand: a.brand.name,
+        tecdocBrandId: a.brand.id,
+        active: a.active,
+      })),
+    };
+  });
+
+  // Add a brand alias (IC brand name → TecDoc brand)
+  app.post("/intercars/brand-aliases", async (request, reply) => {
+    const { supplierBrand, tecdocBrandId, tecdocBrandName } = request.body as {
+      supplierBrand?: string;
+      tecdocBrandId?: number;
+      tecdocBrandName?: string;
+    };
+
+    if (!supplierBrand) {
+      return reply.code(400).send({ error: "supplierBrand is required" });
+    }
+
+    const icSupplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });
+    if (!icSupplier) return reply.code(404).send({ error: "InterCars supplier not found" });
+
+    // Find the TecDoc brand by ID or name
+    let brand;
+    if (tecdocBrandId) {
+      brand = await prisma.brand.findUnique({ where: { id: tecdocBrandId } });
+    } else if (tecdocBrandName) {
+      brand = await prisma.brand.findFirst({
+        where: { name: { equals: tecdocBrandName, mode: "insensitive" } },
+      });
+    }
+    if (!brand) {
+      return reply.code(404).send({ error: "TecDoc brand not found" });
+    }
+
+    const alias = await prisma.supplierBrandRule.upsert({
+      where: {
+        supplierId_supplierBrand: {
+          supplierId: icSupplier.id,
+          supplierBrand: supplierBrand.toUpperCase(),
+        },
+      },
+      update: { brandId: brand.id, active: true },
+      create: {
+        supplierId: icSupplier.id,
+        brandId: brand.id,
+        supplierBrand: supplierBrand.toUpperCase(),
+        active: true,
+      },
+    });
+
+    logger.info({ alias: supplierBrand, tecdocBrand: brand.name }, "Brand alias created/updated");
+    return { id: alias.id, supplierBrand: alias.supplierBrand, tecdocBrand: brand.name };
+  });
+
+  // Delete a brand alias
+  app.delete("/intercars/brand-aliases/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      await prisma.supplierBrandRule.delete({ where: { id: parseInt(id, 10) } });
+      return { success: true };
+    } catch {
+      return reply.code(404).send({ error: "Alias not found" });
+    }
+  });
+
+  // Seed known brand aliases (IC → TecDoc mappings)
+  app.post("/intercars/brand-aliases/seed", async () => {
+    const icSupplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });
+    if (!icSupplier) return { error: "InterCars supplier not found" };
+
+    // Known IC → TecDoc brand name mappings
+    const knownAliases: Array<{ icBrand: string; tecdocName: string }> = [
+      // Exact renames / historical name changes
+      { icBrand: "KAYABA", tecdocName: "KYB" },
+      { icBrand: "DT", tecdocName: "DT Spare Parts" },
+      { icBrand: "LUK", tecdocName: "Schaeffler LuK" },
+      { icBrand: "INA", tecdocName: "Schaeffler INA" },
+      { icBrand: "FAG", tecdocName: "Schaeffler FAG" },
+      { icBrand: "VITESCO", tecdocName: "Schaeffler Vitesco" },
+      // Prefix mismatches the regex can't catch
+      { icBrand: "TRW AUTOMOTIVE", tecdocName: "TRW" },
+      { icBrand: "MANN FILTER", tecdocName: "MANN-FILTER" },
+      { icBrand: "MANN+HUMMEL", tecdocName: "MANN-FILTER" },
+      { icBrand: "MANN-HUMMEL", tecdocName: "MANN-FILTER" },
+      { icBrand: "K&N", tecdocName: "K&N FILTERS" },
+      { icBrand: "KN", tecdocName: "K&N FILTERS" },
+      { icBrand: "LEMFORDER", tecdocName: "LEMFÖRDER" },
+      { icBrand: "LEMFOERDER", tecdocName: "LEMFÖRDER" },
+      // Common abbreviations / alternate names
+      { icBrand: "ZF FRIEDRICHSHAFEN", tecdocName: "ZF" },
+      { icBrand: "ZF PARTS", tecdocName: "ZF" },
+      { icBrand: "NGK SPARK PLUG", tecdocName: "NGK" },
+      { icBrand: "SKF VKBA", tecdocName: "SKF" },
+      { icBrand: "OLSA", tecdocName: "OLSA Aftermarket" },
+      { icBrand: "MAGNUM", tecdocName: "Magnum Technology" },
+      { icBrand: "FILTRON MANN", tecdocName: "FILTRON" },
+      { icBrand: "FEBI", tecdocName: "FEBI BILSTEIN" },
+      { icBrand: "BILSTEIN FEBI", tecdocName: "FEBI BILSTEIN" },
+      { icBrand: "BOSAL NOWOTWOR", tecdocName: "BOSAL" },
+      { icBrand: "METZGER", tecdocName: "METZGER AUTOTEILE" },
+      { icBrand: "BLUE PRINT ADL", tecdocName: "BLUE PRINT" },
+      { icBrand: "CHAMPION LABS", tecdocName: "CHAMPION" },
+      // Body parts / lighting brands (map to closest TecDoc brand if same products)
+      { icBrand: "BLIC", tecdocName: "DIEDERICHS" },
+      { icBrand: "DEPO", tecdocName: "TYC" },
+    ];
+
+    let created = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    for (const alias of knownAliases) {
+      const brand = await prisma.brand.findFirst({
+        where: { name: { equals: alias.tecdocName, mode: "insensitive" } },
+      });
+
+      if (!brand) {
+        errors.push(`TecDoc brand "${alias.tecdocName}" not found for IC brand "${alias.icBrand}"`);
+        skipped++;
+        continue;
+      }
+
+      try {
+        await prisma.supplierBrandRule.upsert({
+          where: {
+            supplierId_supplierBrand: {
+              supplierId: icSupplier.id,
+              supplierBrand: alias.icBrand.toUpperCase(),
+            },
+          },
+          update: { brandId: brand.id, active: true },
+          create: {
+            supplierId: icSupplier.id,
+            brandId: brand.id,
+            supplierBrand: alias.icBrand.toUpperCase(),
+            active: true,
+          },
+        });
+        created++;
+      } catch (err) {
+        errors.push(`Failed to create alias "${alias.icBrand}" → "${alias.tecdocName}": ${err}`);
+        skipped++;
+      }
+    }
+
+    return { created, skipped, errors: errors.length > 0 ? errors : undefined };
+  });
+
+  // Auto-discover: find IC CSV brands with no TecDoc brand match
+  app.get("/intercars/unmatched-brands", async () => {
+    const icSupplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });
+
+    // Get all IC CSV distinct manufacturers with counts
+    const icBrands = await prisma.$queryRawUnsafe<Array<{ manufacturer: string; count: bigint }>>(
+      `SELECT manufacturer, COUNT(*) as count FROM intercars_mappings GROUP BY manufacturer ORDER BY count DESC`
+    );
+
+    // Get all TecDoc brands
+    const tecdocBrands = await prisma.brand.findMany({ select: { id: true, name: true } });
+
+    // Get existing aliases
+    const aliases = icSupplier
+      ? await prisma.supplierBrandRule.findMany({
+          where: { supplierId: icSupplier.id, active: true },
+          select: { supplierBrand: true, brand: { select: { name: true } } },
+        })
+      : [];
+    const aliasMap = new Map(aliases.map((a) => [a.supplierBrand.toUpperCase(), a.brand.name]));
+
+    // Build normalized TecDoc brand lookup
+    const normalize = (s: string) => s.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+    const tecdocNormalized = new Map<string, string>();
+    for (const b of tecdocBrands) {
+      tecdocNormalized.set(normalize(b.name), b.name);
+    }
+
+    const matched: Array<{ icBrand: string; count: number; tecdocBrand: string; method: string }> = [];
+    const unmatched: Array<{ icBrand: string; count: number }> = [];
+    const aliased: Array<{ icBrand: string; count: number; tecdocBrand: string }> = [];
+
+    for (const ic of icBrands) {
+      const icNorm = normalize(ic.manufacturer);
+      const count = Number(ic.count);
+
+      // Check alias first
+      if (aliasMap.has(ic.manufacturer.toUpperCase())) {
+        aliased.push({ icBrand: ic.manufacturer, count, tecdocBrand: aliasMap.get(ic.manufacturer.toUpperCase())! });
+        continue;
+      }
+
+      // Check exact normalized match
+      if (tecdocNormalized.has(icNorm)) {
+        matched.push({ icBrand: ic.manufacturer, count, tecdocBrand: tecdocNormalized.get(icNorm)!, method: "exact" });
+        continue;
+      }
+
+      // Check prefix match (both directions)
+      let found = false;
+      for (const [tn, tb] of tecdocNormalized) {
+        if (icNorm.length >= 2 && tn.startsWith(icNorm)) {
+          matched.push({ icBrand: ic.manufacturer, count, tecdocBrand: tb, method: "prefix" });
+          found = true;
+          break;
+        }
+        if (tn.length >= 2 && icNorm.startsWith(tn)) {
+          matched.push({ icBrand: ic.manufacturer, count, tecdocBrand: tb, method: "prefix" });
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        unmatched.push({ icBrand: ic.manufacturer, count });
+      }
+    }
+
+    const unmatchedTotal = unmatched.reduce((s, u) => s + u.count, 0);
+    const matchedTotal = matched.reduce((s, m) => s + m.count, 0);
+    const aliasedTotal = aliased.reduce((s, a) => s + a.count, 0);
+
+    return {
+      summary: {
+        totalIcBrands: icBrands.length,
+        matched: matched.length,
+        matchedProducts: matchedTotal,
+        aliased: aliased.length,
+        aliasedProducts: aliasedTotal,
+        unmatched: unmatched.length,
+        unmatchedProducts: unmatchedTotal,
+      },
+      aliased,
+      unmatched,
+      matched,
+    };
+  });
+
   // Clean up old IC duplicate product_maps (products with IC supplier_id that duplicate TecDoc products)
   app.delete("/intercars/cleanup-duplicates", async () => {
     const icSupplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });

@@ -82,7 +82,8 @@ model SupplierBrandRule {
   supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   brand    Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
 
-  @@unique([supplierId, brandId])
+  @@unique([supplierId, supplierBrand])
+  @@index([supplierId, brandId])
   @@map("supplier_brand_rules")
 }
 

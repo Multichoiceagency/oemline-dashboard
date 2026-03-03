@@ -334,7 +334,52 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       let totalApiErrors = 0;
 
       // =========== PHASE 1: Match unlinked products (no icSku yet) ===========
-      // Strategy A: Brand + article_number (existing logic, improved)
+
+      // Strategy 0: Brand aliases from supplier_brand_rules table
+      // This catches known mismatches like KAYABA→KYB, DT→DT Spare Parts, BLIC→DIEDERICHS
+      logger.info({ supplier: this.code }, "Phase 0: Matching via brand aliases...");
+      const aliasMatches = await prisma.$queryRawUnsafe<Array<{
+        product_id: number;
+        tow_kod: string;
+        ic_ean: string | null;
+        ic_weight: number | null;
+      }>>(
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        JOIN brands b ON b.id = pm.brand_id
+        JOIN supplier_brand_rules sbr ON sbr.brand_id = b.id AND sbr.active = true
+        JOIN intercars_mappings im ON
+          UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+          AND UPPER(im.manufacturer) = sbr.supplier_brand
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+        ORDER BY pm.id`
+      );
+
+      if (aliasMatches.length > 0) {
+        logger.info({ supplier: this.code, count: aliasMatches.length }, "Brand alias matches found, storing icSku");
+        for (let i = 0; i < aliasMatches.length; i += 500) {
+          const batch = aliasMatches.slice(i, i + 500);
+          const cases = batch.map((m) => `WHEN ${m.product_id} THEN '${m.tow_kod.replace(/'/g, "''")}'`).join(" ");
+          const eanCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_ean ? `'${m.ic_ean.replace(/'/g, "''")}'` : "NULL"}`).join(" ");
+          const weightCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_weight ?? "NULL"}`).join(" ");
+          const ids = batch.map((m) => m.product_id).join(",");
+          await prisma.$executeRawUnsafe(
+            `UPDATE product_maps SET
+              ic_sku = CASE id ${cases} END,
+              ic_matched_at = NOW(),
+              ean = CASE id ${eanCases} ELSE ean END,
+              weight = CASE id ${weightCases} ELSE weight END
+            WHERE id IN (${ids})`
+          );
+        }
+        totalNewMatches += aliasMatches.length;
+      }
+
+      // Strategy A: Brand + article_number (flexible brand matching with lowered prefix threshold)
       logger.info({ supplier: this.code }, "Phase 1A: Matching by brand + article number...");
       const brandMatches = await prisma.$queryRawUnsafe<Array<{
         product_id: number;
@@ -354,12 +399,12 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
           AND (
             UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
             OR (
-              LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 3
+              LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 2
               AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
                 LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
             )
             OR (
-              LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 3
+              LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 2
               AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
                 LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
             )
@@ -491,8 +536,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
           AND (SELECT COUNT(*) FROM intercars_mappings im2
                WHERE UPPER(regexp_replace(im2.article_number, '[^a-zA-Z0-9]', '', 'g'))
                    = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))) = 1
-        ORDER BY pm.id
-        LIMIT 100000`
+        ORDER BY pm.id`
       );
 
       if (articleOnlyMatches.length > 0) {
@@ -516,7 +560,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       }
 
       logger.info(
-        { supplier: this.code, totalNewMatches, brandMatches: brandMatches.length, eanMatches: eanMatches.length, tecdocMatches: tecdocMatches.length, articleOnlyMatches: articleOnlyMatches.length },
+        { supplier: this.code, totalNewMatches, aliasMatches: aliasMatches.length, brandMatches: brandMatches.length, eanMatches: eanMatches.length, tecdocMatches: tecdocMatches.length, articleOnlyMatches: articleOnlyMatches.length },
         "Phase 1 matching complete"
       );
 
