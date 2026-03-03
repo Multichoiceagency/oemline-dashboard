@@ -359,6 +359,28 @@ export async function jobRoutes(app: FastifyInstance) {
 
     return { cleaned: results };
   });
+
+  // Force-drain a queue: removes all non-active jobs (waiting, delayed, prioritized)
+  // Active jobs are left to complete naturally or expire via stall checker
+  app.post("/jobs/:queue/drain", async (request) => {
+    const { queue } = request.params as { queue: string };
+    const q = getQueue(queue);
+    if (!q) return { error: "Unknown queue" };
+
+    await q.drain(true); // true = also drain delayed jobs
+    const counts = await q.getJobCounts("active", "waiting", "prioritized", "delayed", "failed");
+    return { drained: true, remaining: counts };
+  });
+
+  // Obliterate a queue: removes ALL jobs including active (use carefully)
+  app.post("/jobs/:queue/obliterate", async (request) => {
+    const { queue } = request.params as { queue: string };
+    const q = getQueue(queue);
+    if (!q) return { error: "Unknown queue" };
+
+    await q.obliterate({ force: true });
+    return { obliterated: true, queue };
+  });
 }
 
 function getQueue(name: string) {
