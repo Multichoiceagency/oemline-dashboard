@@ -394,7 +394,7 @@ export async function jobRoutes(app: FastifyInstance) {
       SELECT
         relname AS table_name,
         pg_size_pretty(pg_total_relation_size(oid)) AS total_size,
-        reltuples::bigint AS row_estimate
+        reltuples::text AS row_estimate
       FROM pg_class
       WHERE relnamespace = 'public'::regnamespace
         AND relkind = 'r'
@@ -403,11 +403,11 @@ export async function jobRoutes(app: FastifyInstance) {
     `);
     results.tableSizes = sizes;
 
-    // 2. Check disk free space
-    const diskInfo = await prisma.$queryRawUnsafe<Array<{ avail_mb: number }>>(`
+    // 2. Check DB size
+    const diskInfo = await prisma.$queryRawUnsafe<Array<{ db_size_mb: number }>>(`
       SELECT (pg_database_size(current_database()) / 1024 / 1024)::int AS db_size_mb
     `);
-    results.dbSizeMb = diskInfo[0];
+    results.dbSizeMb = (diskInfo[0] as any)?.db_size_mb;
 
     // 3. Delete match_logs older than 3 days (these accumulate rapidly)
     const matchLogsDeleted = await prisma.$executeRawUnsafe(`
