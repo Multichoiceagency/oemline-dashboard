@@ -12,7 +12,6 @@
 // Auto-seed on first admin load if ACF is available and not yet seeded.
 // Uses acf/init (priority 20) to ensure ACF options pages are registered first.
 add_action('acf/init', function () {
-    if (!is_admin()) return;
     if (!function_exists('update_field')) return;
     // Run seed if never seeded, or re-run if version changed (to fix incomplete seeds)
     $seed_version = '4'; // Bump to force re-seed (v4: ACF PRO baked into Docker image)
