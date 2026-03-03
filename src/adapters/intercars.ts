@@ -482,26 +482,30 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       yield []; // Heartbeat for BullMQ lock extension
 
       // Strategy C: TecDoc product ID match
+      // Wrapped in transaction with high work_mem to avoid pgsql_tmp spill
       logger.info({ supplier: this.code }, "Phase 1C: Matching by TecDoc product ID...");
-      const tecdocMatches = await prisma.$queryRawUnsafe<Array<{
-        product_id: number;
-        tow_kod: string;
-        ic_ean: string | null;
-        ic_weight: number | null;
-      }>>(
-        `SELECT DISTINCT ON (pm.id)
-          pm.id as product_id,
-          im.tow_kod,
-          im.ean as ic_ean,
-          im.weight as ic_weight
-        FROM product_maps pm
-        JOIN intercars_mappings im ON
-          pm.tecdoc_id IS NOT NULL
-          AND im.tecdoc_prod IS NOT NULL
-          AND CAST(pm.tecdoc_id AS TEXT) = CAST(im.tecdoc_prod AS TEXT)
-        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
-        ORDER BY pm.id`
-      );
+      const tecdocMatches = await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`SET LOCAL work_mem = '256MB'`);
+        return tx.$queryRawUnsafe<Array<{
+          product_id: number;
+          tow_kod: string;
+          ic_ean: string | null;
+          ic_weight: number | null;
+        }>>(
+          `SELECT DISTINCT ON (pm.id)
+            pm.id as product_id,
+            im.tow_kod,
+            im.ean as ic_ean,
+            im.weight as ic_weight
+          FROM product_maps pm
+          JOIN intercars_mappings im ON
+            pm.tecdoc_id IS NOT NULL
+            AND im.tecdoc_prod IS NOT NULL
+            AND CAST(pm.tecdoc_id AS TEXT) = CAST(im.tecdoc_prod AS TEXT)
+          WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+          ORDER BY pm.id`
+        );
+      }, { timeout: 120_000 });
 
       if (tecdocMatches.length > 0) {
         logger.info({ supplier: this.code, count: tecdocMatches.length }, "TecDoc ID matches found, storing icSku");
