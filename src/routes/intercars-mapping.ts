@@ -569,6 +569,37 @@ export async function intercarsRoutes(app: FastifyInstance) {
       // Body parts / lighting brands (map to closest TecDoc brand if same products)
       { icBrand: "BLIC", tecdocName: "DIEDERICHS" },
       { icBrand: "DEPO", tecdocName: "TYC" },
+      // FAG variants → Schaeffler FAG
+      { icBrand: "FAG ZAWIESZENIE", tecdocName: "Schaeffler FAG" },
+      { icBrand: "FAG Bearings", tecdocName: "Schaeffler FAG" },
+      { icBrand: "FAG BEARINGS", tecdocName: "Schaeffler FAG" },
+      // LuK variants → Schaeffler LuK
+      { icBrand: "LUK1", tecdocName: "Schaeffler LuK" },
+      { icBrand: "LUK 1", tecdocName: "Schaeffler LuK" },
+      // KS pistons/rings → Kolbenschmidt
+      { icBrand: "KS", tecdocName: "KOLBENSCHMIDT" },
+      { icBrand: "KS KOLBENSCHMIDT", tecdocName: "KOLBENSCHMIDT" },
+      // Goetze → MAHLE (acquired, same TecDoc articles)
+      { icBrand: "GOETZE", tecdocName: "MAHLE" },
+      // VDO (Continental brand), HC-Cargo electrical
+      { icBrand: "VDO", tecdocName: "CONTINENTAL" },
+      { icBrand: "HC-CARGO", tecdocName: "CARGOPARTS" },
+      { icBrand: "HC CARGO", tecdocName: "CARGOPARTS" },
+      // SACHS variants
+      { icBrand: "SACHS BOGE", tecdocName: "SACHS" },
+      { icBrand: "ZF SACHS", tecdocName: "SACHS" },
+      // SNR bearings
+      { icBrand: "SNR BEARINGS", tecdocName: "SNR" },
+      { icBrand: "NTN-SNR", tecdocName: "SNR" },
+      // Continental/ContiTech variants
+      { icBrand: "CONTITECH", tecdocName: "CONTINENTAL" },
+      { icBrand: "CONTINENTAL CONTITECH", tecdocName: "CONTINENTAL" },
+      // Other brand variants
+      { icBrand: "HELLA PAGID", tecdocName: "HELLA" },
+      { icBrand: "ELRING KLINGER", tecdocName: "ELRING" },
+      { icBrand: "SWF VALEO", tecdocName: "SWF" },
+      { icBrand: "MARELLI", tecdocName: "MAGNETI MARELLI" },
+      { icBrand: "PASCAL (CIT)", tecdocName: "PASCAL" },
     ];
 
     let created = 0;
