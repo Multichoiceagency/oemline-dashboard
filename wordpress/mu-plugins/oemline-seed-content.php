@@ -13,10 +13,13 @@
 // Uses acf/init (priority 20) to ensure ACF options pages are registered first.
 add_action('acf/init', function () {
     if (!is_admin()) return;
-    if (get_option('oemline_content_seeded')) return;
     if (!function_exists('update_field')) return;
-    // Run auto-seed
+    // Run seed if never seeded, or re-run if version changed (to fix incomplete seeds)
+    $seed_version = '2'; // Bump this to force re-seed
+    $current_version = get_option('oemline_seed_version', '0');
+    if (get_option('oemline_content_seeded') && $current_version === $seed_version) return;
     oemline_run_seed();
+    update_option('oemline_seed_version', $seed_version);
 }, 20);
 
 // REST API endpoint to trigger seed remotely
@@ -482,7 +485,18 @@ function oemline_seed_menus() {
             'meta_query'     => [['key' => 'location', 'value' => $menu_data['location']]],
         ]);
 
-        if (!empty($existing)) continue;
+        if (!empty($existing)) {
+            // Update existing menu if items are missing
+            $post_id = $existing[0]->ID;
+            if (function_exists('update_field')) {
+                $current_items = get_field('items', $post_id);
+                if (empty($current_items)) {
+                    update_field('items', $menu_data['items'], $post_id);
+                    update_field('menu_status', 'active', $post_id);
+                }
+            }
+            continue;
+        }
 
         $post_id = wp_insert_post([
             'post_type'   => 'oemline-menu',
