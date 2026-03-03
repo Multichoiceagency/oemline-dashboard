@@ -527,34 +527,39 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
       // Strategy D: Article number only (no brand check, but only when article is unique in IC)
       // Uses a CTE to pre-compute unique articles — avoids the O(N×M) correlated subquery
+      // Uses work_mem=512MB in a transaction to keep GROUP BY in RAM, avoiding pgsql_tmp spill
       logger.info({ supplier: this.code }, "Phase 1D: Matching by unique article number (CTE)...");
-      const articleOnlyMatches = await prisma.$queryRawUnsafe<Array<{
-        product_id: number;
-        tow_kod: string;
-        ic_ean: string | null;
-        ic_weight: number | null;
-      }>>(
-        `WITH unique_articles AS (
+      const articleOnlyMatches = await prisma.$transaction(async (tx) => {
+        // Bump work_mem for this transaction so the 565K-row GROUP BY stays in memory
+        await tx.$executeRawUnsafe(`SET LOCAL work_mem = '512MB'`);
+        return tx.$queryRawUnsafe<Array<{
+          product_id: number;
+          tow_kod: string;
+          ic_ean: string | null;
+          ic_weight: number | null;
+        }>>(
+          `WITH unique_articles AS (
+            SELECT
+              UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')) AS norm_article,
+              MIN(tow_kod) AS tow_kod,
+              MIN(ean) AS ic_ean,
+              MIN(weight) AS ic_weight
+            FROM intercars_mappings
+            GROUP BY UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g'))
+            HAVING COUNT(*) = 1
+          )
           SELECT
-            UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')) AS norm_article,
-            MIN(tow_kod) AS tow_kod,
-            MIN(ean) AS ic_ean,
-            MIN(weight) AS ic_weight
-          FROM intercars_mappings
-          GROUP BY UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g'))
-          HAVING COUNT(*) = 1
-        )
-        SELECT
-          pm.id AS product_id,
-          ua.tow_kod,
-          ua.ic_ean,
-          ua.ic_weight
-        FROM product_maps pm
-        JOIN unique_articles ua ON
-          UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g')) = ua.norm_article
-        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
-        ORDER BY pm.id`
-      );
+            pm.id AS product_id,
+            ua.tow_kod,
+            ua.ic_ean,
+            ua.ic_weight
+          FROM product_maps pm
+          JOIN unique_articles ua ON
+            UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g')) = ua.norm_article
+          WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+          ORDER BY pm.id`
+        );
+      }, { timeout: 300_000 }); // 5 min timeout for large GROUP BY
 
       if (articleOnlyMatches.length > 0) {
         logger.info({ supplier: this.code, count: articleOnlyMatches.length }, "Unique article matches found, storing icSku");

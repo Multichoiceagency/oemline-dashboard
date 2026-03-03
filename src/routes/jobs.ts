@@ -381,6 +381,65 @@ export async function jobRoutes(app: FastifyInstance) {
     await q.obliterate({ force: true });
     return { obliterated: true, queue };
   });
+
+  // Database maintenance: check sizes, clean old data, vacuum
+  app.post("/jobs/db-maintenance", async () => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { logger } = await import("../lib/logger.js");
+
+    const results: Record<string, unknown> = {};
+
+    // 1. Check table sizes
+    const sizes = await prisma.$queryRawUnsafe<Array<{ table_name: string; total_size: string; row_estimate: string }>>(`
+      SELECT
+        relname AS table_name,
+        pg_size_pretty(pg_total_relation_size(oid)) AS total_size,
+        reltuples::bigint AS row_estimate
+      FROM pg_class
+      WHERE relnamespace = 'public'::regnamespace
+        AND relkind = 'r'
+      ORDER BY pg_total_relation_size(oid) DESC
+      LIMIT 10
+    `);
+    results.tableSizes = sizes;
+
+    // 2. Check disk free space
+    const diskInfo = await prisma.$queryRawUnsafe<Array<{ avail_mb: number }>>(`
+      SELECT (pg_database_size(current_database()) / 1024 / 1024)::int AS db_size_mb
+    `);
+    results.dbSizeMb = diskInfo[0];
+
+    // 3. Delete match_logs older than 3 days (these accumulate rapidly)
+    const matchLogsDeleted = await prisma.$executeRawUnsafe(`
+      DELETE FROM match_logs WHERE created_at < NOW() - INTERVAL '3 days'
+    `);
+    results.matchLogsDeleted = matchLogsDeleted;
+    logger.info({ deleted: matchLogsDeleted }, "Deleted old match_logs");
+
+    // 4. Delete unmatched records resolved > 7 days ago
+    const unmatchedDeleted = await prisma.$executeRawUnsafe(`
+      DELETE FROM unmatched WHERE created_at < NOW() - INTERVAL '7 days' AND attempts < 3
+    `);
+    results.unmatchedDeleted = unmatchedDeleted;
+    logger.info({ deleted: unmatchedDeleted }, "Deleted old unmatched records");
+
+    // 5. VACUUM ANALYZE the largest tables to reclaim dead tuple space
+    // Note: VACUUM cannot run in a transaction, use $executeRawUnsafe
+    const tablesToVacuum = ["match_logs", "product_maps", "intercars_mappings", "unmatched"];
+    const vacuumResults: string[] = [];
+    for (const table of tablesToVacuum) {
+      try {
+        await prisma.$executeRawUnsafe(`VACUUM ANALYZE ${table}`);
+        vacuumResults.push(`${table}: ok`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vacuumResults.push(`${table}: ${msg}`);
+      }
+    }
+    results.vacuum = vacuumResults;
+
+    return results;
+  });
 }
 
 function getQueue(name: string) {
