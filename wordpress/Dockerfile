@@ -30,7 +30,14 @@ RUN mkdir -p /var/www/html/wp-content/plugins && \
 # Copy tax rates CSV for WooCommerce import
 COPY tax-rates.csv /var/www/html/wp-content/tax-rates.csv
 
+# Copy custom entrypoint (handles SSL/proxy config)
+COPY docker-entrypoint-custom.sh /usr/local/bin/docker-entrypoint-custom.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint-custom.sh
+
 # Set permissions
 RUN chown -R www-data:www-data /var/www/html/wp-content
 
 EXPOSE 80
+
+ENTRYPOINT ["docker-entrypoint-custom.sh"]
+CMD ["apache2-foreground"]
