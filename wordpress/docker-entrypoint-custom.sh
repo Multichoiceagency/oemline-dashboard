@@ -34,24 +34,19 @@ if [ -d /opt/oemline/mu-plugins ]; then
     echo "[OEMline] MU-plugins synced"
 fi
 
-# Ensure ACF Free exists as baseline (ACF PRO can be installed via WP admin)
-if [ -d /opt/oemline/plugins/advanced-custom-fields ]; then
-    # Only sync ACF Free if ACF PRO is NOT installed
-    if [ ! -d /var/www/html/wp-content/plugins/advanced-custom-fields-pro ]; then
-        mkdir -p /var/www/html/wp-content/plugins
-        cp -r /opt/oemline/plugins/advanced-custom-fields /var/www/html/wp-content/plugins/
-        echo "[OEMline] ACF Free synced (install ACF PRO via WP admin for full features)"
-    else
-        # ACF PRO exists, remove ACF Free to avoid conflicts
-        rm -rf /var/www/html/wp-content/plugins/advanced-custom-fields 2>/dev/null || true
-        echo "[OEMline] ACF PRO detected, skipping ACF Free"
-    fi
+# Sync ACF PRO into persistent volume
+if [ -d /opt/oemline/plugins/advanced-custom-fields-pro ]; then
+    mkdir -p /var/www/html/wp-content/plugins
+    cp -r /opt/oemline/plugins/advanced-custom-fields-pro /var/www/html/wp-content/plugins/
+    # Remove ACF Free if it exists (avoid conflicts)
+    rm -rf /var/www/html/wp-content/plugins/advanced-custom-fields 2>/dev/null || true
+    echo "[OEMline] ACF PRO synced"
 fi
 
 # Fix ownership
 chown -R www-data:www-data /var/www/html/wp-content/themes/oemline-headless 2>/dev/null || true
 chown -R www-data:www-data /var/www/html/wp-content/mu-plugins 2>/dev/null || true
-chown -R www-data:www-data /var/www/html/wp-content/plugins/advanced-custom-fields 2>/dev/null || true
+chown -R www-data:www-data /var/www/html/wp-content/plugins/advanced-custom-fields-pro 2>/dev/null || true
 
 echo "[OEMline] Sync complete"
 

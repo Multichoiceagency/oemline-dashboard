@@ -16,11 +16,15 @@ COPY theme/oemline-headless /opt/oemline/theme/oemline-headless
 # Also copy directly for first-run (before volume is mounted)
 COPY theme/oemline-headless /var/www/html/wp-content/themes/oemline-headless
 
-# Download plugins directly as zip files (WP-CLI install needs DB, so we download manually)
-# ACF Free is included as baseline; install ACF PRO via WP admin for repeater/options page support
-RUN mkdir -p /var/www/html/wp-content/plugins /opt/oemline/plugins && cd /tmp && \
-    curl -sL "https://downloads.wordpress.org/plugin/advanced-custom-fields.latest-stable.zip" -o acf.zip && unzip -qo acf.zip -d /var/www/html/wp-content/plugins/ && \
-    cp -r /var/www/html/wp-content/plugins/advanced-custom-fields /opt/oemline/plugins/ && \
+# Install ACF PRO from local zip (licensed plugin)
+COPY advanced-custom-fields-pro-6.7.0.2.zip /tmp/acf-pro.zip
+RUN mkdir -p /var/www/html/wp-content/plugins /opt/oemline/plugins && \
+    unzip -qo /tmp/acf-pro.zip -d /var/www/html/wp-content/plugins/ && \
+    cp -r /var/www/html/wp-content/plugins/advanced-custom-fields-pro /opt/oemline/plugins/ && \
+    rm -f /tmp/acf-pro.zip
+
+# Download other plugins as zip files (WP-CLI install needs DB, so we download manually)
+RUN cd /tmp && \
     curl -sL "https://downloads.wordpress.org/plugin/woocommerce.latest-stable.zip" -o woocommerce.zip && unzip -qo woocommerce.zip -d /var/www/html/wp-content/plugins/ && \
     curl -sL "https://downloads.wordpress.org/plugin/mollie-payments-for-woocommerce.latest-stable.zip" -o mollie.zip && unzip -qo mollie.zip -d /var/www/html/wp-content/plugins/ && \
     curl -sL "https://downloads.wordpress.org/plugin/acf-to-rest-api.latest-stable.zip" -o acf-rest.zip && unzip -qo acf-rest.zip -d /var/www/html/wp-content/plugins/ && \
@@ -34,9 +38,6 @@ RUN mkdir -p /var/www/html/wp-content/plugins /opt/oemline/plugins && cd /tmp &&
 COPY mu-plugins/ /opt/oemline/mu-plugins/
 # Also copy directly for first-run (before volume is mounted)
 COPY mu-plugins/ /var/www/html/wp-content/mu-plugins/
-
-# ACF PRO must be installed manually (licensed plugin)
-# Download from https://www.advancedcustomfields.com/my-account/
 
 # Copy tax rates CSV for WooCommerce import
 COPY tax-rates.csv /var/www/html/wp-content/tax-rates.csv

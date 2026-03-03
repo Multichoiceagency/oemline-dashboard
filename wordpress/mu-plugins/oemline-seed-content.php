@@ -15,7 +15,7 @@ add_action('acf/init', function () {
     if (!is_admin()) return;
     if (!function_exists('update_field')) return;
     // Run seed if never seeded, or re-run if version changed (to fix incomplete seeds)
-    $seed_version = '3'; // Bump this to force re-seed (v3: re-seed with ACF PRO for proper repeater storage)
+    $seed_version = '4'; // Bump to force re-seed (v4: ACF PRO baked into Docker image)
     $current_version = get_option('oemline_seed_version', '0');
     if (get_option('oemline_content_seeded') && $current_version === $seed_version) return;
     oemline_run_seed();
