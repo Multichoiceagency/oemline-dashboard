@@ -21,6 +21,13 @@ export async function processStockJob(job: Job<StockJobData>): Promise<void> {
     return;
   }
 
+  // Only IC-type adapters support batch quotes — exit early for others
+  const icAdapter = adapter as any;
+  if (typeof icAdapter.fetchQuoteBatch !== "function") {
+    logger.info({ supplierCode }, "Adapter does not support fetchQuoteBatch, skipping stock job");
+    return;
+  }
+
   logger.info({ supplierCode }, "Starting stock refresh for IC-linked products");
 
   let offset = 0;
@@ -48,27 +55,24 @@ export async function processStockJob(job: Job<StockJobData>): Promise<void> {
       const skus = batch.map((p) => p.ic_sku);
 
       try {
-        const icAdapter = adapter as any;
-        if (typeof icAdapter.fetchQuoteBatch === "function") {
-          const quoteMap = await icAdapter.fetchQuoteBatch(skus);
+        const quoteMap = await icAdapter.fetchQuoteBatch(skus);
 
-          for (const product of batch) {
-            const quote = quoteMap.get(product.ic_sku);
-            if (!quote) continue;
+        for (const product of batch) {
+          const quote = quoteMap.get(product.ic_sku);
+          if (!quote) continue;
 
-            try {
-              await prisma.$executeRawUnsafe(
-                `UPDATE product_maps SET
-                  stock = $1,
-                  updated_at = NOW()
-                WHERE id = $2`,
-                quote.stock,
-                product.id
-              );
-              totalUpdated++;
-            } catch {
-              // Skip
-            }
+          try {
+            await prisma.$executeRawUnsafe(
+              `UPDATE product_maps SET
+                stock = $1,
+                updated_at = NOW()
+              WHERE id = $2`,
+              quote.stock,
+              product.id
+            );
+            totalUpdated++;
+          } catch {
+            // Skip
           }
         }
       } catch (err) {

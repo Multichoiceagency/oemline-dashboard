@@ -22,6 +22,13 @@ export async function processPricingJob(job: Job<PricingJobData>): Promise<void>
     return;
   }
 
+  // Only IC-type adapters support batch quotes — exit early for others
+  const icAdapter = adapter as any;
+  if (typeof icAdapter.fetchQuoteBatch !== "function") {
+    logger.info({ supplierCode }, "Adapter does not support fetchQuoteBatch, skipping pricing job");
+    return;
+  }
+
   logger.info({ supplierCode }, "Starting pricing refresh for IC-linked products");
 
   let offset = 0;
@@ -50,32 +57,28 @@ export async function processPricingJob(job: Job<PricingJobData>): Promise<void>
       const skus = batch.map((p) => p.ic_sku);
 
       try {
-        // Use the adapter's fetchQuoteBatch if available
-        const icAdapter = adapter as any;
-        if (typeof icAdapter.fetchQuoteBatch === "function") {
-          const quoteMap = await icAdapter.fetchQuoteBatch(skus);
+        const quoteMap = await icAdapter.fetchQuoteBatch(skus);
 
-          for (const product of batch) {
-            const quote = quoteMap.get(product.ic_sku);
-            if (!quote) continue;
+        for (const product of batch) {
+          const quote = quoteMap.get(product.ic_sku);
+          if (!quote) continue;
 
-            try {
-              await prisma.$executeRawUnsafe(
-                `UPDATE product_maps SET
-                  price = COALESCE($1, price),
-                  stock = $2,
-                  currency = COALESCE($3, currency),
-                  updated_at = NOW()
-                WHERE id = $4`,
-                quote.price,
-                quote.stock,
-                quote.currency,
-                product.id
-              );
-              totalUpdated++;
-            } catch {
-              // Skip
-            }
+          try {
+            await prisma.$executeRawUnsafe(
+              `UPDATE product_maps SET
+                price = COALESCE($1, price),
+                stock = $2,
+                currency = COALESCE($3, currency),
+                updated_at = NOW()
+              WHERE id = $4`,
+              quote.price,
+              quote.stock,
+              quote.currency,
+              product.id
+            );
+            totalUpdated++;
+          } catch {
+            // Skip
           }
         }
       } catch (err) {
