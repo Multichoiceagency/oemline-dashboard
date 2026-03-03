@@ -250,6 +250,59 @@ export async function brandRoutes(app: FastifyInstance) {
     return { updated, created, notFound, tecdocBrands: tecdocBrands.length, total, withLogo };
   });
 
+  // Delete empty brands (brands with 0 products)
+  app.delete("/brands/cleanup-empty", async () => {
+    // Find brands with no products
+    const emptyBrands = await prisma.brand.findMany({
+      where: {
+        productMaps: { none: {} },
+      },
+      select: { id: true, name: true, code: true },
+    });
+
+    if (emptyBrands.length === 0) {
+      return { deleted: 0, message: "No empty brands found" };
+    }
+
+    const ids = emptyBrands.map((b) => b.id);
+    const { count } = await prisma.brand.deleteMany({
+      where: { id: { in: ids } },
+    });
+
+    logger.info({ count, brands: emptyBrands.map((b) => b.name) }, "Deleted empty brands");
+
+    return {
+      deleted: count,
+      brands: emptyBrands.map((b) => ({ id: b.id, name: b.name, code: b.code })),
+    };
+  });
+
+  // Delete a single brand (only if it has no products)
+  app.delete("/brands/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const brandId = parseInt(id, 10);
+
+    const brand = await prisma.brand.findUnique({
+      where: { id: brandId },
+      include: { _count: { select: { productMaps: true } } },
+    });
+
+    if (!brand) {
+      return reply.code(404).send({ error: "Brand not found" });
+    }
+
+    if (brand._count.productMaps > 0) {
+      return reply.code(400).send({
+        error: `Cannot delete brand "${brand.name}" — it has ${brand._count.productMaps} products. Reassign them first.`,
+      });
+    }
+
+    await prisma.brand.delete({ where: { id: brandId } });
+    logger.info({ brandId, brandName: brand.name }, "Deleted brand");
+
+    return { success: true, deleted: { id: brand.id, name: brand.name } };
+  });
+
   // Update brand
   app.patch("/brands/:id", async (request, reply) => {
     const { id } = request.params as { id: string };

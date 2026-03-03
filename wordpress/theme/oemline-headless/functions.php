@@ -425,3 +425,190 @@ add_action('acf/init', function () {
     require_once get_stylesheet_directory() . '/inc/acf-globals.php';
     require_once get_stylesheet_directory() . '/inc/acf-cpts.php';
 });
+
+// ============================================================
+// 12. MEILISEARCH SEARCH ENDPOINTS
+// Proxies search queries to the Dashboard API's Meilisearch-indexed products.
+// Used by ACF fields for product/category/brand autocomplete,
+// and by the storefront for dynamic searching.
+// ============================================================
+add_action('rest_api_init', function () {
+
+    $dashboard_url = defined('DASHBOARD_API_URL') ? DASHBOARD_API_URL : (getenv('DASHBOARD_API_URL') ?: '');
+    $dashboard_key = defined('DASHBOARD_API_KEY') ? DASHBOARD_API_KEY : (getenv('DASHBOARD_API_KEY') ?: '');
+
+    // GET /wp-json/oemline/v1/search/products?q=...&limit=20&page=1
+    register_rest_route('oemline/v1', '/search/products', [
+        'methods'  => 'GET',
+        'callback' => function (WP_REST_Request $request) use ($dashboard_url, $dashboard_key) {
+            if (!$dashboard_url) {
+                return new WP_REST_Response(['error' => 'Dashboard API not configured'], 500);
+            }
+
+            $q     = sanitize_text_field($request->get_param('q') ?: '');
+            $limit = absint($request->get_param('limit') ?: 20);
+            $page  = absint($request->get_param('page') ?: 1);
+            $brand = sanitize_text_field($request->get_param('brand') ?: '');
+            $category = sanitize_text_field($request->get_param('category') ?: '');
+
+            $params = http_build_query(array_filter([
+                'q'     => $q,
+                'limit' => min($limit, 100),
+                'page'  => $page,
+                'brand' => $brand,
+                'category' => $category,
+                'hasPrice' => $request->get_param('hasPrice') ?: '',
+            ]));
+
+            $response = wp_remote_get("{$dashboard_url}/api/storefront/products?{$params}", [
+                'headers' => ['X-API-Key' => $dashboard_key, 'Accept' => 'application/json'],
+                'timeout' => 10,
+            ]);
+
+            if (is_wp_error($response)) {
+                return new WP_REST_Response(['error' => $response->get_error_message()], 500);
+            }
+
+            $body = json_decode(wp_remote_retrieve_body($response), true);
+            return new WP_REST_Response($body ?: []);
+        },
+        'permission_callback' => '__return_true',
+    ]);
+
+    // GET /wp-json/oemline/v1/search/brands?q=...
+    register_rest_route('oemline/v1', '/search/brands', [
+        'methods'  => 'GET',
+        'callback' => function (WP_REST_Request $request) use ($dashboard_url, $dashboard_key) {
+            if (!$dashboard_url) {
+                return new WP_REST_Response(['error' => 'Dashboard API not configured'], 500);
+            }
+
+            $response = wp_remote_get("{$dashboard_url}/api/storefront/brands", [
+                'headers' => ['X-API-Key' => $dashboard_key, 'Accept' => 'application/json'],
+                'timeout' => 10,
+            ]);
+
+            if (is_wp_error($response)) {
+                return new WP_REST_Response(['error' => $response->get_error_message()], 500);
+            }
+
+            $body = json_decode(wp_remote_retrieve_body($response), true);
+            $items = $body['items'] ?? [];
+
+            // Filter by search query if provided
+            $q = strtolower(sanitize_text_field($request->get_param('q') ?: ''));
+            if ($q) {
+                $items = array_filter($items, function ($brand) use ($q) {
+                    return strpos(strtolower($brand['name'] ?? ''), $q) !== false ||
+                           strpos(strtolower($brand['code'] ?? ''), $q) !== false;
+                });
+                $items = array_values($items);
+            }
+
+            return new WP_REST_Response(['items' => $items, 'total' => count($items)]);
+        },
+        'permission_callback' => '__return_true',
+    ]);
+
+    // GET /wp-json/oemline/v1/search/categories?q=...
+    register_rest_route('oemline/v1', '/search/categories', [
+        'methods'  => 'GET',
+        'callback' => function (WP_REST_Request $request) use ($dashboard_url, $dashboard_key) {
+            if (!$dashboard_url) {
+                return new WP_REST_Response(['error' => 'Dashboard API not configured'], 500);
+            }
+
+            $parent_id = $request->get_param('parentId') ?: '';
+            $qs = $parent_id ? "?parentId={$parent_id}" : '';
+
+            $response = wp_remote_get("{$dashboard_url}/api/storefront/categories{$qs}", [
+                'headers' => ['X-API-Key' => $dashboard_key, 'Accept' => 'application/json'],
+                'timeout' => 10,
+            ]);
+
+            if (is_wp_error($response)) {
+                return new WP_REST_Response(['error' => $response->get_error_message()], 500);
+            }
+
+            $body = json_decode(wp_remote_retrieve_body($response), true);
+            $items = $body['items'] ?? [];
+
+            // Filter by search query if provided
+            $q = strtolower(sanitize_text_field($request->get_param('q') ?: ''));
+            if ($q) {
+                $items = array_filter($items, function ($cat) use ($q) {
+                    return strpos(strtolower($cat['name'] ?? ''), $q) !== false ||
+                           strpos(strtolower($cat['code'] ?? ''), $q) !== false;
+                });
+                $items = array_values($items);
+            }
+
+            return new WP_REST_Response(['items' => $items, 'total' => count($items)]);
+        },
+        'permission_callback' => '__return_true',
+    ]);
+
+    // GET /wp-json/oemline/v1/dashboard/stats
+    register_rest_route('oemline/v1', '/dashboard/stats', [
+        'methods'  => 'GET',
+        'callback' => function () use ($dashboard_url, $dashboard_key) {
+            if (!$dashboard_url) {
+                return new WP_REST_Response(['error' => 'Dashboard API not configured'], 500);
+            }
+
+            $response = wp_remote_get("{$dashboard_url}/api/finalized/stats", [
+                'headers' => ['X-API-Key' => $dashboard_key, 'Accept' => 'application/json'],
+                'timeout' => 10,
+            ]);
+
+            if (is_wp_error($response)) {
+                return new WP_REST_Response(['error' => $response->get_error_message()], 500);
+            }
+
+            return new WP_REST_Response(json_decode(wp_remote_retrieve_body($response), true) ?: []);
+        },
+        'permission_callback' => '__return_true',
+    ]);
+});
+
+// ============================================================
+// 13. STOREFRONT CONNECTION
+// Configure the storefront URL for cross-linking from WordPress admin.
+// ============================================================
+add_action('admin_menu', function () {
+    add_submenu_page(
+        'oemline-settings',
+        'Storefront',
+        'Storefront',
+        'manage_options',
+        'oemline-storefront',
+        function () {
+            $storefront_url = defined('STOREFRONT_URL') ? STOREFRONT_URL : (getenv('STOREFRONT_URL') ?: 'https://oemline.eu');
+            ?>
+            <div class="wrap">
+                <h1>Storefront Verbinding</h1>
+                <div class="card" style="max-width:600px;padding:20px;">
+                    <h2>Status: <span style="color:green;">Verbonden</span></h2>
+                    <table class="form-table">
+                        <tr>
+                            <th>Storefront URL</th>
+                            <td><a href="<?php echo esc_url($storefront_url); ?>" target="_blank"><?php echo esc_html($storefront_url); ?></a></td>
+                        </tr>
+                        <tr>
+                            <th>Dashboard API</th>
+                            <td><?php
+                                $api = defined('DASHBOARD_API_URL') ? DASHBOARD_API_URL : (getenv('DASHBOARD_API_URL') ?: 'Not configured');
+                                echo esc_html($api);
+                            ?></td>
+                        </tr>
+                    </table>
+                    <p class="description">
+                        De storefront haalt producten op via de Dashboard API en CMS-content via deze WordPress installatie.
+                        Wijzigingen aan pagina's, menu's, en instellingen worden automatisch zichtbaar op de storefront.
+                    </p>
+                </div>
+            </div>
+            <?php
+        }
+    );
+});
