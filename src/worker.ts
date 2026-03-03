@@ -10,16 +10,18 @@ import { processRematchJob } from "./workers/match.worker.js";
 import { processIndexJob } from "./workers/index.worker.js";
 import { processPricingJob } from "./workers/pricing.worker.js";
 import { processStockJob } from "./workers/stock.worker.js";
+import { processIcMatchJob } from "./workers/ic-match.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 
 /**
  * WORKER_QUEUES env var controls which queues this worker instance handles.
- * Comma-separated list: "sync,match,index,pricing,stock"
+ * Comma-separated list: "sync,match,index,pricing,stock,ic-match"
  *
  * Examples:
  *   WORKER_QUEUES=pricing,stock     → dedicated pricing+stock worker (no scheduler)
  *   WORKER_QUEUES=sync,match,index  → dedicated sync/match/index worker (runs scheduler)
+ *   WORKER_QUEUES=ic-match          → dedicated IC matching worker (fast, ~2-5 min per run)
  *   (not set)                       → all queues + scheduler (default)
  *
  * WORKER_CONCURRENCY overrides concurrency per queue (default varies by queue type).
@@ -87,6 +89,15 @@ if (handles("stock")) {
   workers.push(new Worker("stock", processStockJob, {
     connection,
     concurrency: stockConcurrency,
+    stalledInterval: 300_000,
+    lockDuration: 600_000,
+  }));
+}
+
+if (handles("ic-match")) {
+  workers.push(new Worker("ic-match", processIcMatchJob, {
+    connection,
+    concurrency: 1, // One IC match job at a time (fast ~2-5 min, isolated from TecDoc)
     stalledInterval: 300_000,
     lockDuration: 600_000,
   }));

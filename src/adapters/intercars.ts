@@ -585,95 +585,24 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         totalNewMatches += articleOnlyMatches.length;
       }
 
-      yield []; // Heartbeat for BullMQ lock extension
+      yield []; // Final heartbeat
 
       logger.info(
-        { supplier: this.code, totalNewMatches, aliasMatches: aliasMatches.length, brandMatches: brandMatches.length, eanMatches: eanMatches.length, tecdocMatches: tecdocMatches.length, articleOnlyMatches: articleOnlyMatches.length },
-        "Phase 1 matching complete"
-      );
-
-      // =========== PHASE 2: Fetch prices/stock for ALL linked products ===========
-      logger.info({ supplier: this.code }, "Phase 2: Fetching prices and stock for linked products...");
-
-      const PAGE_SIZE = 500;
-      let offset = 0;
-
-      while (true) {
-        const linkedProducts = await prisma.$queryRawUnsafe<Array<{
-          product_id: number;
-          ic_sku: string;
-        }>>(
-          `SELECT id as product_id, ic_sku
-          FROM product_maps
-          WHERE ic_sku IS NOT NULL AND status = 'active'
-          ORDER BY id
-          LIMIT ${PAGE_SIZE} OFFSET ${offset}`
-        );
-
-        if (linkedProducts.length === 0) break;
-        offset += PAGE_SIZE;
-
-        // Fetch prices/stock in batches of 20
-        const BATCH_SIZE = 20;
-        for (let i = 0; i < linkedProducts.length; i += BATCH_SIZE) {
-          const batch = linkedProducts.slice(i, i + BATCH_SIZE);
-
-          try {
-            const quoteMap = await this.fetchQuoteBatch(batch.map((p) => p.ic_sku));
-
-            for (const product of batch) {
-              const quote = quoteMap.get(product.ic_sku);
-              if (!quote) continue;
-
-              try {
-                await prisma.$executeRawUnsafe(
-                  `UPDATE product_maps SET
-                    price = COALESCE($1, price),
-                    stock = $2,
-                    currency = COALESCE($3, currency),
-                    updated_at = NOW()
-                  WHERE id = $4`,
-                  quote.price,
-                  quote.stock,
-                  quote.currency,
-                  product.product_id
-                );
-                totalUpdated++;
-              } catch {
-                // Skip individual update errors
-              }
-            }
-          } catch (err) {
-            totalApiErrors++;
-            if (totalApiErrors <= 5) {
-              logger.warn({ err, supplier: this.code }, "IC batch fetch failed");
-            }
-          }
-
-          // Rate limit: 300ms between batch calls
-          await new Promise((r) => setTimeout(r, 300));
-        }
-
-        logger.info(
-          { supplier: this.code, updated: totalUpdated, apiErrors: totalApiErrors, offset },
-          "Price/stock refresh progress"
-        );
-
-        // Yield heartbeat every 10 outer batches (every 5000 products) for BullMQ lock extension
-        if ((offset / PAGE_SIZE) % 10 === 0) {
-          yield [];
-        }
-      }
-
-      // Yield one empty batch so the sync worker knows we ran
-      yield [];
-
-      logger.info(
-        { supplier: this.code, totalNewMatches, totalUpdated, totalApiErrors },
-        "InterCars pricing enrichment completed"
+        {
+          supplier: this.code,
+          totalNewMatches,
+          byPhase: {
+            aliases: aliasMatches.length,
+            brandArticle: brandMatches.length,
+            ean: eanMatches.length,
+            tecdocId: tecdocMatches.length,
+            uniqueArticle: articleOnlyMatches.length,
+          },
+        },
+        "IC matching complete — pricing/stock handled by dedicated workers"
       );
     } catch (err) {
-      logger.error({ err, supplier: this.code }, "InterCars pricing enrichment failed");
+      logger.error({ err, supplier: this.code }, "IC matching failed");
     }
   }
 

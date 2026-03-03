@@ -1,16 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue } from "../workers/queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue } from "../workers/queues.js";
 
 export async function jobRoutes(app: FastifyInstance) {
   // Get all job queue status
   app.get("/jobs/status", async () => {
-    const [syncCounts, matchCounts, indexCounts, pricingCounts, stockCounts] = await Promise.all([
+    const [syncCounts, matchCounts, indexCounts, pricingCounts, stockCounts, icMatchCounts] = await Promise.all([
       getQueueCounts(syncQueue),
       getQueueCounts(matchQueue),
       getQueueCounts(indexQueue),
       getQueueCounts(pricingQueue),
       getQueueCounts(stockQueue),
+      getQueueCounts(icMatchQueue),
     ]);
 
     return {
@@ -19,6 +20,7 @@ export async function jobRoutes(app: FastifyInstance) {
       index: indexCounts,
       pricing: pricingCounts,
       stock: stockCounts,
+      icMatch: icMatchCounts,
     };
   });
 
@@ -95,6 +97,20 @@ export async function jobRoutes(app: FastifyInstance) {
     return { jobId: job.id, queue: "stock", supplierCode, status: "queued" };
   });
 
+  // Manually trigger IC match job for a supplier
+  app.post("/jobs/ic-match", async (request) => {
+    const schema = z.object({ supplierCode: z.string().min(1).default("intercars") });
+    const { supplierCode } = schema.parse(request.body ?? {});
+
+    const job = await icMatchQueue.add(
+      `ic-match-manual-${supplierCode}`,
+      { supplierCode },
+      { priority: 1 }
+    );
+
+    return { jobId: job.id, queue: "ic-match", supplierCode, status: "queued" };
+  });
+
   // Manually trigger an index rebuild
   app.post("/jobs/index", async (request) => {
     const body = (request.body ?? {}) as { supplierCode?: string };
@@ -115,12 +131,13 @@ export async function jobRoutes(app: FastifyInstance) {
     const pingResult = await redis.ping();
 
     // Use BullMQ's built-in methods instead of redis.keys()
-    const [syncCounts, matchCounts, indexCounts, pricingCounts, stockCounts] = await Promise.all([
+    const [syncCounts, matchCounts, indexCounts, pricingCounts, stockCounts, icMatchCounts] = await Promise.all([
       syncQueue.getJobCounts("active", "completed", "delayed", "failed", "waiting", "prioritized"),
       matchQueue.getJobCounts("active", "completed", "delayed", "failed", "waiting", "prioritized"),
       indexQueue.getJobCounts("active", "completed", "delayed", "failed", "waiting", "prioritized"),
       pricingQueue.getJobCounts("active", "completed", "delayed", "failed", "waiting", "prioritized"),
       stockQueue.getJobCounts("active", "completed", "delayed", "failed", "waiting", "prioritized"),
+      icMatchQueue.getJobCounts("active", "completed", "delayed", "failed", "waiting", "prioritized"),
     ]);
 
     return {
@@ -130,6 +147,7 @@ export async function jobRoutes(app: FastifyInstance) {
       index: indexCounts,
       pricing: pricingCounts,
       stock: stockCounts,
+      icMatch: icMatchCounts,
     };
   });
 
@@ -449,6 +467,7 @@ function getQueue(name: string) {
     case "index": return indexQueue;
     case "pricing": return pricingQueue;
     case "stock": return stockQueue;
+    case "ic-match": return icMatchQueue;
     default: return null;
   }
 }

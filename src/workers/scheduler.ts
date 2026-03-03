@@ -1,22 +1,23 @@
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue } from "./queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue } from "./queues.js";
 
 /**
  * Sets up repeatable jobs for continuous sync, match, pricing, stock, and index.
  *
  * Schedule:
- * - Sync:    Every 4 hours per supplier (IC matching + initial price fetch)
- * - Match:   Every 2 hours per supplier (rematch unmatched products)
- * - Pricing: Every 1 hour (refresh prices for IC-linked products)
- * - Stock:   Every 30 minutes (refresh stock for IC-linked products)
- * - Index:   Every 2 hours (Meilisearch rebuild)
+ * - Sync:     Every 4 hours per supplier (TecDoc catalog sync)
+ * - IC Match: Every 2 hours per supplier (IC product matching, fast ~2-5 min)
+ * - Match:    Every 2 hours per supplier (rematch unmatched products)
+ * - Pricing:  Every 1 hour (refresh prices for IC-linked products)
+ * - Stock:    Every 30 minutes (refresh stock for IC-linked products)
+ * - Index:    Every 2 hours (Meilisearch rebuild)
  */
 export async function startScheduler(): Promise<void> {
   logger.info("Starting job scheduler...");
 
   // Clean up old repeatable jobs to avoid duplicates
-  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue]) {
+  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue]) {
     const existing = await queue.getRepeatableJobs();
     for (const job of existing) {
       await queue.removeRepeatableByKey(job.key);
@@ -39,6 +40,16 @@ export async function startScheduler(): Promise<void> {
       {
         repeat: { every: 4 * 60 * 60 * 1000 },
         jobId: `sync-repeat-${supplier.code}`,
+      }
+    );
+
+    // IC Match: every 2 hours (fast IC product matching, ~2-5 min per run)
+    await icMatchQueue.add(
+      `ic-match-${supplier.code}`,
+      { supplierCode: supplier.code },
+      {
+        repeat: { every: 2 * 60 * 60 * 1000 },
+        jobId: `ic-match-repeat-${supplier.code}`,
       }
     );
 
@@ -72,7 +83,7 @@ export async function startScheduler(): Promise<void> {
       }
     );
 
-    logger.info({ supplier: supplier.code }, "Scheduled sync(4h), match(2h), pricing(1h), stock(30m)");
+    logger.info({ supplier: supplier.code }, "Scheduled sync(4h), ic-match(2h), match(2h), pricing(1h), stock(30m)");
   }
 
   // Index: every 2 hours
@@ -96,6 +107,12 @@ export async function startScheduler(): Promise<void> {
       { priority: 1, jobId: `sync-initial-dedup-${supplier.code}` }
     );
 
+    await icMatchQueue.add(
+      `ic-match-initial-${supplier.code}`,
+      { supplierCode: supplier.code },
+      { priority: 1, jobId: `ic-match-initial-dedup-${supplier.code}` }
+    );
+
     await matchQueue.add(
       `match-initial-${supplier.code}`,
       { supplierCode: supplier.code },
@@ -106,5 +123,5 @@ export async function startScheduler(): Promise<void> {
   // Initial index
   await indexQueue.add("reindex-initial", {}, { priority: 1, jobId: "index-initial-dedup" });
 
-  logger.info("Initial sync/match/index jobs enqueued for all suppliers");
+  logger.info("Initial sync/ic-match/match/index jobs enqueued for all suppliers");
 }

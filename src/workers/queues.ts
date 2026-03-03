@@ -58,3 +58,15 @@ export const indexQueue = new Queue("index", {
     backoff: { type: "exponential", delay: 3000 },
   },
 });
+
+// Dedicated queue for IC product matching (Phase 0-1D only, fast ~2 min jobs)
+// Completely separate from TecDoc sync to avoid resource contention
+export const icMatchQueue = new Queue("ic-match", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 50 },
+    removeOnFail: { count: 100 },
+    attempts: 3,
+    backoff: { type: "exponential", delay: 10000 },
+  },
+});
