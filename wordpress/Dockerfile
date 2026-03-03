@@ -1,14 +1,59 @@
 FROM wordpress:6.9-apache
 
-# Install WP-CLI + unzip
-RUN apt-get update && apt-get install -y unzip && rm -rf /var/lib/apt/lists/* && \
+# Install WP-CLI + unzip + performance tools
+RUN apt-get update && apt-get install -y unzip libzip-dev && rm -rf /var/lib/apt/lists/* && \
     curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar && \
     chmod +x wp-cli.phar && mv wp-cli.phar /usr/local/bin/wp
 
-# Install required PHP extensions
-RUN docker-php-ext-install opcache
+# Install required PHP extensions for performance
+RUN docker-php-ext-install opcache zip
 
-# Copy custom php.ini
+# === Apache Performance Tuning ===
+RUN a2enmod headers expires deflate rewrite
+
+# Apache timeout and keepalive config
+RUN echo '\
+Timeout 600\n\
+ProxyTimeout 600\n\
+KeepAlive On\n\
+MaxKeepAliveRequests 500\n\
+KeepAliveTimeout 15\n\
+\n\
+<IfModule mpm_prefork_module>\n\
+    StartServers          5\n\
+    MinSpareServers       5\n\
+    MaxSpareServers      20\n\
+    MaxRequestWorkers   150\n\
+    MaxConnectionsPerChild 5000\n\
+</IfModule>\n\
+' > /etc/apache2/conf-available/oemline-performance.conf && \
+    a2enconf oemline-performance
+
+# Enable compression for API responses
+RUN echo '\
+<IfModule mod_deflate.c>\n\
+    AddOutputFilterByType DEFLATE application/json\n\
+    AddOutputFilterByType DEFLATE application/javascript\n\
+    AddOutputFilterByType DEFLATE text/css\n\
+    AddOutputFilterByType DEFLATE text/html\n\
+    AddOutputFilterByType DEFLATE text/xml\n\
+    AddOutputFilterByType DEFLATE application/xml\n\
+    DeflateCompressionLevel 6\n\
+</IfModule>\n\
+\n\
+<IfModule mod_expires.c>\n\
+    ExpiresActive On\n\
+    ExpiresByType application/json "access plus 5 minutes"\n\
+    ExpiresByType image/jpeg "access plus 1 year"\n\
+    ExpiresByType image/png "access plus 1 year"\n\
+    ExpiresByType image/svg+xml "access plus 1 year"\n\
+    ExpiresByType text/css "access plus 1 month"\n\
+    ExpiresByType application/javascript "access plus 1 month"\n\
+</IfModule>\n\
+' > /etc/apache2/conf-available/oemline-compression.conf && \
+    a2enconf oemline-compression
+
+# Copy custom php.ini (includes OPcache JIT, memory, timeouts)
 COPY php.ini /usr/local/etc/php/conf.d/custom.ini
 
 # Copy custom theme — staged to /opt/oemline so the entrypoint syncs into the persistent volume

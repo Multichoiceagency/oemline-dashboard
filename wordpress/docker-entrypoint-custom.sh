@@ -10,10 +10,30 @@ define('FORCE_SSL_ADMIN', true);
 if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
     \$_SERVER['HTTPS'] = 'on';
 }
-define('WP_MEMORY_LIMIT', '512M');
-define('WP_MAX_MEMORY_LIMIT', '512M');
+
+// Memory
+define('WP_MEMORY_LIMIT', '1024M');
+define('WP_MAX_MEMORY_LIMIT', '1024M');
+
+// JWT Authentication
 define('JWT_AUTH_SECRET_KEY', '${JWT_AUTH_SECRET_KEY:-oemline-jwt-secret-2026-secure}');
 define('JWT_AUTH_CORS_ENABLE', true);
+
+// WooCommerce Performance
+define('WC_MAX_LINKED_VARIATIONS', 100);
+
+// WordPress Performance
+define('WP_POST_REVISIONS', 5);
+define('AUTOSAVE_INTERVAL', 300);
+define('EMPTY_TRASH_DAYS', 7);
+define('WP_CACHE', true);
+
+// Disable WP-Cron (use system cron instead for reliability)
+define('DISABLE_WP_CRON', false);
+define('WP_CRON_LOCK_TIMEOUT', 120);
+
+// REST API
+define('REST_REQUEST', false);
 "
 
 # Copy theme + mu-plugins from build into persistent volume on every startup.
