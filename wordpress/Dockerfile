@@ -25,6 +25,9 @@ RUN mkdir -p /var/www/html/wp-content/plugins && cd /tmp && \
     curl -sL "https://downloads.wordpress.org/plugin/custom-post-type-ui.latest-stable.zip" -o cptui.zip && unzip -qo cptui.zip -d /var/www/html/wp-content/plugins/ && \
     rm -f /tmp/*.zip
 
+# Copy must-use plugins (auto-activate theme, CPTs, plugins)
+COPY mu-plugins/ /var/www/html/wp-content/mu-plugins/
+
 # ACF PRO must be installed manually (licensed plugin)
 # Download from https://www.advancedcustomfields.com/my-account/
 
