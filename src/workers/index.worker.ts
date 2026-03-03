@@ -21,7 +21,7 @@ export async function processIndexJob(job: Job<IndexJobData>): Promise<void> {
     if (supplier) where.supplierId = supplier.id;
   }
 
-  const batchSize = 1000;
+  const batchSize = 10_000;
   let skip = 0;
   let totalIndexed = 0;
 
@@ -71,7 +71,14 @@ export async function processIndexJob(job: Job<IndexJobData>): Promise<void> {
       };
     });
 
-    await meili.index(PRODUCTS_INDEX).addDocuments(documents);
+    try {
+      await meili.index(PRODUCTS_INDEX).addDocuments(documents);
+    } catch (err) {
+      logger.error(
+        { err, batchSize: documents.length, skip, supplier: supplierCode ?? "all" },
+        "Failed to index batch — skipping"
+      );
+    }
 
     totalIndexed += documents.length;
     skip += batchSize;

@@ -63,17 +63,17 @@ export async function startScheduler(): Promise<void> {
     logger.info({ supplier: supplier.code }, "Scheduled sync (5m) and match (10m)");
   }
 
-  // Schedule repeating index rebuild: every 15 minutes
+  // Schedule repeating index rebuild: every 2 hours
   await indexQueue.add(
     "reindex-all",
     {},
     {
-      repeat: { every: 15 * 60 * 1000 }, // 15 minutes
+      repeat: { every: 2 * 60 * 60 * 1000 }, // 2 hours
       jobId: "index-repeat-all",
     }
   );
 
-  logger.info("Scheduled index rebuild (15m)");
+  logger.info("Scheduled index rebuild (2h)");
 
   // Fire initial jobs immediately for all suppliers
   for (const supplier of suppliers) {

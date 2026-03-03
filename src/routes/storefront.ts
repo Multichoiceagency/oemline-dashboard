@@ -196,7 +196,7 @@ export async function storefrontRoutes(app: FastifyInstance) {
       include: {
         _count: { select: { products: true, children: true } },
         children: {
-          take: 50,
+          take: 500,
           orderBy: { name: "asc" },
           include: {
             _count: { select: { products: true, children: true } },
