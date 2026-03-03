@@ -13,6 +13,7 @@ const listQuerySchema = z.object({
   minPrice: z.coerce.number().optional(),
   maxPrice: z.coerce.number().optional(),
   inStock: z.enum(["true", "false"]).optional(),
+  hasPrice: z.enum(["true", "false"]).optional(),
   sort: z.enum(["price_asc", "price_desc", "name_asc", "name_desc", "newest", "updated"]).optional(),
 });
 
@@ -32,7 +33,7 @@ export async function storefrontRoutes(app: FastifyInstance) {
   // List products with all related data — optimized for frontend
   app.get("/storefront/products", async (request) => {
     const query = listQuerySchema.parse(request.query);
-    const { page, limit, q, brand, category, categoryId, supplier, minPrice, maxPrice, inStock, sort } = query;
+    const { page, limit, q, brand, category, categoryId, supplier, minPrice, maxPrice, inStock, hasPrice, sort } = query;
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = { status: "active" };
@@ -73,10 +74,17 @@ export async function storefrontRoutes(app: FastifyInstance) {
       where.stock = { gt: 0 };
     }
 
-    let orderBy: Record<string, string> = { updatedAt: "desc" };
+    if (hasPrice === "true") {
+      where.price = { ...(where.price as Record<string, number> || {}), not: null, gt: 0 };
+    } else if (hasPrice === "false") {
+      where.price = null;
+    }
+
+    // Default: show products with prices first, then newest
+    let orderBy: any = [{ price: { sort: "asc", nulls: "last" } }, { updatedAt: "desc" }];
     switch (sort) {
-      case "price_asc": orderBy = { price: "asc" }; break;
-      case "price_desc": orderBy = { price: "desc" }; break;
+      case "price_asc": orderBy = [{ price: { sort: "asc", nulls: "last" } }]; break;
+      case "price_desc": orderBy = [{ price: { sort: "desc", nulls: "last" } }]; break;
       case "name_asc": orderBy = { description: "asc" }; break;
       case "name_desc": orderBy = { description: "desc" }; break;
       case "newest": orderBy = { createdAt: "desc" }; break;
