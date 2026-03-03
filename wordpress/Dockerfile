@@ -17,8 +17,8 @@ COPY theme/oemline-headless /opt/oemline/theme/oemline-headless
 COPY theme/oemline-headless /var/www/html/wp-content/themes/oemline-headless
 
 # Download plugins directly as zip files (WP-CLI install needs DB, so we download manually)
+# NOTE: ACF Free is NOT included — ACF PRO is installed manually via WordPress admin
 RUN mkdir -p /var/www/html/wp-content/plugins /opt/oemline/plugins && cd /tmp && \
-    curl -sL "https://downloads.wordpress.org/plugin/advanced-custom-fields.latest-stable.zip" -o acf.zip && unzip -qo acf.zip -d /var/www/html/wp-content/plugins/ && \
     curl -sL "https://downloads.wordpress.org/plugin/woocommerce.latest-stable.zip" -o woocommerce.zip && unzip -qo woocommerce.zip -d /var/www/html/wp-content/plugins/ && \
     curl -sL "https://downloads.wordpress.org/plugin/mollie-payments-for-woocommerce.latest-stable.zip" -o mollie.zip && unzip -qo mollie.zip -d /var/www/html/wp-content/plugins/ && \
     curl -sL "https://downloads.wordpress.org/plugin/acf-to-rest-api.latest-stable.zip" -o acf-rest.zip && unzip -qo acf-rest.zip -d /var/www/html/wp-content/plugins/ && \
@@ -26,8 +26,7 @@ RUN mkdir -p /var/www/html/wp-content/plugins /opt/oemline/plugins && cd /tmp &&
     curl -sL "https://downloads.wordpress.org/plugin/cart-rest-api-for-woocommerce.latest-stable.zip" -o cocart.zip && unzip -qo cocart.zip -d /var/www/html/wp-content/plugins/ && \
     curl -sL "https://downloads.wordpress.org/plugin/wp-rest-cache.latest-stable.zip" -o rest-cache.zip && unzip -qo rest-cache.zip -d /var/www/html/wp-content/plugins/ && \
     curl -sL "https://downloads.wordpress.org/plugin/custom-post-type-ui.latest-stable.zip" -o cptui.zip && unzip -qo cptui.zip -d /var/www/html/wp-content/plugins/ && \
-    rm -f /tmp/*.zip && \
-    cp -r /var/www/html/wp-content/plugins/advanced-custom-fields /opt/oemline/plugins/
+    rm -f /tmp/*.zip
 
 # Copy must-use plugins — staged to /opt/oemline so the entrypoint syncs into the persistent volume
 COPY mu-plugins/ /opt/oemline/mu-plugins/

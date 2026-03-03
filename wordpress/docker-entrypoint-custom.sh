@@ -34,17 +34,15 @@ if [ -d /opt/oemline/mu-plugins ]; then
     echo "[OEMline] MU-plugins synced"
 fi
 
-# Ensure ACF plugin exists in the persistent volume
-if [ -d /opt/oemline/plugins/advanced-custom-fields ] && [ ! -d /var/www/html/wp-content/plugins/advanced-custom-fields ]; then
-    mkdir -p /var/www/html/wp-content/plugins
-    cp -r /opt/oemline/plugins/advanced-custom-fields /var/www/html/wp-content/plugins/
-    echo "[OEMline] ACF plugin installed"
+# Remove ACF Free if ACF PRO is installed (avoid conflicts)
+if [ -d /var/www/html/wp-content/plugins/advanced-custom-fields-pro ] && [ -d /var/www/html/wp-content/plugins/advanced-custom-fields ]; then
+    rm -rf /var/www/html/wp-content/plugins/advanced-custom-fields
+    echo "[OEMline] Removed ACF Free (ACF PRO is installed)"
 fi
 
 # Fix ownership
 chown -R www-data:www-data /var/www/html/wp-content/themes/oemline-headless 2>/dev/null || true
 chown -R www-data:www-data /var/www/html/wp-content/mu-plugins 2>/dev/null || true
-chown -R www-data:www-data /var/www/html/wp-content/plugins/advanced-custom-fields 2>/dev/null || true
 
 echo "[OEMline] Sync complete"
 
