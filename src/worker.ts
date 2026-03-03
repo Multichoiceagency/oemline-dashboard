@@ -52,7 +52,7 @@ const workers: Worker[] = [];
 if (handles("sync")) {
   workers.push(new Worker("sync", processSyncJob, {
     connection,
-    concurrency: 1,
+    concurrency: 2, // Allow TecDoc + IC to run simultaneously (different APIs)
     stalledInterval: 300_000,
     lockDuration: 600_000,
   }));
