@@ -782,6 +782,53 @@ export interface MappingStats {
 export const getMappingStats = () =>
   apiFetch<MappingStats>("/api/intercars/mapping-stats");
 
+export interface UnmatchedBrand {
+  icBrand: string;
+  count: number;
+}
+
+export interface MatchedBrand {
+  icBrand: string;
+  count: number;
+  tecdocBrand: string;
+  method: string;
+}
+
+export interface AliasedBrand {
+  icBrand: string;
+  count: number;
+  tecdocBrand: string;
+}
+
+export interface InterCarsUnmatchedResponse {
+  summary: {
+    totalIcBrands: number;
+    matched: number;
+    matchedProducts: number;
+    aliased: number;
+    aliasedProducts: number;
+    unmatched: number;
+    unmatchedProducts: number;
+  };
+  matched: MatchedBrand[];
+  aliased: AliasedBrand[];
+  unmatched: UnmatchedBrand[];
+}
+
+export const getInterCarsUnmatchedBrands = () =>
+  apiFetch<InterCarsUnmatchedResponse>("/api/intercars/unmatched-brands");
+
+export const seedInterCarsAliases = () =>
+  apiFetch<{ created: number; skipped: number; errors?: string[] }>("/api/intercars/brand-aliases/seed", {
+    method: "POST",
+  });
+
+export const createInterCarsAlias = (data: { supplierBrand: string; tecdocBrandId?: number; tecdocBrandName?: string }) =>
+  apiFetch<{ id: number; supplierBrand: string; tecdocBrand: string }>("/api/intercars/brand-aliases", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
 export const getMatchLogs = (params?: {
   page?: number;
   limit?: number;

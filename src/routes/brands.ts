@@ -10,6 +10,13 @@ const listQuerySchema = z.object({
   q: z.string().optional(),
 });
 
+const createSchema = z.object({
+  name: z.string().min(1),
+  code: z.string().min(1).optional(),
+  tecdocId: z.number().int().nullable().optional(),
+  logoUrl: z.string().nullable().optional(),
+});
+
 const updateSchema = z.object({
   name: z.string().min(1).optional(),
   logoUrl: z.string().nullable().optional(),
@@ -77,6 +84,25 @@ export async function brandRoutes(app: FastifyInstance) {
     }
 
     return brand;
+  });
+
+  // Create a new brand
+  app.post("/brands", async (request, reply) => {
+    const data = createSchema.parse(request.body);
+    const code = data.code ?? data.name.toLowerCase().replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+
+    try {
+      const brand = await prisma.brand.create({
+        data: { name: data.name, code, tecdocId: data.tecdocId ?? null, logoUrl: data.logoUrl ?? null },
+      });
+      logger.info({ brandId: brand.id, brandName: brand.name }, "Created brand");
+      return reply.code(201).send(brand);
+    } catch (err: any) {
+      if (err?.code === "P2002") {
+        return reply.code(409).send({ error: `Brand with name "${data.name}" or code "${code}" already exists` });
+      }
+      throw err;
+    }
   });
 
   // Sync brands: set tecdocId from product data (uses distinct tecdoc_id from product_maps)

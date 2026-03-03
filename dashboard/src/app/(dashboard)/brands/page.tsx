@@ -2,12 +2,13 @@
 
 import { useState, useRef } from "react";
 import { useApi, useInterval } from "@/lib/hooks";
-import { getBrands, getProducts, updateBrand, uploadBrandLogo } from "@/lib/api";
+import { getBrands, getProducts, updateBrand, uploadBrandLogo, getInterCarsUnmatchedBrands, seedInterCarsAliases, createInterCarsAlias } from "@/lib/api";
 import type { Brand } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -24,7 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatNumber } from "@/lib/utils";
-import { Search, Tag, Package, X, Loader2, Pencil, ImageIcon, Upload } from "lucide-react";
+import { Search, Tag, Package, X, Loader2, Pencil, ImageIcon, Upload, Link2, AlertCircle, CheckCircle2, RefreshCw } from "lucide-react";
 
 export default function BrandsPage() {
   const [page, setPage] = useState(1);
@@ -54,7 +55,15 @@ export default function BrandsPage() {
   const [editForm, setEditForm] = useState({ name: "", logoUrl: "" });
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const logoFileRef = useRef<HTMLInputElement>(null);
+  // InterCars brand mapping
+  const { data: icBrandData, loading: icLoading, refetch: refetchIc } = useApi(
+    () => getInterCarsUnmatchedBrands(),
+    []
+  );
+  const [seedingAliases, setSeedingAliases] = useState(false);
+  const [selectedUnmatched, setSelectedUnmatched] = useState<{ icBrand: string; count: number } | null>(null);
+  const [aliasTecdocName, setAliasTecdocName] = useState("");
+  const [creatingAlias, setCreatingAlias] = useState(false);
 
   const handleSearch = () => {
     setSearchQuery(searchInput);
