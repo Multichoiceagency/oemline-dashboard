@@ -52,8 +52,7 @@ const workers: Worker[] = [];
 if (handles("sync")) {
   workers.push(new Worker("sync", processSyncJob, {
     connection,
-    concurrency: 4,
-    limiter: { max: 10, duration: 60_000 },
+    concurrency: 1,
     stalledInterval: 300_000,
     lockDuration: 600_000,
   }));

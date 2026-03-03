@@ -88,22 +88,23 @@ export async function startScheduler(): Promise<void> {
   logger.info("Scheduled index rebuild (2h)");
 
   // Fire initial jobs immediately for all suppliers
+  // Use jobId for deduplication — prevents duplicate jobs accumulating across restarts
   for (const supplier of suppliers) {
     await syncQueue.add(
       `sync-initial-${supplier.code}`,
       { supplierCode: supplier.code },
-      { priority: 1 }
+      { priority: 1, jobId: `sync-initial-dedup-${supplier.code}` }
     );
 
     await matchQueue.add(
       `match-initial-${supplier.code}`,
       { supplierCode: supplier.code },
-      { priority: 1 }
+      { priority: 1, jobId: `match-initial-dedup-${supplier.code}` }
     );
   }
 
   // Initial index
-  await indexQueue.add("reindex-initial", {}, { priority: 1 });
+  await indexQueue.add("reindex-initial", {}, { priority: 1, jobId: "index-initial-dedup" });
 
   logger.info("Initial sync/match/index jobs enqueued for all suppliers");
 }
