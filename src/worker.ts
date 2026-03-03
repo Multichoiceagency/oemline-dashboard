@@ -8,6 +8,8 @@ import { logger } from "./lib/logger.js";
 import { processSyncJob } from "./workers/sync.worker.js";
 import { processRematchJob } from "./workers/match.worker.js";
 import { processIndexJob } from "./workers/index.worker.js";
+import { processPricingJob } from "./workers/pricing.worker.js";
+import { processStockJob } from "./workers/stock.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 
@@ -41,21 +43,19 @@ const indexWorker = new Worker("index", processIndexJob, {
   stalledInterval: 60_000,
 });
 
-const pricingWorker = new Worker(
-  "pricing",
-  async (job) => {
-    logger.info({ jobId: job.id, data: job.data }, "Processing pricing job");
-  },
-  { connection, concurrency: 5 }
-);
+const pricingWorker = new Worker("pricing", processPricingJob, {
+  connection,
+  concurrency: 2,
+  stalledInterval: 300_000,
+  lockDuration: 600_000,
+});
 
-const stockWorker = new Worker(
-  "stock",
-  async (job) => {
-    logger.info({ jobId: job.id, data: job.data }, "Processing stock job");
-  },
-  { connection, concurrency: 5 }
-);
+const stockWorker = new Worker("stock", processStockJob, {
+  connection,
+  concurrency: 2,
+  stalledInterval: 300_000,
+  lockDuration: 600_000,
+});
 
 const workers = [syncWorker, matchWorker, indexWorker, pricingWorker, stockWorker];
 

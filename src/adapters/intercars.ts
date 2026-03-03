@@ -279,10 +279,14 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
    * Products come from TecDoc; IC provides prices and stock via CSV mapping.
    *
    * Flow:
-   * 1. Match TecDoc products to IC CSV (brand + article_number → TOW_KOD)
-   *    - Brand matching is flexible: exact OR prefix match (handles "FEBI" ↔ "FEBI BILSTEIN")
-   * 2. Fetch stock + pricing from IC API using TOW_KOD
-   * 3. Directly UPDATE the TecDoc product_maps with price/stock (no duplicate records)
+   * 1. Match TecDoc products to IC CSV using 4 strategies:
+   *    a. Already linked (icSku stored from previous run)
+   *    b. Brand + article_number (flexible brand prefix matching)
+   *    c. EAN code (exact match)
+   *    d. TecDoc product ID (tecdoc_prod → tecdoc_id)
+   * 2. Store matched icSku on product_maps for future fast lookup
+   * 3. Fetch stock + pricing from IC API using TOW_KOD
+   * 4. Directly UPDATE the TecDoc product_maps with price/stock
    */
   async *syncCatalog(_cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
     try {
@@ -325,202 +329,262 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         return;
       }
 
-      const PAGE_SIZE = 500;
-      let offset = 0;
       let totalUpdated = 0;
-      let totalMatched = 0;
+      let totalNewMatches = 0;
       let totalApiErrors = 0;
 
-      while (true) {
-        // Match TecDoc products → IC CSV mappings via normalized brand + article_number.
-        // Brand matching: exact OR prefix (shorter name must be prefix of longer).
-        // This handles: "FEBI" ↔ "FEBI BILSTEIN", "DT" ↔ "DT Spare Parts",
-        //               "TRW" ↔ "TRW AUTOMOTIVE", "BOSCH" = "BOSCH" (exact)
-        const matchedProducts = await prisma.$queryRawUnsafe<Array<{
-          product_id: number;
-          sku: string;
-          article_no: string;
-          brand_name: string;
-          tow_kod: string;
-          ic_description: string;
-          ic_ean: string | null;
-          ic_weight: number | null;
-        }>>(
-          `SELECT DISTINCT ON (pm.id)
-            pm.id as product_id,
-            pm.sku,
-            pm.article_no,
-            b.name as brand_name,
-            im.tow_kod,
-            im.description as ic_description,
-            im.ean as ic_ean,
-            im.weight as ic_weight
-          FROM product_maps pm
-          JOIN brands b ON b.id = pm.brand_id
-          JOIN intercars_mappings im ON
-            UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
-            AND (
-              -- Exact brand match
-              UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
-              -- OR prefix match: IC brand is prefix of TecDoc brand (e.g. "FEBI" matches "FEBIBILSTEIN")
-              OR (
-                LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 3
-                AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
-                  LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
-              )
-              -- OR reverse prefix: TecDoc brand is prefix of IC brand (e.g. "TRW" matches "TRWAUTOMOTIVE")
-              OR (
-                LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 3
-                AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
-                  LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
-              )
+      // =========== PHASE 1: Match unlinked products (no icSku yet) ===========
+      // Strategy A: Brand + article_number (existing logic, improved)
+      logger.info({ supplier: this.code }, "Phase 1A: Matching by brand + article number...");
+      const brandMatches = await prisma.$queryRawUnsafe<Array<{
+        product_id: number;
+        tow_kod: string;
+        ic_ean: string | null;
+        ic_weight: number | null;
+      }>>(
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        JOIN brands b ON b.id = pm.brand_id
+        JOIN intercars_mappings im ON
+          UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+          AND (
+            UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+            OR (
+              LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 3
+              AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
             )
-          WHERE pm.status = 'active'
-          ORDER BY pm.id
+            OR (
+              LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 3
+              AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+            )
+          )
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+        ORDER BY pm.id`
+      );
+
+      if (brandMatches.length > 0) {
+        logger.info({ supplier: this.code, count: brandMatches.length }, "Brand+article matches found, storing icSku");
+        for (let i = 0; i < brandMatches.length; i += 500) {
+          const batch = brandMatches.slice(i, i + 500);
+          const cases = batch.map((m) => `WHEN ${m.product_id} THEN '${m.tow_kod.replace(/'/g, "''")}'`).join(" ");
+          const eanCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_ean ? `'${m.ic_ean.replace(/'/g, "''")}'` : "NULL"}`).join(" ");
+          const weightCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_weight ?? "NULL"}`).join(" ");
+          const ids = batch.map((m) => m.product_id).join(",");
+          await prisma.$executeRawUnsafe(
+            `UPDATE product_maps SET
+              ic_sku = CASE id ${cases} END,
+              ic_matched_at = NOW(),
+              ean = CASE id ${eanCases} ELSE ean END,
+              weight = CASE id ${weightCases} ELSE weight END
+            WHERE id IN (${ids})`
+          );
+        }
+        totalNewMatches += brandMatches.length;
+      }
+
+      // Strategy B: EAN match (products without icSku that have an EAN matching IC CSV)
+      logger.info({ supplier: this.code }, "Phase 1B: Matching by EAN...");
+      const eanMatches = await prisma.$queryRawUnsafe<Array<{
+        product_id: number;
+        tow_kod: string;
+        ic_ean: string | null;
+        ic_weight: number | null;
+      }>>(
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        JOIN intercars_mappings im ON
+          pm.ean IS NOT NULL
+          AND im.ean IS NOT NULL
+          AND LENGTH(pm.ean) >= 8
+          AND UPPER(TRIM(pm.ean)) = UPPER(TRIM(im.ean))
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+        ORDER BY pm.id`
+      );
+
+      if (eanMatches.length > 0) {
+        logger.info({ supplier: this.code, count: eanMatches.length }, "EAN matches found, storing icSku");
+        for (let i = 0; i < eanMatches.length; i += 500) {
+          const batch = eanMatches.slice(i, i + 500);
+          const cases = batch.map((m) => `WHEN ${m.product_id} THEN '${m.tow_kod.replace(/'/g, "''")}'`).join(" ");
+          const weightCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_weight ?? "NULL"}`).join(" ");
+          const ids = batch.map((m) => m.product_id).join(",");
+          await prisma.$executeRawUnsafe(
+            `UPDATE product_maps SET
+              ic_sku = CASE id ${cases} END,
+              ic_matched_at = NOW(),
+              weight = CASE id ${weightCases} ELSE weight END
+            WHERE id IN (${ids})`
+          );
+        }
+        totalNewMatches += eanMatches.length;
+      }
+
+      // Strategy C: TecDoc product ID match
+      logger.info({ supplier: this.code }, "Phase 1C: Matching by TecDoc product ID...");
+      const tecdocMatches = await prisma.$queryRawUnsafe<Array<{
+        product_id: number;
+        tow_kod: string;
+        ic_ean: string | null;
+        ic_weight: number | null;
+      }>>(
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        JOIN intercars_mappings im ON
+          pm.tecdoc_id IS NOT NULL
+          AND im.tecdoc_prod IS NOT NULL
+          AND CAST(pm.tecdoc_id AS TEXT) = CAST(im.tecdoc_prod AS TEXT)
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+        ORDER BY pm.id`
+      );
+
+      if (tecdocMatches.length > 0) {
+        logger.info({ supplier: this.code, count: tecdocMatches.length }, "TecDoc ID matches found, storing icSku");
+        for (let i = 0; i < tecdocMatches.length; i += 500) {
+          const batch = tecdocMatches.slice(i, i + 500);
+          const cases = batch.map((m) => `WHEN ${m.product_id} THEN '${m.tow_kod.replace(/'/g, "''")}'`).join(" ");
+          const eanCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_ean ? `'${m.ic_ean.replace(/'/g, "''")}'` : "NULL"}`).join(" ");
+          const weightCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_weight ?? "NULL"}`).join(" ");
+          const ids = batch.map((m) => m.product_id).join(",");
+          await prisma.$executeRawUnsafe(
+            `UPDATE product_maps SET
+              ic_sku = CASE id ${cases} END,
+              ic_matched_at = NOW(),
+              ean = CASE id ${eanCases} ELSE ean END,
+              weight = CASE id ${weightCases} ELSE weight END
+            WHERE id IN (${ids})`
+          );
+        }
+        totalNewMatches += tecdocMatches.length;
+      }
+
+      // Strategy D: Article number only (no brand check, but only when article is unique in IC)
+      logger.info({ supplier: this.code }, "Phase 1D: Matching by unique article number...");
+      const articleOnlyMatches = await prisma.$queryRawUnsafe<Array<{
+        product_id: number;
+        tow_kod: string;
+        ic_ean: string | null;
+        ic_weight: number | null;
+      }>>(
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        JOIN intercars_mappings im ON
+          UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+          AND (SELECT COUNT(*) FROM intercars_mappings im2
+               WHERE UPPER(regexp_replace(im2.article_number, '[^a-zA-Z0-9]', '', 'g'))
+                   = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))) = 1
+        ORDER BY pm.id
+        LIMIT 100000`
+      );
+
+      if (articleOnlyMatches.length > 0) {
+        logger.info({ supplier: this.code, count: articleOnlyMatches.length }, "Unique article matches found, storing icSku");
+        for (let i = 0; i < articleOnlyMatches.length; i += 500) {
+          const batch = articleOnlyMatches.slice(i, i + 500);
+          const cases = batch.map((m) => `WHEN ${m.product_id} THEN '${m.tow_kod.replace(/'/g, "''")}'`).join(" ");
+          const eanCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_ean ? `'${m.ic_ean.replace(/'/g, "''")}'` : "NULL"}`).join(" ");
+          const weightCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_weight ?? "NULL"}`).join(" ");
+          const ids = batch.map((m) => m.product_id).join(",");
+          await prisma.$executeRawUnsafe(
+            `UPDATE product_maps SET
+              ic_sku = CASE id ${cases} END,
+              ic_matched_at = NOW(),
+              ean = CASE id ${eanCases} ELSE ean END,
+              weight = CASE id ${weightCases} ELSE weight END
+            WHERE id IN (${ids})`
+          );
+        }
+        totalNewMatches += articleOnlyMatches.length;
+      }
+
+      logger.info(
+        { supplier: this.code, totalNewMatches, brandMatches: brandMatches.length, eanMatches: eanMatches.length, tecdocMatches: tecdocMatches.length, articleOnlyMatches: articleOnlyMatches.length },
+        "Phase 1 matching complete"
+      );
+
+      // =========== PHASE 2: Fetch prices/stock for ALL linked products ===========
+      logger.info({ supplier: this.code }, "Phase 2: Fetching prices and stock for linked products...");
+
+      const PAGE_SIZE = 500;
+      let offset = 0;
+
+      while (true) {
+        const linkedProducts = await prisma.$queryRawUnsafe<Array<{
+          product_id: number;
+          ic_sku: string;
+        }>>(
+          `SELECT id as product_id, ic_sku
+          FROM product_maps
+          WHERE ic_sku IS NOT NULL AND status = 'active'
+          ORDER BY id
           LIMIT ${PAGE_SIZE} OFFSET ${offset}`
         );
 
-        if (matchedProducts.length === 0) break;
-
-        totalMatched += matchedProducts.length;
+        if (linkedProducts.length === 0) break;
         offset += PAGE_SIZE;
 
-        // Use /inventory/quote (POST) for combined stock + pricing per batch
+        // Fetch prices/stock in batches of 20
         const BATCH_SIZE = 20;
-        const retryTracker = new Map<string, number>();
-        for (let i = 0; i < matchedProducts.length; i += BATCH_SIZE) {
-          const batch = matchedProducts.slice(i, i + BATCH_SIZE);
+        for (let i = 0; i < linkedProducts.length; i += BATCH_SIZE) {
+          const batch = linkedProducts.slice(i, i + BATCH_SIZE);
 
           try {
-            const headers = await this.authHeaders();
+            const quoteMap = await this.fetchQuoteBatch(batch.map((p) => p.ic_sku));
 
-            // Build lines array for batch quote request
-            const lines = batch.map((p) => ({ sku: p.tow_kod, quantity: 1 }));
-            const quoteUrl = `${this.apiUrl}/inventory/quote`;
-            const quoteResp = await this.syncFetch(quoteUrl, {
-              ...headers,
-              "Content-Type": "application/json",
-            }, {
-              method: "POST",
-              body: JSON.stringify({ lines }),
-            });
+            for (const product of batch) {
+              const quote = quoteMap.get(product.ic_sku);
+              if (!quote) continue;
 
-            if (quoteResp.ok) {
-              const quoteData = (await quoteResp.json()) as Array<{
-                sku: string;
-                quantity: number;
-                price?: {
-                  currencyCode?: string;
-                  listPriceNet?: number;
-                  customerPriceNet?: number;
-                  vatPercentage?: number;
-                };
-                lines?: Array<{ availability?: number }>;
-              }>;
-
-              const quoteItems = Array.isArray(quoteData) ? quoteData : [];
-
-              // Build map of SKU -> price+stock
-              const quoteMap = new Map<string, { price: number | null; currency: string; stock: number }>();
-              for (const item of quoteItems) {
-                const sku = item.sku;
-                const price = item.price?.customerPriceNet ?? item.price?.listPriceNet ?? null;
-                const currency = item.price?.currencyCode ?? "EUR";
-                const stock = item.lines?.reduce((sum, l) => sum + (l.availability ?? 0), 0) ?? 0;
-                const existing = quoteMap.get(sku);
-                if (existing) {
-                  // Aggregate stock from multiple warehouse entries
-                  existing.stock += stock;
-                  if (!existing.price && price) {
-                    existing.price = price;
-                    existing.currency = currency;
-                  }
-                } else {
-                  quoteMap.set(sku, { price, currency, stock });
-                }
-              }
-
-              // Update each matched product
-              for (const product of batch) {
-                const quote = quoteMap.get(product.tow_kod);
-                if (!quote) continue;
-
-                try {
-                  await prisma.$executeRawUnsafe(
-                    `UPDATE product_maps SET
-                      price = COALESCE($1, price),
-                      stock = $2,
-                      currency = COALESCE($3, currency),
-                      ean = COALESCE($4, ean),
-                      updated_at = NOW()
-                    WHERE id = $5`,
-                    quote.price,
-                    quote.stock,
-                    quote.currency,
-                    product.ic_ean,
-                    product.product_id
-                  );
-                  totalUpdated++;
-                } catch {
-                  // Skip individual update errors
-                }
-              }
-            } else if (quoteResp.status === 429) {
-              // Rate limited — wait and retry (max 3 times per batch)
-              totalApiErrors++;
-              const retryKey = `retry_${i}`;
-              const retryCount = (retryTracker.get(retryKey) ?? 0) + 1;
-              retryTracker.set(retryKey, retryCount);
-
-              if (retryCount <= 3) {
-                const waitSec = retryCount * 30; // 30s, 60s, 90s
-                logger.warn({ supplier: this.code, retryCount, waitSec }, "IC rate limited, backing off");
-                await new Promise((r) => setTimeout(r, waitSec * 1000));
-                i -= BATCH_SIZE; // Retry this batch
-                continue;
-              }
-
-              logger.error({ supplier: this.code }, "IC rate limit retries exhausted for batch, skipping");
-              retryTracker.delete(retryKey);
-            } else {
-              totalApiErrors++;
-              if (totalApiErrors <= 5) {
-                const body = await quoteResp.text().catch(() => "");
-                logger.warn({ status: quoteResp.status, body: body.slice(0, 200) }, "IC inventory/quote API error");
-              }
-              // Fallback: try individual stock calls
-              for (const product of batch) {
-                try {
-                  const stockUrl = `${this.apiUrl}/inventory/stock?sku=${encodeURIComponent(product.tow_kod)}`;
-                  const stockResp = await this.syncFetch(stockUrl, headers);
-                  if (stockResp.ok) {
-                    const stockData = (await stockResp.json()) as StockItem[] | { items?: StockItem[] };
-                    const stockItems = Array.isArray(stockData) ? stockData : (stockData.items ?? []);
-                    const stockQty = stockItems.reduce((sum: number, s: StockItem) => sum + (s.availability ?? 0), 0);
-                    await prisma.$executeRawUnsafe(
-                      `UPDATE product_maps SET stock = $1, ean = COALESCE($2, ean), updated_at = NOW() WHERE id = $3`,
-                      stockQty, product.ic_ean, product.product_id
-                    );
-                    totalUpdated++;
-                  }
-                  await new Promise((r) => setTimeout(r, 200));
-                } catch {
-                  // Skip
-                }
+              try {
+                await prisma.$executeRawUnsafe(
+                  `UPDATE product_maps SET
+                    price = COALESCE($1, price),
+                    stock = $2,
+                    currency = COALESCE($3, currency),
+                    updated_at = NOW()
+                  WHERE id = $4`,
+                  quote.price,
+                  quote.stock,
+                  quote.currency,
+                  product.product_id
+                );
+                totalUpdated++;
+              } catch {
+                // Skip individual update errors
               }
             }
           } catch (err) {
-            logger.warn({ err, supplier: this.code }, "InterCars batch fetch failed");
+            totalApiErrors++;
+            if (totalApiErrors <= 5) {
+              logger.warn({ err, supplier: this.code }, "IC batch fetch failed");
+            }
           }
 
           // Rate limit: 300ms between batch calls
           await new Promise((r) => setTimeout(r, 300));
         }
 
-        // Log progress
         logger.info(
-          { supplier: this.code, matched: totalMatched, updated: totalUpdated, apiErrors: totalApiErrors, offset },
-          "InterCars pricing enrichment progress"
+          { supplier: this.code, updated: totalUpdated, apiErrors: totalApiErrors, offset },
+          "Price/stock refresh progress"
         );
       }
 
@@ -528,11 +592,70 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       yield [];
 
       logger.info(
-        { supplier: this.code, totalMatched, totalUpdated },
+        { supplier: this.code, totalNewMatches, totalUpdated, totalApiErrors },
         "InterCars pricing enrichment completed"
       );
     } catch (err) {
       logger.error({ err, supplier: this.code }, "InterCars pricing enrichment failed");
     }
+  }
+
+  /**
+   * Fetch price/stock for a batch of IC SKUs via /inventory/quote.
+   */
+  async fetchQuoteBatch(skus: string[]): Promise<Map<string, { price: number | null; currency: string; stock: number }>> {
+    const quoteMap = new Map<string, { price: number | null; currency: string; stock: number }>();
+
+    const headers = await this.authHeaders();
+    const lines = skus.map((sku) => ({ sku, quantity: 1 }));
+    const quoteUrl = `${this.apiUrl}/inventory/quote`;
+
+    const quoteResp = await this.syncFetch(quoteUrl, {
+      ...headers,
+      "Content-Type": "application/json",
+    }, {
+      method: "POST",
+      body: JSON.stringify({ lines }),
+    });
+
+    if (!quoteResp.ok) {
+      if (quoteResp.status === 429) {
+        // Rate limited — wait 30s and throw to retry
+        await new Promise((r) => setTimeout(r, 30_000));
+      }
+      throw new Error(`IC inventory/quote returned ${quoteResp.status}`);
+    }
+
+    const quoteData = (await quoteResp.json()) as Array<{
+      sku: string;
+      quantity: number;
+      price?: {
+        currencyCode?: string;
+        listPriceNet?: number;
+        customerPriceNet?: number;
+      };
+      lines?: Array<{ availability?: number }>;
+    }>;
+
+    const quoteItems = Array.isArray(quoteData) ? quoteData : [];
+
+    for (const item of quoteItems) {
+      const sku = item.sku;
+      const price = item.price?.customerPriceNet ?? item.price?.listPriceNet ?? null;
+      const currency = item.price?.currencyCode ?? "EUR";
+      const stock = item.lines?.reduce((sum, l) => sum + (l.availability ?? 0), 0) ?? 0;
+      const existing = quoteMap.get(sku);
+      if (existing) {
+        existing.stock += stock;
+        if (!existing.price && price) {
+          existing.price = price;
+          existing.currency = currency;
+        }
+      } else {
+        quoteMap.set(sku, { price, currency, stock });
+      }
+    }
+
+    return quoteMap;
   }
 }

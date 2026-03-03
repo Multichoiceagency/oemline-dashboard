@@ -251,30 +251,15 @@ export async function finalizedRoutes(app: FastifyInstance) {
       }),
     ]);
 
-    // IC mapping count — use products that have price from IC sync (proxy for mapping)
-    // This avoids the expensive regex JOIN on every stats request
+    // IC mapping count — count products with stored icSku (direct IC link)
     let withIcMapping = 0;
     try {
       withIcMapping = await prisma.productMap.count({
         where: {
           status: "active",
-          price: { not: null },
-          supplier: { code: "intercars" },
+          icSku: { not: null },
         },
       });
-      // Fallback: if no IC supplier, count products with price that have a matching IC record
-      if (withIcMapping === 0) {
-        const icResult = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
-          `SELECT COUNT(*) AS count FROM intercars_mappings`
-        );
-        const icTotal = Number(icResult[0]?.count ?? 0);
-        // If IC mappings exist, use a lightweight estimate: products with price set by IC sync
-        if (icTotal > 0) {
-          withIcMapping = await prisma.productMap.count({
-            where: { status: "active", price: { not: null } },
-          });
-        }
-      }
     } catch (err) {
       logger.warn({ err }, "Failed to count IC mappings for finalized stats");
     }

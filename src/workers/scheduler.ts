@@ -1,34 +1,26 @@
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { syncQueue, matchQueue, indexQueue } from "./queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue } from "./queues.js";
 
 /**
- * Sets up repeatable jobs for continuous sync, match, and index operations.
+ * Sets up repeatable jobs for continuous sync, match, pricing, stock, and index.
  *
- * Schedule (aggressive for initial ~2M product sync):
- * - Sync:  Every 5 minutes for each active supplier (quick recovery on failure)
- * - Match: Every 10 minutes for each active supplier
- * - Index: Every 15 minutes (search index rebuild)
- *
- * Also runs an initial sync/match/index on startup.
+ * Schedule:
+ * - Sync:    Every 4 hours per supplier (IC matching + initial price fetch)
+ * - Match:   Every 2 hours per supplier (rematch unmatched products)
+ * - Pricing: Every 1 hour (refresh prices for IC-linked products)
+ * - Stock:   Every 30 minutes (refresh stock for IC-linked products)
+ * - Index:   Every 2 hours (Meilisearch rebuild)
  */
 export async function startScheduler(): Promise<void> {
   logger.info("Starting job scheduler...");
 
   // Clean up old repeatable jobs to avoid duplicates
-  const existingSyncJobs = await syncQueue.getRepeatableJobs();
-  for (const job of existingSyncJobs) {
-    await syncQueue.removeRepeatableByKey(job.key);
-  }
-
-  const existingMatchJobs = await matchQueue.getRepeatableJobs();
-  for (const job of existingMatchJobs) {
-    await matchQueue.removeRepeatableByKey(job.key);
-  }
-
-  const existingIndexJobs = await indexQueue.getRepeatableJobs();
-  for (const job of existingIndexJobs) {
-    await indexQueue.removeRepeatableByKey(job.key);
+  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue]) {
+    const existing = await queue.getRepeatableJobs();
+    for (const job of existing) {
+      await queue.removeRepeatableByKey(job.key);
+    }
   }
 
   // Get all active suppliers
@@ -40,35 +32,55 @@ export async function startScheduler(): Promise<void> {
   logger.info({ supplierCount: suppliers.length }, "Scheduling jobs for active suppliers");
 
   for (const supplier of suppliers) {
-    // Schedule repeating sync: every 5 minutes (aggressive for 2M product catalog)
+    // Sync: every 4 hours (matching + price fetch combined)
     await syncQueue.add(
       `sync-${supplier.code}`,
       { supplierCode: supplier.code },
       {
-        repeat: { every: 5 * 60 * 1000 }, // 5 minutes
+        repeat: { every: 4 * 60 * 60 * 1000 },
         jobId: `sync-repeat-${supplier.code}`,
       }
     );
 
-    // Schedule repeating match: every 10 minutes
+    // Match: every 2 hours (rematch unmatched products)
     await matchQueue.add(
       `match-${supplier.code}`,
       { supplierCode: supplier.code },
       {
-        repeat: { every: 10 * 60 * 1000 }, // 10 minutes
+        repeat: { every: 2 * 60 * 60 * 1000 },
         jobId: `match-repeat-${supplier.code}`,
       }
     );
 
-    logger.info({ supplier: supplier.code }, "Scheduled sync (5m) and match (10m)");
+    // Pricing: every 1 hour (refresh prices for linked products)
+    await pricingQueue.add(
+      `pricing-${supplier.code}`,
+      { supplierCode: supplier.code },
+      {
+        repeat: { every: 60 * 60 * 1000 },
+        jobId: `pricing-repeat-${supplier.code}`,
+      }
+    );
+
+    // Stock: every 30 minutes (refresh stock for linked products)
+    await stockQueue.add(
+      `stock-${supplier.code}`,
+      { supplierCode: supplier.code },
+      {
+        repeat: { every: 30 * 60 * 1000 },
+        jobId: `stock-repeat-${supplier.code}`,
+      }
+    );
+
+    logger.info({ supplier: supplier.code }, "Scheduled sync(4h), match(2h), pricing(1h), stock(30m)");
   }
 
-  // Schedule repeating index rebuild: every 2 hours
+  // Index: every 2 hours
   await indexQueue.add(
     "reindex-all",
     {},
     {
-      repeat: { every: 2 * 60 * 60 * 1000 }, // 2 hours
+      repeat: { every: 2 * 60 * 60 * 1000 },
       jobId: "index-repeat-all",
     }
   );

@@ -105,6 +105,8 @@ model ProductMap {
   weight      Float?
   genericArticle String? @map("generic_article")
   oemNumbers  Json?    @default("[]") @map("oem_numbers")
+  icSku       String?  @map("ic_sku")
+  icMatchedAt DateTime? @map("ic_matched_at")
   status      String   @default("active")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
@@ -123,6 +125,7 @@ model ProductMap {
   @@index([oem])
   @@index([articleNo])
   @@index([createdAt])
+  @@index([icSku])
   @@map("product_maps")
 }
 

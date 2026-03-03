@@ -252,6 +252,7 @@ function formatProduct(p: Record<string, unknown>) {
     currency: p.currency ?? "EUR",
     stock: p.stock,
     weight: p.weight,
+    icSku: p.icSku ?? null,
     status: p.status,
     supplier: p.supplier,
     brand: p.brand,
