@@ -6,8 +6,16 @@
  * and static pages. Only runs once (sets an option flag after completion).
  *
  * Triggered by visiting: /wp-admin/admin.php?page=oemline-seed
- * Or automatically on first activation if ACF PRO is installed.
+ * Or automatically on first admin load if ACF PRO is installed and content hasn't been seeded yet.
  */
+
+// Auto-seed on first admin load if ACF is available and not yet seeded
+add_action('admin_init', function () {
+    if (get_option('oemline_content_seeded')) return;
+    if (!function_exists('update_field')) return;
+    // Run auto-seed
+    oemline_run_seed();
+}, 999);
 
 // Add admin menu item for manual seeding
 add_action('admin_menu', function () {

@@ -572,7 +572,34 @@ add_action('rest_api_init', function () {
 });
 
 // ============================================================
-// 13. STOREFRONT CONNECTION
+// 13. ADMIN SEARCH SCRIPTS — ACF autocomplete via Dashboard API
+// ============================================================
+add_action('admin_enqueue_scripts', function () {
+    $theme_uri = get_stylesheet_directory_uri();
+
+    wp_enqueue_style(
+        'oemline-admin-search',
+        $theme_uri . '/css/admin-search.css',
+        [],
+        filemtime(get_stylesheet_directory() . '/css/admin-search.css')
+    );
+
+    wp_enqueue_script(
+        'oemline-admin-search',
+        $theme_uri . '/js/admin-search.js',
+        ['jquery'],
+        filemtime(get_stylesheet_directory() . '/js/admin-search.js'),
+        true
+    );
+
+    wp_localize_script('oemline-admin-search', 'oemlineAdmin', [
+        'restUrl' => esc_url_raw(rest_url('oemline/v1')),
+        'nonce'   => wp_create_nonce('wp_rest'),
+    ]);
+});
+
+// ============================================================
+// 14. STOREFRONT CONNECTION
 // Configure the storefront URL for cross-linking from WordPress admin.
 // ============================================================
 add_action('admin_menu', function () {
