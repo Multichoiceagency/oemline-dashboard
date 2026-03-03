@@ -1,33 +1,61 @@
 # Plan: WordPress + WooCommerce Docker Service on Coolify
 
 ## Context
-Replace Payload CMS + Medusa with WordPress + WooCommerce as the single backend for the OEMline storefront. WordPress must replicate ALL functionality currently in Payload CMS (11 collections, 8 globals, 20 content blocks) plus WooCommerce for e-commerce (checkout, cart, payments, tax). The existing Next.js storefront will call WordPress REST API instead of Payload API.
+Replace **Payload CMS** with **WordPress + WooCommerce** as the CMS and e-commerce backend for the OEMline storefront.
+
+**Current state (as of March 2026):**
+- The **OEMline Dashboard API** (Fastify) is the **single source of truth** for all product data: products, brands, categories, prices, and stock. Products originate from TecDoc sync, prices from InterCars enrichment, all managed in PostgreSQL.
+- The **Next.js storefront** already fetches all product/brand/category data from the Dashboard API (`/api/storefront/*`). Medusa has been fully removed from the product display flow.
+- **Payload CMS** still manages CMS content (pages, site settings, homepage layout, header, footer, menus, klantenservice, etc.) — this is what WordPress replaces.
+- **Medusa** still handles cart/checkout/orders — WooCommerce + CoCart replaces this.
+
+**What WordPress replaces:**
+1. **Payload CMS** (11 collections, 8 globals, 20 content blocks) → WordPress + ACF PRO
+2. **Medusa checkout/cart** → WooCommerce + CoCart + Mollie
+
+**What WordPress does NOT replace:**
+- Product catalog, brands, categories, prices, stock → stays in Dashboard API
+- TecDoc integration → stays in Dashboard API
+- InterCars pricing enrichment → stays in Dashboard API
+- Meilisearch indexing → stays in Dashboard API
 
 ## Architecture
 ```
 Coolify Server (49.13.147.126)
-├── PostgreSQL          (existing - OEMline DB)
+├── PostgreSQL          (existing - OEMline DB: products, brands, categories, prices)
 ├── Redis               (existing - caching)
-├── Meilisearch         (existing - search)
+├── Meilisearch         (existing - product search)
 ├── MinIO               (existing - file storage)
-├── OEMline API         (existing - Fastify)
-├── OEMline Worker      (existing - BullMQ)
-├── OEMline Dashboard   (existing - Next.js)
+├── OEMline API         (existing - Fastify, serves /api/storefront/*)
+├── OEMline Worker      (existing - BullMQ: TecDoc sync, IC pricing, Meilisearch indexing)
+├── OEMline Dashboard   (existing - Next.js admin UI)
 ├── MariaDB        ← NEW (WordPress database)
 └── WordPress      ← NEW (WooCommerce + Mollie + ACF PRO)
 ```
 
-### Storefront API mapping (old → new)
+### Storefront data sources (current → after migration)
 ```
-OLD: Payload API  /api/pages?slug=home     → NEW: WP REST  /wp-json/wp/v2/pages?slug=home
-OLD: Payload API  /api/globals/site-settings → NEW: WP REST  /wp-json/acf/v3/options/site-settings
-OLD: Payload API  /api/globals/homepage     → NEW: WP REST  /wp-json/acf/v3/options/homepage
-OLD: Payload API  /api/globals/header       → NEW: WP REST  /wp-json/acf/v3/options/header
-OLD: Payload API  /api/globals/footer       → NEW: WP REST  /wp-json/acf/v3/options/footer
-OLD: Payload API  /api/menus                → NEW: WP REST  /wp-json/wp/v2/oemline-menu
-OLD: Medusa API   /store/products           → NEW: WC REST  /wp-json/wc/v3/products
-OLD: Medusa API   /store/carts              → NEW: WC REST  /wp-json/wc/v3/cart (CoCart)
-OLD: OEMline API  /api/storefront/*         → UNCHANGED (TecDoc products stay here)
+PRODUCT DATA (already migrated — NO CHANGE):
+  Dashboard API  /api/storefront/products     → products list, search, filter
+  Dashboard API  /api/storefront/products/:id → product detail
+  Dashboard API  /api/storefront/lookup       → lookup by articleNo, EAN, OEM
+  Dashboard API  /api/storefront/brands       → all brands with logos + counts
+  Dashboard API  /api/storefront/categories   → category tree with product counts
+  Dashboard API  /api/settings                → tax rate, margin, currency
+  Dashboard API  /api/finalized               → pricing preview + stats
+
+CMS CONTENT (Payload → WordPress):
+  OLD: Payload API  /api/pages?slug=home       → NEW: WP REST  /wp-json/wp/v2/pages?slug=home
+  OLD: Payload API  /api/globals/site-settings → NEW: WP REST  /wp-json/acf/v3/options/site-settings
+  OLD: Payload API  /api/globals/homepage      → NEW: WP REST  /wp-json/acf/v3/options/homepage
+  OLD: Payload API  /api/globals/header        → NEW: WP REST  /wp-json/acf/v3/options/header
+  OLD: Payload API  /api/globals/footer        → NEW: WP REST  /wp-json/acf/v3/options/footer
+  OLD: Payload API  /api/menus                 → NEW: WP REST  /wp-json/wp/v2/oemline-menu
+
+CART / CHECKOUT (Medusa → WooCommerce):
+  OLD: Medusa API   /store/carts               → NEW: CoCart   /wp-json/cocart/v2/cart
+  OLD: Medusa API   /store/orders              → NEW: WC REST  /wp-json/wc/v3/orders
+  OLD: Medusa API   /store/payment-sessions    → NEW: Mollie   (via WooCommerce checkout)
 ```
 
 ---
@@ -201,36 +229,42 @@ Minimal theme (no frontend rendering). All logic in `functions.php`:
 |-------|------|---------|
 | `enabled` | True/False | true |
 | `title` | Text | Shop by Category |
-| **categories** | Repeater | |
-| ├ `source` | Select (manual/collection) | |
-| ├ `name` | Text | (if manual) |
-| ├ `image` | Image | (if manual) |
-| ├ `link_type` | Select (tecdoc/custom) | |
-| ├ `tecdoc_category_id` | Number | (if tecdoc) |
-| ├ `link` | URL | (if custom) |
-| └ `featured_category` | Post Object (featured-category CPT) | (if collection) |
+| `source` | Select (dashboard/manual) | dashboard |
+| `max_categories` | Number | 8 |
+| **manual_categories** | Repeater | (if manual) |
+| ├ `name` | Text | |
+| ├ `image` | Image | |
+| ├ `dashboard_category_id` | Number | (links to Dashboard API category) |
+| └ `link` | URL | (custom override) |
+
+*Note: When source=dashboard, categories are fetched from Dashboard API `/api/storefront/categories`. Each category includes name, productCount, childCount.*
 
 #### Layout: `brand_logos`
 | Field | Type | Default |
 |-------|------|---------|
 | `enabled` | True/False | true |
-| `source` | Select (tecdoc/manual) | tecdoc |
+| `source` | Select (dashboard/manual) | dashboard |
 | **manual_brands** | Repeater | (if manual) |
 | ├ `name` | Text | |
 | ├ `logo` | Image | |
 | └ `link` | URL | |
+| `max_brands` | Number | 24 |
+
+*Note: When source=dashboard, brands + logos are fetched from Dashboard API `/api/storefront/brands`*
 
 #### Layout: `brand_carousel`
 | Field | Type | Default |
 |-------|------|---------|
 | `enabled` | True/False | true |
 | `title` | Text | Onze Merken |
-| `source` | Select (tecdoc/manual) | tecdoc |
+| `source` | Select (dashboard/manual) | dashboard |
 | **manual_brands** | Repeater | (if manual) |
 | `max_brands` | Number | 24 |
 | `show_view_all` | True/False | true |
 | `view_all_text` | Text | Bekijk alle merken |
 | `view_all_link` | URL | /brands |
+
+*Note: When source=dashboard, brands + logos are fetched from Dashboard API `/api/storefront/brands`*
 
 #### Layout: `carousel`
 | Field | Type | Default |
@@ -267,9 +301,10 @@ Minimal theme (no frontend rendering). All logic in `functions.php`:
 | `layout` | Select (grid/carousel/deal-zone) | grid |
 | `subtitle` | Text | (if carousel) |
 | `background_image` | Image | (if deal-zone) |
-| `product_source` | Select (tecdoc/manual/woocommerce) | tecdoc |
-| `tecdoc_category_ids` | Text | (if tecdoc) |
-| `wc_product_ids` | Text | (if woocommerce, comma-separated) |
+| `product_source` | Select (dashboard/manual) | dashboard |
+| `dashboard_category_id` | Number | (if dashboard, fetches from Dashboard API) |
+| `dashboard_brand_code` | Text | (if dashboard, filter by brand) |
+| `manual_article_numbers` | Text | (if manual, comma-separated articleNo values looked up via Dashboard API) |
 | `view_all_link` | URL | (if carousel) |
 | `max_products` | Number | 12 |
 
@@ -279,9 +314,10 @@ Minimal theme (no frontend rendering). All logic in `functions.php`:
 | `enabled` | True/False | true |
 | **columns** | Repeater (1-4) | |
 | ├ `title` | Text | |
-| ├ `product_source` | Select (manual/tecdoc/woocommerce) | |
-| ├ `tecdoc_category_id` | Number | (if tecdoc) |
-| └ `wc_product_ids` | Text | (if woocommerce) |
+| ├ `product_source` | Select (manual/dashboard) | dashboard |
+| ├ `dashboard_category_id` | Number | (if dashboard) |
+| ├ `dashboard_brand_code` | Text | (if dashboard) |
+| └ `manual_article_numbers` | Text | (if manual, comma-separated) |
 | `max_per_column` | Number | 6 |
 
 #### Layout: `seo_text`
@@ -452,13 +488,13 @@ Minimal theme (no frontend rendering). All logic in `functions.php`:
 | ├ `enabled` | True/False | true |
 | └ `custom_content` | WYSIWYG | (if key=custom) |
 | **sidebar_sections** | Flexible Content | |
-| ├ Layout: `frequently_bought_together` | enabled, title, max_products, product_source, wc_product_ids | |
+| ├ Layout: `frequently_bought_together` | enabled, title, max_products, product_source (dashboard/manual), manual_article_numbers | |
 | ├ Layout: `trust_badges` | enabled, badges repeater (icon + title + description) | |
 | └ Layout: `promo_banner` | enabled, text, link, bg_color, text_color | |
 | **below_product_sections** | Flexible Content | |
 | ├ Layout: `compatibility_alert` | enabled, title, description | |
-| ├ Layout: `customers_also_ordered` | enabled, title, max_products, product_source | |
-| ├ Layout: `product_showcase` | enabled, title, layout, product_source, max_products | |
+| ├ Layout: `customers_also_ordered` | enabled, title, max_products, product_source (dashboard/manual) | |
+| ├ Layout: `product_showcase` | enabled, title, layout, product_source (dashboard/manual), max_products | |
 | ├ Layout: `related_products` | enabled, title, title_highlight, max_products | |
 | ├ Layout: `product_faq` | enabled, title, items repeater (question + answer) | |
 | ├ Layout: `price_cta` | enabled, title, description, button_text, bg_color | |
@@ -483,8 +519,9 @@ Minimal theme (no frontend rendering). All logic in `functions.php`:
 | **cross_sell** | Group | |
 | ├ `enabled` | True/False | false |
 | ├ `title` | Text | Klanten kochten ook |
-| ├ `product_source` | Select (tecdoc/woocommerce) | |
-| ├ `wc_product_ids` | Text | |
+| ├ `product_source` | Select (dashboard/manual) | dashboard |
+| ├ `dashboard_category_id` | Number | (if dashboard) |
+| ├ `manual_article_numbers` | Text | (if manual, comma-separated) |
 | └ `max_products` | Number | 4 |
 | `payment_logos` | True/False | true |
 
@@ -536,32 +573,37 @@ Minimal theme (no frontend rendering). All logic in `functions.php`:
 ### 3k. CPT: Featured Products
 *Replaces Payload `featured-products` collection*
 
-| ACF Field | Type |
-|-----------|------|
-| `article_number` | Text (required) |
-| `brand` | Text |
-| `data_supplier_id` | Number |
-| `display_location` | Checkbox (homepage_top_rated, homepage_bestsellers, homepage_offers, homepage_new, category_featured, search_promoted) |
-| `custom_price` | Number |
-| `custom_image` | Image |
-| `badge` | Select (none/sale/new/hot/bestseller) |
-| `display_order` | Number |
-| `is_active` | True/False |
-| **cached_data** | Group (read-only display): tecdoc_title, tecdoc_brand, category_name, image_url, price, last_synced |
+| ACF Field | Type | Notes |
+|-----------|------|-------|
+| `article_number` | Text (required) | Looked up via Dashboard API `/api/storefront/lookup?articleNo=X` |
+| `brand_code` | Text | Dashboard brand code for filtering |
+| `dashboard_product_id` | Number | Auto-populated from Dashboard API lookup |
+| `display_location` | Checkbox (homepage_top_rated, homepage_bestsellers, homepage_offers, homepage_new, category_featured, search_promoted) | |
+| `custom_price` | Number | Override price (optional, normally from Dashboard API) |
+| `custom_image` | Image | Override image (optional, normally from Dashboard API) |
+| `badge` | Select (none/sale/new/hot/bestseller) | |
+| `display_order` | Number | |
+| `is_active` | True/False | |
+| **cached_data** | Group (read-only display): description, brand_name, category_name, image_url, price, stock, last_synced | Auto-synced from Dashboard API |
+
+*Note: The storefront fetches featured products by calling Dashboard API with the article numbers stored here. The Dashboard API returns price, stock, images, brand, and category data.*
 
 ### 3l. CPT: Featured Categories
 *Replaces Payload `featured-categories` collection*
 
-| ACF Field | Type |
-|-----------|------|
-| `tecdoc_category_id` | Number (required) |
-| `description` | Textarea |
-| `category_image` | Image |
-| `icon` | Text (Lucide icon name) |
-| `display_order` | Number |
-| `is_active` | True/False |
-| `show_on_homepage` | True/False |
-| `show_in_nav` | True/False |
+| ACF Field | Type | Notes |
+|-----------|------|-------|
+| `dashboard_category_id` | Number (required) | ID from Dashboard API `/api/storefront/categories` |
+| `description` | Textarea | Custom description override |
+| `category_image` | Image | Custom image (optional, Dashboard may provide one) |
+| `icon` | Text (Lucide icon name) | |
+| `display_order` | Number | |
+| `is_active` | True/False | |
+| `show_on_homepage` | True/False | |
+| `show_in_nav` | True/False | |
+| **cached_data** | Group (read-only): name, product_count, child_count | Auto-synced from Dashboard API |
+
+*Note: Category data (names, hierarchy, product counts) comes from Dashboard API. This CPT controls which categories are featured and adds custom display options.*
 
 ### 3m. CPT: Price Requests
 *Replaces Payload `price-requests` collection*
@@ -602,50 +644,51 @@ Minimal theme (no frontend rendering). All logic in `functions.php`:
 | `delivery_time` | Text |
 | `extra_info` | WYSIWYG |
 
-### 3o. CPT: Product Extensions (replaces MedusaProductExtensions)
-*Now links to WooCommerce products instead of Medusa*
+### 3o. CPT: Product Extensions
+*Replaces Payload `medusa-product-extensions` collection. Links to Dashboard API products, NOT WooCommerce products.*
 
-| ACF Field | Type |
-|-----------|------|
-| `wc_product_id` | Number (WooCommerce product ID) |
-| **tecdoc** | Group |
-| ├ `category_id` | Text |
-| ├ `category_name` | Text |
-| ├ `generic_article_id` | Number |
-| └ **oem_numbers** | Repeater: number + manufacturer |
-| **vehicle** | Group |
-| ├ **license_plates** | Repeater |
-| │ ├ `plate` | Text |
-| │ └ **vehicle_info** | Group: make, model, year, engine, fuel_type, body_type |
-| └ **manual_vehicles** | Repeater: make, model, year_from, year_to, engine, variant |
-| **specifications** | Group |
-| ├ **attributes** | Repeater: name + value + unit |
-| ├ `weight` | Number (gram) |
-| └ **dimensions** | Group: length + width + height (mm) |
-| **product_tabs** | Group |
-| ├ **custom_specifications** | Repeater: name + value + unit |
-| ├ `compatibility_notes` | Textarea |
-| ├ `delivery_info` | Textarea |
-| └ `custom_tab_content` | WYSIWYG |
-| **seo** | Group: meta_title + meta_description + keywords repeater |
+| ACF Field | Type | Notes |
+|-----------|------|-------|
+| `article_number` | Text (required) | Links to Dashboard API product via articleNo |
+| `dashboard_product_id` | Number | Auto-populated from Dashboard API lookup |
+| `brand_code` | Text | Dashboard brand code |
+| **vehicle** | Group | |
+| ├ **license_plates** | Repeater | |
+| │ ├ `plate` | Text | |
+| │ └ **vehicle_info** | Group: make, model, year, engine, fuel_type, body_type | |
+| └ **manual_vehicles** | Repeater: make, model, year_from, year_to, engine, variant | |
+| **extra_specifications** | Repeater: name + value + unit | Additional specs beyond what Dashboard provides |
+| **product_tabs** | Group | |
+| ├ **custom_specifications** | Repeater: name + value + unit | |
+| ├ `compatibility_notes` | Textarea | |
+| ├ `delivery_info` | Textarea | |
+| └ `custom_tab_content` | WYSIWYG | |
+| **seo** | Group: meta_title + meta_description + keywords repeater | |
 
-### 3p. WooCommerce Product Custom Fields
-*ACF fields on WooCommerce products for auto-parts data*
+*Note: Product core data (articleNo, EAN, OEM numbers, images, price, stock, brand, category, IC code) all come from the Dashboard API. This CPT only stores EXTRA data that the Dashboard doesn't have (vehicle fitment, custom tabs, SEO overrides).*
 
-| ACF Field | Type |
-|-----------|------|
-| `article_number` | Text |
-| `ean` | Text |
-| `tecdoc_id` | Text |
-| **oem_numbers** | Repeater: number |
-| `ic_code` | Text (InterCars TOW_KOD) |
-| `vehicle_applicability` | Textarea |
-| **tech_specifications** | Repeater: key + value + unit |
-| **documents** | Repeater: file (File) + label |
+### 3p. WooCommerce — Cart/Checkout Products Only
+*WooCommerce products are ONLY used for cart and checkout, NOT as the product catalog.*
+
+When a customer adds a Dashboard product to their cart, the storefront creates/syncs a minimal WooCommerce product:
+
+| WC Product Field | Source |
+|-----------------|--------|
+| `name` | Dashboard API: `description` |
+| `regular_price` | Dashboard API: `price` × (1 + margin%) × (1 + tax%) |
+| `sku` | Dashboard API: `articleNo` |
+| `stock_quantity` | Dashboard API: `stock` |
+| `images[0]` | Dashboard API: `imageUrl` |
+| `meta_data.dashboard_product_id` | Dashboard API: `id` |
+| `meta_data.brand_code` | Dashboard API: `brand.code` |
+
+*The storefront handles this sync automatically when adding to cart. WooCommerce products are disposable — the Dashboard API is the source of truth. This avoids duplicating the entire product catalog in WooCommerce.*
 
 ---
 
 ## Step 4: WooCommerce Configuration
+
+WooCommerce is used **only for cart, checkout, orders, and payments** — NOT as the product catalog.
 
 - Store base: NL, selling to EU + worldwide
 - Currency: EUR
@@ -654,6 +697,9 @@ Minimal theme (no frontend rendering). All logic in `functions.php`:
 - Tax enabled (see Step 5)
 - CoCart plugin for headless cart/checkout REST API
 - WooCommerce REST API keys for storefront
+- **Product catalog**: Disable WooCommerce shop/archive pages (products come from Dashboard API)
+- **Pricing**: Tax rate and margin settings are managed in the Dashboard (`/api/settings`). WooCommerce tax rates handle cart/checkout tax calculation only.
+- **Stock sync**: When a customer completes checkout, decrement stock in Dashboard API via webhook
 
 ---
 
@@ -726,6 +772,7 @@ Minimal theme (no frontend rendering). All logic in `functions.php`:
 
 ## Verification
 
+### WordPress / CMS Layer
 1. WordPress admin at `https://wp.oemline.eu/wp-admin`
 2. WooCommerce + Mollie activated and configured
 3. ACF PRO activated with all field groups
@@ -734,7 +781,23 @@ Minimal theme (no frontend rendering). All logic in `functions.php`:
 6. Homepage flexible content works (add/remove/reorder modules)
 7. REST API returns all ACF data: `GET /wp-json/wp/v2/pages?slug=home&_fields=acf`
 8. Global options accessible: `GET /wp-json/acf/v3/options/site-settings`
-9. WooCommerce products have auto-parts ACF fields
-10. Tax rates for 27 EU countries configured
-11. CORS allows storefront domain
-12. CoCart headless cart API works
+9. Tax rates for 27 EU countries configured
+10. CORS allows storefront domain
+11. CoCart headless cart API works
+
+### Dashboard API (already working — verify integration)
+12. Products endpoint: `GET /api/storefront/products?limit=10` returns products with prices
+13. Brands endpoint: `GET /api/storefront/brands` returns 97+ brands with logos
+14. Categories endpoint: `GET /api/storefront/categories` returns full category tree
+15. Lookup endpoint: `GET /api/storefront/lookup?articleNo=X` returns price + stock
+16. Settings endpoint: `GET /api/settings` returns `{ taxRate: 21, marginPercentage: X, currency: "EUR" }`
+17. Storefront `.env.local` has correct `DASHBOARD_API_KEY` matching dashboard's `API_KEY`
+
+### End-to-End Flow
+18. Homepage loads featured products from Dashboard API (with prices)
+19. Brand pages list products from Dashboard API `/api/storefront/products?brand=X`
+20. Category pages list products from Dashboard API `/api/storefront/products?categoryId=X`
+21. Product detail page shows price from Dashboard API (margin + tax applied)
+22. Add-to-cart creates WC product + CoCart cart item
+23. Checkout via Mollie processes payment
+24. Order webhook decrements stock in Dashboard API

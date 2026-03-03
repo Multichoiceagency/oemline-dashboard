@@ -1,0 +1,62 @@
+# Local development stack for WordPress + WooCommerce
+# Run: docker compose up -d
+
+services:
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${WORDPRESS_DB_NAME:-wordpress}
+      MYSQL_USER: ${WORDPRESS_DB_USER:-wordpress}
+      MYSQL_PASSWORD: ${WORDPRESS_DB_PASSWORD:-wordpress}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    ports:
+      - "3307:3306"
+    networks:
+      - wp-network
+
+  wordpress:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mariadb
+    environment:
+      WORDPRESS_DB_HOST: mariadb
+      WORDPRESS_DB_NAME: ${WORDPRESS_DB_NAME:-wordpress}
+      WORDPRESS_DB_USER: ${WORDPRESS_DB_USER:-wordpress}
+      WORDPRESS_DB_PASSWORD: ${WORDPRESS_DB_PASSWORD:-wordpress}
+      WORDPRESS_TABLE_PREFIX: wp_
+      WORDPRESS_DEBUG: "true"
+    volumes:
+      - wordpress_data:/var/www/html
+      - ./theme/oemline-headless:/var/www/html/wp-content/themes/oemline-headless
+    ports:
+      - "8080:80"
+    networks:
+      - wp-network
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    restart: unless-stopped
+    depends_on:
+      - mariadb
+    environment:
+      PMA_HOST: mariadb
+      PMA_PORT: 3306
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+    ports:
+      - "8081:80"
+    networks:
+      - wp-network
+
+volumes:
+  mariadb_data:
+  wordpress_data:
+
+networks:
+  wp-network:
+    driver: bridge

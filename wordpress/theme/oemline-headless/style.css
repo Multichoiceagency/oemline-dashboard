@@ -1,0 +1,13 @@
+/*
+Theme Name: OEMline Headless
+Theme URI: https://oemline.eu
+Author: Multichoice Agency
+Author URI: https://multichoiceagency.com
+Description: Headless WordPress theme for OEMline storefront. No frontend rendering — all content served via REST API.
+Version: 1.0.0
+Requires at least: 6.0
+Tested up to: 6.7
+Requires PHP: 8.1
+License: Proprietary
+Text Domain: oemline-headless
+*/
