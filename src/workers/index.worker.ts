@@ -7,6 +7,33 @@ interface IndexJobData {
   supplierCode?: string;
 }
 
+/**
+ * Sanitize a string for use as a Meilisearch document ID.
+ * Meilisearch only allows alphanumeric chars (a-z A-Z 0-9), hyphens (-), and underscores (_).
+ * Replace all disallowed characters with hyphens.
+ */
+function sanitizeDocId(raw: string): string {
+  return raw.replace(/[^a-zA-Z0-9_-]/g, "-");
+}
+
+/**
+ * Wait for a Meilisearch task to complete and check for errors.
+ * Returns true if succeeded, false if failed.
+ */
+async function waitForMeiliTask(taskUid: number, timeoutMs = 120_000): Promise<{ succeeded: boolean; error?: string }> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const task = await meili.getTask(taskUid);
+    if (task.status === "succeeded") return { succeeded: true };
+    if (task.status === "failed") {
+      return { succeeded: false, error: task.error?.message ?? "Unknown Meilisearch error" };
+    }
+    // Still processing or enqueued -- wait briefly before polling again
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return { succeeded: false, error: `Task ${taskUid} timed out after ${timeoutMs}ms` };
+}
+
 export async function processIndexJob(job: Job<IndexJobData>): Promise<void> {
   const { supplierCode } = job.data;
 
@@ -44,7 +71,7 @@ export async function processIndexJob(job: Job<IndexJobData>): Promise<void> {
       const images = Array.isArray(p.images) ? (p.images as string[]) : [];
 
       return {
-        id: `${p.supplier.code}_${p.sku}`,
+        id: sanitizeDocId(`${p.supplier.code}_${p.sku}`),
         supplier: p.supplier.code,
         supplierName: p.supplier.name,
         sku: p.sku,
@@ -72,7 +99,16 @@ export async function processIndexJob(job: Job<IndexJobData>): Promise<void> {
     });
 
     try {
-      await meili.index(PRODUCTS_INDEX).addDocuments(documents);
+      const enqueueResult = await meili.index(PRODUCTS_INDEX).addDocuments(documents);
+
+      // Wait for Meilisearch to actually process the batch and check for errors
+      const taskResult = await waitForMeiliTask(enqueueResult.taskUid);
+      if (!taskResult.succeeded) {
+        logger.error(
+          { taskUid: enqueueResult.taskUid, error: taskResult.error, batchSize: documents.length, skip, supplier: supplierCode ?? "all" },
+          "Meilisearch task failed for batch — skipping"
+        );
+      }
     } catch (err) {
       logger.error(
         { err, batchSize: documents.length, skip, supplier: supplierCode ?? "all" },
