@@ -302,23 +302,32 @@ export async function jobRoutes(app: FastifyInstance) {
   }, async () => {
     const { prisma } = await import("../lib/prisma.js");
     const { logger } = await import("../lib/logger.js");
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
     const { Prisma } = await import("@prisma/client");
-    const execFileAsync = promisify(execFile);
+    const ftp = await import("basic-ftp");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const fs = await import("node:fs/promises");
 
     logger.info("Downloading Diederichs Stock.csv from FTP...");
 
     let csvData: string;
+    const tmpFile = path.join(os.tmpdir(), `diederichs-stock-${Date.now()}.csv`);
+    const client = new ftp.Client(30_000);
     try {
-      const { stdout } = await execFileAsync("curl", [
-        "-s", "--connect-timeout", "30", "--max-time", "90",
-        "ftp://died_stock:Qa1w8%269a@km1106.promserver.de/Stock.csv",
-      ], { maxBuffer: 10 * 1024 * 1024 });
-      csvData = stdout;
+      await client.access({
+        host: "km1106.promserver.de",
+        user: "died_stock",
+        password: "Qa1w8&9a",
+        secure: false,
+      });
+      await client.downloadTo(tmpFile, "/Stock.csv");
+      csvData = await fs.readFile(tmpFile, "utf8");
     } catch (err) {
       logger.error({ err }, "Diederichs FTP download failed");
       return { error: "FTP download failed", details: String(err) };
+    } finally {
+      client.close();
+      await fs.unlink(tmpFile).catch(() => { /* ignore */ });
     }
 
     // Ensure Diederichs supplier exists and is configured
