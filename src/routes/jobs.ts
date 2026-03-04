@@ -367,6 +367,13 @@ export async function jobRoutes(app: FastifyInstance) {
 
     logger.info({ total: rows.length }, "Diederichs CSV parsed");
 
+    // Ensure a Diederichs brand exists for standalone (unlinked) products
+    let diedBrand = await prisma.brand.findFirst({ where: { name: { equals: "Diederichs", mode: "insensitive" } } });
+    if (!diedBrand) {
+      diedBrand = await prisma.brand.create({ data: { name: "Diederichs", code: "DIEDERICHS" } });
+      logger.info({ brandId: diedBrand.id }, "Created Diederichs brand");
+    }
+
     const BATCH_SIZE = 500;
     let matched = 0;
     let icMatched = 0;
@@ -442,11 +449,11 @@ export async function jobRoutes(app: FastifyInstance) {
             ${row.stock}, 'active', NOW(), NOW()
           )`);
         } else {
-          // Unlinked: create standalone Diederichs product (no TecDoc cross-ref)
+          // Unlinked: create standalone Diederichs product with Diederichs brand
           values.push(Prisma.sql`(
-            ${supplier.id}, NULL, NULL,
+            ${supplier.id}, ${diedBrand!.id}, NULL,
             ${row.sku}, ${row.sku}, ${row.ean},
-            NULL, NULL, NULL,
+            NULL, NULL, '',
             NULL, 'EUR',
             ${row.stock}, 'active', NOW(), NOW()
           )`);
