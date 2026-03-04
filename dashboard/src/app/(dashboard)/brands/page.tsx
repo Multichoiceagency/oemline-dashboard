@@ -55,6 +55,7 @@ export default function BrandsPage() {
   const [editForm, setEditForm] = useState({ name: "", logoUrl: "" });
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const logoFileRef = useRef<HTMLInputElement>(null);
   // InterCars brand mapping
   const { data: icBrandData, loading: icLoading, refetch: refetchIc } = useApi(
     () => getInterCarsUnmatchedBrands(),

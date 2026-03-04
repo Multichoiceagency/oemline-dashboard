@@ -118,10 +118,22 @@ export async function startScheduler(): Promise<void> {
       { supplierCode: supplier.code },
       { priority: 1, jobId: `match-initial-dedup-${supplier.code}` }
     );
+
+    await pricingQueue.add(
+      `pricing-initial-${supplier.code}`,
+      { supplierCode: supplier.code },
+      { priority: 2, jobId: `pricing-initial-dedup-${supplier.code}` }
+    );
+
+    await stockQueue.add(
+      `stock-initial-${supplier.code}`,
+      { supplierCode: supplier.code },
+      { priority: 2, jobId: `stock-initial-dedup-${supplier.code}` }
+    );
   }
 
   // Initial index
   await indexQueue.add("reindex-initial", {}, { priority: 1, jobId: "index-initial-dedup" });
 
-  logger.info("Initial sync/ic-match/match/index jobs enqueued for all suppliers");
+  logger.info("Initial sync/ic-match/match/pricing/stock/index jobs enqueued for all suppliers");
 }

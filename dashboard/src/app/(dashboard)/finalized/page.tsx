@@ -12,6 +12,7 @@ import {
   updateProduct,
   uploadProductImage,
   getTecDocLinkages,
+  getJobsStatus,
 } from "@/lib/api";
 import type { FinalizedProduct, FinalizedDetail, VehicleLinkage } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
@@ -62,6 +63,12 @@ import {
   Car,
   Star,
   Plus,
+  Activity,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  Zap,
 } from "lucide-react";
 
 export default function FinalizedPage() {
@@ -93,12 +100,18 @@ export default function FinalizedPage() {
   );
 
   const { data: stats, refetch: refetchStats } = useApi(() => getFinalizedStats(), []);
+  const { data: jobsStatus, refetch: refetchJobs } = useApi(() => getJobsStatus(), []);
 
   // Auto-refresh data and stats every 30 seconds
   useInterval(() => {
     refetch();
     refetchStats();
   }, 30_000);
+
+  // Refresh worker status every 5 seconds for live feel
+  useInterval(() => {
+    refetchJobs();
+  }, 5_000);
 
   const { data: brandsData } = useApi(() => getBrands({ limit: 250 }), []);
   const { data: categoriesData } = useApi(() => getCategories({ limit: 250 }), []);
@@ -307,6 +320,97 @@ export default function FinalizedPage() {
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {/* Live Worker Status */}
+      {jobsStatus && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Activity className="h-4 w-4" />
+              Live Worker Status
+              <span className="ml-auto flex items-center gap-1 text-xs font-normal text-muted-foreground">
+                <RefreshCw className="h-3 w-3 animate-spin" style={{ animationDuration: "3s" }} />
+                elke 5s
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              {(
+                [
+                  { key: "icMatch" as const, label: "IC Match", icon: Link2, color: "violet" },
+                  { key: "pricing" as const, label: "Prijzen", icon: DollarSign, color: "emerald" },
+                  { key: "stock" as const, label: "Voorraad", icon: Boxes, color: "blue" },
+                  { key: "sync" as const, label: "Sync", icon: RefreshCw, color: "amber" },
+                  { key: "match" as const, label: "Match", icon: Zap, color: "orange" },
+                  { key: "index" as const, label: "Index", icon: Search, color: "pink" },
+                ] as const
+              ).map(({ key, label, icon: Icon, color }) => {
+                const q = jobsStatus[key];
+                const isRunning = q.active > 0;
+                const hasFailed = q.failed > 0;
+                const isWaiting = q.waiting > 0 || q.prioritized > 0;
+
+                return (
+                  <div
+                    key={key}
+                    className={`rounded-lg border p-3 transition-colors ${
+                      isRunning
+                        ? "border-emerald-500/50 bg-emerald-500/5"
+                        : hasFailed
+                        ? "border-red-500/30 bg-red-500/5"
+                        : "bg-muted/30"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <Icon className={`h-3.5 w-3.5 ${isRunning ? "text-emerald-500" : "text-muted-foreground"}`} />
+                        <span className="text-xs font-medium">{label}</span>
+                      </div>
+                      {isRunning ? (
+                        <span className="flex items-center gap-1 text-xs text-emerald-500 font-medium">
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                          </span>
+                          Actief
+                        </span>
+                      ) : hasFailed ? (
+                        <AlertCircle className="h-3.5 w-3.5 text-red-500" />
+                      ) : isWaiting ? (
+                        <Clock className="h-3.5 w-3.5 text-amber-500" />
+                      ) : (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-muted-foreground/50" />
+                      )}
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Actief</span>
+                        <span className={`font-medium ${isRunning ? "text-emerald-500" : ""}`}>{q.active}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Wachtend</span>
+                        <span className="font-medium">{q.waiting + q.prioritized}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Klaar</span>
+                        <span className="font-medium text-muted-foreground">{formatNumber(q.completed)}</span>
+                      </div>
+                      {q.failed > 0 && (
+                        <div className="flex justify-between text-xs">
+                          <span className="text-red-500">Mislukt</span>
+                          <span className="font-medium text-red-500">{q.failed}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Index field distribution */}

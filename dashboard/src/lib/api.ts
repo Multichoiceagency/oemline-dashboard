@@ -67,6 +67,9 @@ export interface JobsStatusResponse {
   sync: QueueStatus;
   match: QueueStatus;
   index: QueueStatus;
+  pricing: QueueStatus;
+  stock: QueueStatus;
+  icMatch: QueueStatus;
 }
 
 export const getJobsStatus = () => apiFetch<JobsStatusResponse>("/api/jobs/status");
