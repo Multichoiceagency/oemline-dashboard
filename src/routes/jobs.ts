@@ -431,15 +431,26 @@ export async function jobRoutes(app: FastifyInstance) {
       const values: ReturnType<typeof Prisma.sql>[] = [];
       for (const row of batch) {
         const tecdoc = eanMap.get(row.ean);
-        if (!tecdoc) continue;
-        matched++;
-        values.push(Prisma.sql`(
-          ${supplier.id}, ${tecdoc.brandId}, ${tecdoc.categoryId},
-          ${row.sku}, ${tecdoc.articleNo}, ${row.ean},
-          ${tecdoc.tecdocId}, ${tecdoc.oem}, ${tecdoc.description},
-          ${tecdoc.imageUrl}, 'EUR',
-          ${row.stock}, 'active', NOW(), NOW()
-        )`);
+        if (tecdoc) {
+          // Linked: use TecDoc brand/category/description
+          matched++;
+          values.push(Prisma.sql`(
+            ${supplier.id}, ${tecdoc.brandId}, ${tecdoc.categoryId},
+            ${row.sku}, ${tecdoc.articleNo ?? row.sku}, ${row.ean},
+            ${tecdoc.tecdocId}, ${tecdoc.oem}, ${tecdoc.description},
+            ${tecdoc.imageUrl}, 'EUR',
+            ${row.stock}, 'active', NOW(), NOW()
+          )`);
+        } else {
+          // Unlinked: create standalone Diederichs product (no TecDoc cross-ref)
+          values.push(Prisma.sql`(
+            ${supplier.id}, NULL, NULL,
+            ${row.sku}, ${row.sku}, ${row.ean},
+            NULL, NULL, NULL,
+            NULL, 'EUR',
+            ${row.stock}, 'active', NOW(), NOW()
+          )`);
+        }
       }
 
       if (values.length === 0) continue;
@@ -454,11 +465,12 @@ export async function jobRoutes(app: FastifyInstance) {
         ON CONFLICT (supplier_id, sku)
         DO UPDATE SET
           stock = EXCLUDED.stock,
+          ean = COALESCE(EXCLUDED.ean, product_maps.ean),
           updated_at = NOW()
       `;
 
       upserted += values.length;
-      logger.info({ processed: i + batch.length, upserted, icMatched }, "Diederichs import progress");
+      logger.info({ processed: i + batch.length, upserted, matched, icMatched }, "Diederichs import progress");
     }
 
     logger.info({ total: rows.length, matched, icMatched, upserted }, "Diederichs FTP import completed");
