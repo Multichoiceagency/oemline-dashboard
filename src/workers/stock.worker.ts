@@ -28,7 +28,11 @@ export async function processStockJob(job: Job<StockJobData>): Promise<void> {
     return;
   }
 
-  logger.info({ supplierCode }, "Starting stock refresh for IC-linked products");
+  // IC-based suppliers (intercars) use the ic_sku cross-reference field.
+  // Direct suppliers (diederichs, etc.) use their own sku field.
+  const isIcLinked = supplierCode === "intercars";
+
+  logger.info({ supplierCode, isIcLinked }, "Starting stock refresh");
 
   let offset = 0;
   let totalUpdated = 0;
@@ -36,16 +40,22 @@ export async function processStockJob(job: Job<StockJobData>): Promise<void> {
   const BATCH_SIZE = 20;
 
   while (true) {
-    // Get IC-linked products, oldest-updated first
-    const products = await prisma.$queryRawUnsafe<Array<{
-      id: number;
-      ic_sku: string;
-    }>>(
-      `SELECT id, ic_sku FROM product_maps
-       WHERE ic_sku IS NOT NULL AND status = 'active'
-       ORDER BY id ASC
-       LIMIT ${batchSize} OFFSET ${offset}`
-    );
+    const products = await (isIcLinked
+      ? prisma.$queryRawUnsafe<Array<{ id: number; ic_sku: string }>>(
+          `SELECT id, ic_sku FROM product_maps
+           WHERE ic_sku IS NOT NULL AND status = 'active'
+           ORDER BY id ASC
+           LIMIT ${batchSize} OFFSET ${offset}`
+        )
+      : prisma.$queryRawUnsafe<Array<{ id: number; ic_sku: string }>>(
+          `SELECT pm.id, pm.sku AS ic_sku
+           FROM product_maps pm
+           JOIN suppliers s ON s.id = pm.supplier_id
+           WHERE s.code = $1 AND pm.status = 'active'
+           ORDER BY pm.id ASC
+           LIMIT ${batchSize} OFFSET ${offset}`,
+          supplierCode
+        ));
 
     if (products.length === 0) break;
     offset += batchSize;

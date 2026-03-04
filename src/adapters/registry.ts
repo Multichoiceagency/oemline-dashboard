@@ -2,6 +2,7 @@ import type { SupplierAdapter } from "./base.js";
 import { IntercarsAdapter } from "./intercars.js";
 import { PartsPointAdapter } from "./partspoint.js";
 import { TecDocAdapter } from "./tecdoc.js";
+import { DiederichsAdapter } from "./diederichs.js";
 import { prisma } from "../lib/prisma.js";
 import { decryptCredentials } from "../lib/crypto.js";
 import { logger } from "../lib/logger.js";
@@ -12,6 +13,7 @@ const ADAPTER_MAP: Record<string, AdapterConstructor> = {
   intercars: IntercarsAdapter,
   partspoint: PartsPointAdapter,
   tecdoc: TecDocAdapter,
+  diederichs: DiederichsAdapter,
 };
 
 const adapterCache = new Map<string, { adapter: SupplierAdapter; updatedAt: Date }>();
