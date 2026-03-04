@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue } from "./queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue } from "./queues.js";
 
 /**
  * Sets up repeatable jobs for continuous sync, match, pricing, stock, and index.
@@ -20,7 +20,7 @@ export async function startScheduler(): Promise<void> {
   logger.info("Starting job scheduler...");
 
   // Clean up old repeatable jobs to avoid duplicates
-  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue]) {
+  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue]) {
     const existing = await queue.getRepeatableJobs();
     for (const job of existing) {
       await queue.removeRepeatableByKey(job.key);
@@ -112,6 +112,18 @@ export async function startScheduler(): Promise<void> {
 
   logger.info("Scheduled index rebuild (2h)");
 
+  // AI match: every 12 hours — brand alias discovery via article overlap + Ollama LLM
+  await aiMatchQueue.add(
+    "ai-match-scheduled",
+    {},
+    {
+      repeat: { every: 12 * 60 * 60 * 1000 },
+      jobId: "ai-match-repeat",
+    }
+  );
+
+  logger.info("Scheduled AI match (12h)");
+
   // Fire initial jobs immediately for all suppliers
   // Use jobId for deduplication — prevents duplicate jobs accumulating across restarts
   for (const supplier of suppliers) {
@@ -152,6 +164,9 @@ export async function startScheduler(): Promise<void> {
 
   // Initial index
   await indexQueue.add("reindex-initial", {}, { priority: 1, jobId: "index-initial-dedup" });
+
+  // Initial AI match (low priority — let sync/ic-match run first)
+  await aiMatchQueue.add("ai-match-initial", {}, { priority: 5, jobId: "ai-match-initial-dedup" });
 
   logger.info("Initial jobs enqueued for all suppliers");
 }

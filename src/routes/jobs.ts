@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue } from "../workers/queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue } from "../workers/queues.js";
 
 export async function jobRoutes(app: FastifyInstance) {
   // Get all job queue status
@@ -14,6 +14,7 @@ export async function jobRoutes(app: FastifyInstance) {
       getQueueCounts(icMatchQueue),
     ]);
 
+    const aiMatchCounts = await getQueueCounts(aiMatchQueue);
     return {
       sync: syncCounts,
       match: matchCounts,
@@ -21,6 +22,7 @@ export async function jobRoutes(app: FastifyInstance) {
       pricing: pricingCounts,
       stock: stockCounts,
       icMatch: icMatchCounts,
+      aiMatch: aiMatchCounts,
     };
   });
 
@@ -695,6 +697,103 @@ export async function jobRoutes(app: FastifyInstance) {
 
     return results;
   });
+
+  /**
+   * Trigger an AI match run immediately (brand alias discovery + optional Ollama LLM).
+   * Body: { autoApplyThreshold?: number, llmMinThreshold?: number, llmConfidenceThreshold?: number }
+   */
+  app.post("/jobs/ai-match", async (request) => {
+    const body = (request.body ?? {}) as {
+      autoApplyThreshold?: number;
+      llmMinThreshold?: number;
+      llmConfidenceThreshold?: number;
+    };
+    const job = await aiMatchQueue.add("ai-match-manual", body, {
+      priority: 1,
+      jobId: "ai-match-manual-dedup",
+    });
+    return { queued: true, jobId: job.id, message: "AI match started — brand alias discovery + optional Ollama confirmation" };
+  });
+
+  /**
+   * Check Ollama status + list available models.
+   */
+  app.get("/jobs/ai-match/ollama-status", async () => {
+    const { ollamaIsAvailable, ollamaListModels, OLLAMA_MODEL } = await import("../lib/ollama.js");
+    const available = await ollamaIsAvailable();
+    const models = available ? await ollamaListModels() : [];
+    return {
+      available,
+      ollamaUrl: process.env.OLLAMA_URL ?? "http://ollama:11434",
+      configuredModel: OLLAMA_MODEL,
+      loadedModels: models,
+    };
+  });
+
+  /**
+   * Pull a model into Ollama (e.g. "llama3.2:1b").
+   * Call this once after deploying Ollama to download the model.
+   */
+  app.post("/jobs/ai-match/pull-model", async (request) => {
+    const body = (request.body ?? {}) as { model?: string };
+    const { ollamaPullModel, OLLAMA_MODEL } = await import("../lib/ollama.js");
+    const model = body.model ?? OLLAMA_MODEL;
+    try {
+      await ollamaPullModel(model);
+      return { ok: true, model, message: `Model ${model} is ready` };
+    } catch (err) {
+      return { ok: false, model, error: String(err) };
+    }
+  });
+
+  /**
+   * Preview brand alias candidates without applying them.
+   * Returns the top candidates ranked by overlapping article count.
+   */
+  app.get("/jobs/ai-match/candidates", async (request) => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { limit = "50", minArticles = "3" } = (request.query ?? {}) as { limit?: string; minArticles?: string };
+
+    const intercarsSupplier = await prisma.supplier.findUnique({
+      where: { code: "intercars" },
+      select: { id: true },
+    });
+    if (!intercarsSupplier) return { error: "InterCars supplier not found" };
+
+    type Row = { tecdoc_brand: string; ic_manufacturer: string; matching_articles: bigint | number };
+    const rows = await prisma.$queryRawUnsafe<Row[]>(
+      `SELECT
+         b.name          AS tecdoc_brand,
+         im.manufacturer AS ic_manufacturer,
+         COUNT(*)        AS matching_articles
+       FROM product_maps pm
+       JOIN brands b ON b.id = pm.brand_id
+       JOIN intercars_mappings im
+         ON UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
+          = UPPER(regexp_replace(pm.article_no,     '[^a-zA-Z0-9]', '', 'g'))
+       WHERE pm.ic_sku IS NULL AND pm.status = 'active'
+         AND NOT EXISTS (
+           SELECT 1 FROM supplier_brand_rules sbr
+           WHERE sbr.supplier_id = $1
+             AND UPPER(sbr.supplier_brand) = UPPER(im.manufacturer)
+         )
+         AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+           != UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+       GROUP BY b.name, im.manufacturer
+       HAVING COUNT(*) >= $2
+       ORDER BY matching_articles DESC
+       LIMIT $3`,
+      intercarsSupplier.id,
+      parseInt(minArticles, 10),
+      parseInt(limit, 10)
+    );
+
+    return rows.map((r) => ({
+      tecdocBrand: r.tecdoc_brand,
+      icManufacturer: r.ic_manufacturer,
+      matchingArticles: Number(r.matching_articles),
+    }));
+  });
 }
 
 function getQueue(name: string) {
@@ -705,6 +804,7 @@ function getQueue(name: string) {
     case "pricing": return pricingQueue;
     case "stock": return stockQueue;
     case "ic-match": return icMatchQueue;
+    case "ai-match": return aiMatchQueue;
     default: return null;
   }
 }

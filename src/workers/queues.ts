@@ -70,3 +70,14 @@ export const icMatchQueue = new Queue("ic-match", {
     backoff: { type: "exponential", delay: 10000 },
   },
 });
+
+// AI-assisted brand alias discovery (article overlap analysis + optional Ollama LLM)
+// Runs every 12h — discovers new supplier_brand_rules entries → more IC matches
+export const aiMatchQueue = new Queue("ai-match", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 20 },
+    removeOnFail: { count: 50 },
+    attempts: 1,
+  },
+});

@@ -11,6 +11,7 @@ import { processIndexJob } from "./workers/index.worker.js";
 import { processPricingJob } from "./workers/pricing.worker.js";
 import { processStockJob } from "./workers/stock.worker.js";
 import { processIcMatchJob } from "./workers/ic-match.worker.js";
+import { processAiMatchJob } from "./workers/ai-match.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 
@@ -100,6 +101,15 @@ if (handles("ic-match")) {
     concurrency: 1, // One IC match job at a time (fast ~2-5 min, isolated from TecDoc)
     stalledInterval: 300_000,
     lockDuration: 600_000,
+  }));
+}
+
+if (handles("ai-match")) {
+  workers.push(new Worker("ai-match", processAiMatchJob, {
+    connection,
+    concurrency: 1,       // Heavy SQL + optional LLM — run one at a time
+    stalledInterval: 300_000,
+    lockDuration: 1_800_000, // 30 min lock — LLM confirmation can be slow
   }));
 }
 
