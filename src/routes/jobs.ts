@@ -350,6 +350,7 @@ export async function jobRoutes(app: FastifyInstance) {
     }
 
     // Parse CSV: "ARTICLE_NO   ";STOCK   ;"EAN"
+    // Skip header line (contains non-numeric SKU like "ARTICLE_NO")
     const rows: Array<{ sku: string; stock: number; ean: string }> = [];
     for (const line of csvData.split("\n")) {
       const trimmed = line.trim();
@@ -359,7 +360,8 @@ export async function jobRoutes(app: FastifyInstance) {
       const sku = parts[0].replace(/"/g, "").trim();
       const stock = Math.max(0, parseInt(parts[1].trim(), 10) || 0);
       const ean = parts[2].replace(/"/g, "").trim();
-      if (!sku || !ean) continue;
+      // Skip header row and rows without valid EAN (min 8 digits)
+      if (!sku || !ean || !/^\d{8,14}$/.test(ean)) continue;
       rows.push({ sku, stock, ean });
     }
 
@@ -367,13 +369,14 @@ export async function jobRoutes(app: FastifyInstance) {
 
     const BATCH_SIZE = 500;
     let matched = 0;
+    let icMatched = 0;
     let upserted = 0;
 
     for (let i = 0; i < rows.length; i += BATCH_SIZE) {
       const batch = rows.slice(i, i + BATCH_SIZE);
       const eans = batch.map((r) => r.ean);
 
-      // Find TecDoc products with matching EAN to get brand/article info
+      // Strategy 1: EAN match against TecDoc products in product_maps
       const tecdocProducts = await prisma.productMap.findMany({
         where: { supplier: { code: "tecdoc" }, ean: { in: eans }, status: "active" },
         select: {
@@ -383,8 +386,47 @@ export async function jobRoutes(app: FastifyInstance) {
         },
         distinct: ["ean"],
       });
-
       const eanMap = new Map(tecdocProducts.map((p) => [p.ean!, p]));
+
+      // Strategy 2: EAN match against intercars_mappings (565K rows with EAN index)
+      // For EANs not found in product_maps, look up via IC mapping then find TecDoc product
+      const unmatched = eans.filter((e) => !eanMap.has(e));
+      if (unmatched.length > 0) {
+        // Single SQL join: intercars_mappings.ean → product_maps via article_no + brand name
+        type IcEanRow = { ean: string; brand_id: number | null; category_id: number | null; article_no: string | null; tecdoc_id: number | null; oem: string | null; description: string | null; image_url: string | null };
+        const icRows = await prisma.$queryRawUnsafe<IcEanRow[]>(`
+          SELECT DISTINCT ON (im.ean)
+            im.ean,
+            pm.brand_id, pm.category_id, pm.article_no,
+            pm.tecdoc_id, pm.oem, pm.description, pm.image_url
+          FROM intercars_mappings im
+          JOIN brands b ON LOWER(b.name) = LOWER(im.manufacturer)
+          JOIN product_maps pm
+            ON pm.article_no = im.article_number
+            AND pm.brand_id = b.id
+            AND pm.status = 'active'
+          JOIN suppliers s ON s.id = pm.supplier_id AND s.code = 'tecdoc'
+          WHERE im.ean = ANY($1::text[])
+          LIMIT 2000
+        `, unmatched);
+        for (const row of icRows) {
+          if (row.ean) {
+            // Normalize snake_case columns from raw query to camelCase for eanMap
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            eanMap.set(row.ean, {
+              ean: row.ean,
+              brandId: row.brand_id ?? null,
+              categoryId: row.category_id ?? null,
+              articleNo: row.article_no ?? null,
+              tecdocId: row.tecdoc_id ?? null,
+              oem: row.oem ?? null,
+              description: row.description ?? null,
+              imageUrl: row.image_url ?? null,
+            } as any);
+            icMatched++;
+          }
+        }
+      }
 
       const values: ReturnType<typeof Prisma.sql>[] = [];
       for (const row of batch) {
@@ -416,11 +458,11 @@ export async function jobRoutes(app: FastifyInstance) {
       `;
 
       upserted += values.length;
-      logger.info({ processed: i + batch.length, upserted }, "Diederichs import progress");
+      logger.info({ processed: i + batch.length, upserted, icMatched }, "Diederichs import progress");
     }
 
-    logger.info({ total: rows.length, matched, upserted }, "Diederichs FTP import completed");
-    return { total: rows.length, matched, upserted };
+    logger.info({ total: rows.length, matched, icMatched, upserted }, "Diederichs FTP import completed");
+    return { total: rows.length, matched, icMatched, upserted };
   });
 
   /**
