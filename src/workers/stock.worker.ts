@@ -75,9 +75,13 @@ export async function processStockJob(job: Job<StockJobData>): Promise<void> {
             await prisma.$executeRawUnsafe(
               `UPDATE product_maps SET
                 stock = $1,
+                price = COALESCE($2, price),
+                currency = COALESCE($3, currency),
                 updated_at = NOW()
-              WHERE id = $2`,
+              WHERE id = $4`,
               quote.stock,
+              quote.price,
+              quote.currency,
               product.id
             );
             totalUpdated++;

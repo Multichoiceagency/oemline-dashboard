@@ -35,9 +35,12 @@ export async function startScheduler(): Promise<void> {
 
   logger.info({ supplierCount: suppliers.length }, "Scheduling jobs for active suppliers");
 
+  // Catalog suppliers need full TecDoc sync + IC matching.
+  // Direct suppliers (diederichs, vanwezel, etc.) only need stock refresh.
+  const CATALOG_TYPES = new Set(["tecdoc", "intercars", "partspoint"]);
+
   for (const supplier of suppliers) {
-    // Direct suppliers (diederichs) only need stock refresh — no TecDoc sync, no IC matching
-    const isDirect = supplier.adapterType === "diederichs";
+    const isDirect = !CATALOG_TYPES.has(supplier.adapterType);
 
     if (!isDirect) {
       // Sync: every 4 hours (TecDoc catalog + IC phase matching)
@@ -112,9 +115,9 @@ export async function startScheduler(): Promise<void> {
   // Fire initial jobs immediately for all suppliers
   // Use jobId for deduplication — prevents duplicate jobs accumulating across restarts
   for (const supplier of suppliers) {
-    const isDirect = supplier.adapterType === "diederichs";
+    const isDirectSupplier = !CATALOG_TYPES.has(supplier.adapterType);
 
-    if (!isDirect) {
+    if (!isDirectSupplier) {
       await syncQueue.add(
         `sync-initial-${supplier.code}`,
         { supplierCode: supplier.code },

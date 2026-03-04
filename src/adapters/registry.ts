@@ -3,6 +3,7 @@ import { IntercarsAdapter } from "./intercars.js";
 import { PartsPointAdapter } from "./partspoint.js";
 import { TecDocAdapter } from "./tecdoc.js";
 import { DiederichsAdapter } from "./diederichs.js";
+import { VanWezelAdapter } from "./vanwezel.js";
 import { prisma } from "../lib/prisma.js";
 import { decryptCredentials } from "../lib/crypto.js";
 import { logger } from "../lib/logger.js";
@@ -14,6 +15,7 @@ const ADAPTER_MAP: Record<string, AdapterConstructor> = {
   partspoint: PartsPointAdapter,
   tecdoc: TecDocAdapter,
   diederichs: DiederichsAdapter,
+  vanwezel: VanWezelAdapter,
 };
 
 const adapterCache = new Map<string, { adapter: SupplierAdapter; updatedAt: Date }>();

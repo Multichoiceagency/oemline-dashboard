@@ -289,6 +289,173 @@ export async function jobRoutes(app: FastifyInstance) {
     return { imported: totalImported, totalLines: lineNum };
   });
 
+  /**
+   * Import Diederichs Stock.csv from FTP.
+   * CSV format (semicolon-separated): "ARTICLE_NO   ";STOCK   ;"EAN"
+   *
+   * For each row: matches by EAN against existing TecDoc products and creates/updates
+   * a product_map entry under the Diederichs supplier with current stock.
+   * Also activates the Diederichs supplier and updates adapterType to "diederichs".
+   */
+  app.post("/jobs/import-diederichs-ftp", {
+    onRequest: async (request) => { request.raw.socket.setTimeout(120_000); },
+  }, async () => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { logger } = await import("../lib/logger.js");
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { Prisma } = await import("@prisma/client");
+    const execFileAsync = promisify(execFile);
+
+    logger.info("Downloading Diederichs Stock.csv from FTP...");
+
+    let csvData: string;
+    try {
+      const { stdout } = await execFileAsync("curl", [
+        "-s", "--connect-timeout", "30", "--max-time", "90",
+        "ftp://died_stock:Qa1w8%269a@km1106.promserver.de/Stock.csv",
+      ], { maxBuffer: 10 * 1024 * 1024 });
+      csvData = stdout;
+    } catch (err) {
+      logger.error({ err }, "Diederichs FTP download failed");
+      return { error: "FTP download failed", details: String(err) };
+    }
+
+    // Ensure Diederichs supplier exists and is configured
+    let supplier = await prisma.supplier.findUnique({ where: { code: "diederichs" } });
+    if (!supplier) {
+      return { error: "Diederichs supplier not found. Create it in the suppliers page first." };
+    }
+
+    // Update adapterType to diederichs and activate if needed
+    if (supplier.adapterType !== "diederichs" || !supplier.active) {
+      supplier = await prisma.supplier.update({
+        where: { id: supplier.id },
+        data: {
+          adapterType: "diederichs",
+          baseUrl: "http://diederichs.spdns.eu/dvse/v1.2",
+          active: true,
+        },
+      });
+      logger.info({ supplierId: supplier.id }, "Diederichs supplier activated");
+    }
+
+    // Parse CSV: "ARTICLE_NO   ";STOCK   ;"EAN"
+    const rows: Array<{ sku: string; stock: number; ean: string }> = [];
+    for (const line of csvData.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split(";");
+      if (parts.length < 3) continue;
+      const sku = parts[0].replace(/"/g, "").trim();
+      const stock = Math.max(0, parseInt(parts[1].trim(), 10) || 0);
+      const ean = parts[2].replace(/"/g, "").trim();
+      if (!sku || !ean) continue;
+      rows.push({ sku, stock, ean });
+    }
+
+    logger.info({ total: rows.length }, "Diederichs CSV parsed");
+
+    const BATCH_SIZE = 500;
+    let matched = 0;
+    let upserted = 0;
+
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      const batch = rows.slice(i, i + BATCH_SIZE);
+      const eans = batch.map((r) => r.ean);
+
+      // Find TecDoc products with matching EAN to get brand/article info
+      const tecdocProducts = await prisma.productMap.findMany({
+        where: { supplier: { code: "tecdoc" }, ean: { in: eans }, status: "active" },
+        select: {
+          ean: true, brandId: true, categoryId: true,
+          articleNo: true, tecdocId: true, oem: true,
+          description: true, imageUrl: true,
+        },
+        distinct: ["ean"],
+      });
+
+      const eanMap = new Map(tecdocProducts.map((p) => [p.ean!, p]));
+
+      const values: ReturnType<typeof Prisma.sql>[] = [];
+      for (const row of batch) {
+        const tecdoc = eanMap.get(row.ean);
+        if (!tecdoc) continue;
+        matched++;
+        values.push(Prisma.sql`(
+          ${supplier.id}, ${tecdoc.brandId}, ${tecdoc.categoryId},
+          ${row.sku}, ${tecdoc.articleNo}, ${row.ean},
+          ${tecdoc.tecdocId}, ${tecdoc.oem}, ${tecdoc.description},
+          ${tecdoc.imageUrl}, 'EUR',
+          ${row.stock}, 'active', NOW(), NOW()
+        )`);
+      }
+
+      if (values.length === 0) continue;
+
+      await prisma.$executeRaw`
+        INSERT INTO product_maps (
+          supplier_id, brand_id, category_id, sku, article_no, ean,
+          tecdoc_id, oem, description, image_url, currency,
+          stock, status, created_at, updated_at
+        )
+        VALUES ${Prisma.join(values)}
+        ON CONFLICT (supplier_id, sku)
+        DO UPDATE SET
+          stock = EXCLUDED.stock,
+          updated_at = NOW()
+      `;
+
+      upserted += values.length;
+      logger.info({ processed: i + batch.length, upserted }, "Diederichs import progress");
+    }
+
+    logger.info({ total: rows.length, matched, upserted }, "Diederichs FTP import completed");
+    return { total: rows.length, matched, upserted };
+  });
+
+  /**
+   * Import Van Wezel catalog/price data.
+   * Activates Van Wezel supplier with REST API credentials.
+   * Van Wezel stock is refreshed real-time via the VWA getstock API (every 30 min).
+   */
+  app.post("/jobs/activate-vanwezel", async (request) => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { encryptCredentials } = await import("../lib/crypto.js");
+    const { loadAdaptersFromDb } = await import("../adapters/registry.js");
+
+    // Optional: override credentials from request body
+    const body = (request.body ?? {}) as { username?: string; password?: string };
+    const username = body.username ?? "57206";
+    const password = body.password ?? "2514";
+
+    let supplier = await prisma.supplier.findUnique({ where: { code: "vanwezel" } });
+    if (!supplier) {
+      return { error: "Van Wezel supplier not found. Create it in the suppliers page first." };
+    }
+
+    const credentials = encryptCredentials(`${username}:${password}`);
+    supplier = await prisma.supplier.update({
+      where: { id: supplier.id },
+      data: {
+        adapterType: "vanwezel",
+        baseUrl: "https://vwa.autopartscat.com/WcfVWAService/WcfVWAService/VWAService.svc",
+        credentials,
+        active: true,
+      },
+    });
+
+    await loadAdaptersFromDb();
+
+    return {
+      id: supplier.id,
+      code: supplier.code,
+      adapterType: supplier.adapterType,
+      active: supplier.active,
+      message: "Van Wezel activated. Stock will refresh every 30 minutes via VWA API.",
+    };
+  });
+
   // Create expression indexes to speed up IC matching queries
   // Run this once after initial data load — creates indexes on normalized article numbers
   app.post("/jobs/optimize-db", async () => {
