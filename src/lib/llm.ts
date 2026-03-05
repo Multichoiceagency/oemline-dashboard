@@ -22,7 +22,9 @@ const KIMI_API_URL  = process.env.KIMI_API_URL ?? "https://api.moonshot.cn/v1";
 export const KIMI_MODEL = process.env.KIMI_MODEL ?? "moonshot-v1-8k";
 
 const OLLAMA_URL    = process.env.OLLAMA_URL   ?? "http://ollama:11434";
-export const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "llama3.2:1b";
+// Default to kimi-k2.5 — available on Ollama hub (ollama pull kimi-k2.5)
+// Falls back to llama3.2:1b if overridden via OLLAMA_MODEL env var
+export const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "kimi-k2.5";
 
 const LLM_PROVIDER  = process.env.LLM_PROVIDER ?? "auto";
 

@@ -1279,12 +1279,12 @@ export async function jobRoutes(app: FastifyInstance) {
     const { redis: redisClient } = await import("../lib/redis.js");
     const { meili: meiliClient } = await import("../lib/meilisearch.js");
     const { getAllAdapters } = await import("../adapters/registry.js");
-    const { llmStatus } = await import("../lib/llm.js");
+    const { llmStatus, ollamaListModels } = await import("../lib/llm.js");
 
     // All fetches in parallel — fast even if one service is slow
     const [
       syncR, matchR, indexR, pricingR, stockR, icMatchR, aiMatchR,
-      pgR, redisR, meiliR, llmR,
+      pgR, redisR, meiliR, llmR, modelsR,
     ] = await Promise.allSettled([
       getQueueCounts(syncQueue),
       getQueueCounts(matchQueue),
@@ -1297,6 +1297,7 @@ export async function jobRoutes(app: FastifyInstance) {
       redisClient.ping().then(() => true),
       meiliClient.health().then(() => true),
       llmStatus(),
+      ollamaListModels(),
     ]);
 
     const jobs = {
@@ -1315,7 +1316,8 @@ export async function jobRoutes(app: FastifyInstance) {
       meilisearch: meiliR.status === "fulfilled" && meiliR.value ? "ok" : "error",
     };
 
-    const llm = llmR.status === "fulfilled" ? llmR.value : { provider: "none", model: "", available: false, kimiConfigured: false, ollamaUrl: "" };
+    const llm         = llmR.status    === "fulfilled" ? llmR.value    : { provider: "none", model: "", available: false, kimiConfigured: false, ollamaUrl: "" };
+    const ollamaModels = modelsR.status === "fulfilled" ? modelsR.value : [];
 
     const circuits: Record<string, { state: string; failures: number }> = {};
     for (const adapter of getAllAdapters()) {
@@ -1356,12 +1358,13 @@ export async function jobRoutes(app: FastifyInstance) {
       },
       jobs,
       llm,
-      // backward-compat alias
+      // backward-compat: dashboard reads ollama.loadedModels / configuredModel
       ollama: {
-        available:      llm.available,
-        ollamaUrl:      llm.ollamaUrl,
+        available:       llm.available,
+        ollamaUrl:       llm.ollamaUrl || (process.env.OLLAMA_URL ?? "http://ollama:11434"),
         configuredModel: llm.model,
-        provider:       llm.provider,
+        loadedModels:    ollamaModels,
+        provider:        llm.provider,
       },
       alerts,
       timestamp:      new Date().toISOString(),
