@@ -124,8 +124,8 @@ if (handles("ic-match")) {
   workers.push(new Worker("ic-match", processIcMatchJob, {
     connection,
     concurrency: concurrency("IC_MATCH", 2, 4),
-    stalledInterval: 300_000,
-    lockDuration: 600_000,
+    stalledInterval: 600_000,  // 10 min — ic-match can take ~5 min per run
+    lockDuration:   1_200_000, // 20 min lock
   }));
 }
 
