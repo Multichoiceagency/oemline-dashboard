@@ -70,9 +70,20 @@ export interface JobsStatusResponse {
   pricing: QueueStatus;
   stock: QueueStatus;
   icMatch: QueueStatus;
+  aiMatch: QueueStatus;
+}
+
+export interface OllamaStatus {
+  available: boolean;
+  ollamaUrl: string;
+  configuredModel: string;
+  loadedModels: string[];
 }
 
 export const getJobsStatus = () => apiFetch<JobsStatusResponse>("/api/jobs/status");
+export const getOllamaStatus = () => apiFetch<OllamaStatus>("/api/jobs/ai-match/ollama-status");
+export const triggerAiMatch = (opts?: { autoApplyThreshold?: number; llmMinThreshold?: number; llmConfidenceThreshold?: number }) =>
+  apiFetch<{ queued: boolean; jobId: string; message: string }>("/api/jobs/ai-match", { method: "POST", body: JSON.stringify(opts ?? {}) });
 
 // Suppliers
 export interface Supplier {

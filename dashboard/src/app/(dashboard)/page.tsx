@@ -1,11 +1,13 @@
 "use client";
 
 import { useApi, useInterval } from "@/lib/hooks";
-import { getHealth, getSuppliers, getUnmatched, getMatchLogs, getJobsStatus } from "@/lib/api";
+import { getHealth, getSuppliers, getUnmatched, getMatchLogs, getJobsStatus, getOllamaStatus, triggerAiMatch } from "@/lib/api";
 import type { QueueStatus } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { formatNumber } from "@/lib/utils";
+import { useState } from "react";
 import {
   Truck,
   AlertTriangle,
@@ -18,6 +20,10 @@ import {
   Play,
   Pause,
   RotateCw,
+  Brain,
+  Cpu,
+  Zap,
+  Loader2,
 } from "lucide-react";
 
 function QueueCard({ name, status }: { name: string; status: QueueStatus }) {
@@ -76,15 +82,35 @@ function QueueCard({ name, status }: { name: string; status: QueueStatus }) {
 export default function DashboardPage() {
   const health = useApi(() => getHealth(), []);
   const jobs = useApi(() => getJobsStatus(), []);
+  const ollama = useApi(() => getOllamaStatus(), []);
   const suppliers = useApi(() => getSuppliers({ limit: 100 }), []);
   const unmatched = useApi(() => getUnmatched({ limit: 1, resolved: "false" }), []);
   const matchLogs = useApi(() => getMatchLogs({ limit: 1 }), []);
+  const [aiTriggering, setAiTriggering] = useState(false);
+  const [aiResult, setAiResult] = useState<"success" | "error" | null>(null);
 
   useInterval(() => {
     health.refetch();
     jobs.refetch();
+    ollama.refetch();
     suppliers.refetch();
   }, 10000);
+
+  async function handleTriggerAi() {
+    setAiTriggering(true);
+    setAiResult(null);
+    try {
+      await triggerAiMatch();
+      setAiResult("success");
+      setTimeout(() => setAiResult(null), 4000);
+      jobs.refetch();
+    } catch {
+      setAiResult("error");
+      setTimeout(() => setAiResult(null), 5000);
+    } finally {
+      setAiTriggering(false);
+    }
+  }
 
   const activeSuppliers = suppliers.data?.items.filter((s) => s.active).length ?? 0;
   const totalProducts = suppliers.data?.items.reduce((sum, s) => sum + (s._count?.productMaps ?? 0), 0) ?? 0;
@@ -145,67 +171,135 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* System Status + Queue Status */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Server className="h-5 w-5" /> Service Health
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {health.loading ? (
-              <p className="text-sm text-muted-foreground">Loading...</p>
-            ) : health.error ? (
-              <p className="text-sm text-destructive">Failed to load: {health.error}</p>
-            ) : health.data ? (
-              <>
-                {Object.entries(health.data.checks).map(([name, status]) => (
-                  <div key={name} className="flex items-center justify-between">
-                    <span className="text-sm font-medium capitalize">{name}</span>
-                    <Badge variant={status === "ok" ? "success" : "destructive"}>
-                      {status === "ok" ? (
-                        <CheckCircle2 className="mr-1 h-3 w-3" />
-                      ) : (
-                        <AlertTriangle className="mr-1 h-3 w-3" />
-                      )}
-                      {status}
-                    </Badge>
-                  </div>
-                ))}
-                <div className="flex items-center justify-between pt-2 border-t">
-                  <span className="text-sm font-medium">Uptime</span>
-                  <span className="text-sm text-muted-foreground">
-                    <Clock className="inline mr-1 h-3 w-3" />
-                    {Math.floor(health.data.uptime / 3600)}h {Math.floor((health.data.uptime % 3600) / 60)}m
-                  </span>
+      {/* Service Health */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Server className="h-5 w-5" /> Service Health
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {health.loading ? (
+            <p className="text-sm text-muted-foreground">Loading...</p>
+          ) : health.error ? (
+            <p className="text-sm text-destructive">Failed to load: {health.error}</p>
+          ) : health.data ? (
+            <div className="flex flex-wrap gap-4">
+              {Object.entries(health.data.checks).map(([name, status]) => (
+                <div key={name} className="flex items-center gap-2">
+                  <span className="text-sm font-medium capitalize">{name}</span>
+                  <Badge variant={status === "ok" ? "success" : "destructive"}>
+                    {status === "ok" ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <AlertTriangle className="mr-1 h-3 w-3" />}
+                    {status}
+                  </Badge>
                 </div>
-              </>
-            ) : null}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Activity className="h-5 w-5" /> Background Queues
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {jobs.loading ? (
-              <p className="text-sm text-muted-foreground">Loading...</p>
-            ) : jobs.error ? (
-              <p className="text-sm text-destructive">Failed to load: {jobs.error}</p>
-            ) : jobs.data ? (
-              <div className="space-y-3">
-                <QueueCard name="Sync" status={jobs.data.sync} />
-                <QueueCard name="Match" status={jobs.data.match} />
-                <QueueCard name="Index" status={jobs.data.index} />
+              ))}
+              <div className="flex items-center gap-2 ml-auto">
+                <Clock className="h-3 w-3 text-muted-foreground" />
+                <span className="text-sm text-muted-foreground">
+                  Uptime: {Math.floor(health.data.uptime / 3600)}h {Math.floor((health.data.uptime % 3600) / 60)}m
+                </span>
               </div>
-            ) : null}
-          </CardContent>
-        </Card>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {/* Background Workers */}
+      <div>
+        <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+          <Activity className="h-5 w-5" /> Background Workers
+        </h3>
+        {jobs.loading ? (
+          <p className="text-sm text-muted-foreground">Loading workers...</p>
+        ) : jobs.error ? (
+          <p className="text-sm text-destructive">Failed to load workers: {jobs.error}</p>
+        ) : jobs.data ? (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <QueueCard name="Sync" status={jobs.data.sync} />
+            <QueueCard name="Match" status={jobs.data.match} />
+            <QueueCard name="Index" status={jobs.data.index} />
+            <QueueCard name="Pricing" status={jobs.data.pricing} />
+            <QueueCard name="Stock" status={jobs.data.stock} />
+            <QueueCard name="IC Match" status={jobs.data.icMatch} />
+          </div>
+        ) : null}
       </div>
+
+      {/* AI Worker */}
+      <Card className="border-purple-200 dark:border-purple-800">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <Brain className="h-5 w-5 text-purple-600" /> AI Brand Alias Worker
+            </CardTitle>
+            <Button
+              size="sm"
+              variant={aiResult === "success" ? "default" : aiResult === "error" ? "destructive" : "outline"}
+              onClick={handleTriggerAi}
+              disabled={aiTriggering || (jobs.data?.aiMatch.active ?? 0) > 0}
+              className={aiResult === "success" ? "bg-green-600 hover:bg-green-700 border-0" : ""}
+            >
+              {aiTriggering ? (
+                <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Queuing...</>
+              ) : aiResult === "success" ? (
+                <><CheckCircle2 className="mr-1 h-3 w-3" /> Queued!</>
+              ) : (
+                <><Zap className="mr-1 h-3 w-3" /> Run Now</>
+              )}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Discovers missing brand aliases via article number overlap + optional Ollama LLM confirmation
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 md:grid-cols-2">
+            {/* Queue card */}
+            {jobs.data && <QueueCard name="AI Match" status={jobs.data.aiMatch} />}
+
+            {/* Ollama status */}
+            <div className="rounded-lg border p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold flex items-center gap-1.5">
+                  <Cpu className="h-4 w-4 text-purple-500" /> Ollama LLM
+                </span>
+                {ollama.loading ? (
+                  <Badge variant="outline"><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Checking</Badge>
+                ) : ollama.data?.available ? (
+                  <Badge variant="default" className="bg-green-600">
+                    <CheckCircle2 className="mr-1 h-3 w-3" /> Online
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary">
+                    <Pause className="mr-1 h-3 w-3" /> Offline
+                  </Badge>
+                )}
+              </div>
+              {ollama.data && (
+                <div className="grid grid-cols-1 gap-2 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Model</span>
+                    <span className="font-mono font-medium truncate max-w-[140px]">{ollama.data.configuredModel}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Loaded</span>
+                    <span className="font-mono font-medium">
+                      {ollama.data.loadedModels.length > 0 ? ollama.data.loadedModels.join(", ") : "none"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Mode</span>
+                    <span className="font-medium">
+                      {ollama.data.available ? "Phase A + B (LLM)" : "Phase A only"}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Match Statistics */}
       {matchLogs.data?.stats && matchLogs.data.stats.length > 0 && (
