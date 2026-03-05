@@ -112,17 +112,17 @@ export async function startScheduler(): Promise<void> {
 
   logger.info("Scheduled index rebuild (2h)");
 
-  // AI match: every 12 hours — brand alias discovery via article overlap + Ollama LLM
+  // AI match: every 6 hours — brand alias discovery via article overlap + Ollama LLM
   await aiMatchQueue.add(
     "ai-match-scheduled",
     {},
     {
-      repeat: { every: 12 * 60 * 60 * 1000 },
+      repeat: { every: 6 * 60 * 60 * 1000 },
       jobId: "ai-match-repeat",
     }
   );
 
-  logger.info("Scheduled AI match (12h)");
+  logger.info("Scheduled AI match (6h)");
 
   // Fire initial jobs immediately for all suppliers
   // Use jobId for deduplication — prevents duplicate jobs accumulating across restarts

@@ -1,11 +1,12 @@
 "use client";
 
 import { useApi, useInterval } from "@/lib/hooks";
-import { getHealth, getSuppliers, getUnmatched, getMatchLogs, getJobsStatus, getOllamaStatus, triggerAiMatch } from "@/lib/api";
+import { getSystemStatus, getSuppliers, getUnmatched, getMatchLogs, triggerAiMatch, runAllWorkers } from "@/lib/api";
 import type { QueueStatus } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { WorkerAlerts } from "@/components/worker-alerts";
 import { formatNumber } from "@/lib/utils";
 import { useState } from "react";
 import {
@@ -24,6 +25,7 @@ import {
   Cpu,
   Zap,
   Loader2,
+  PlayCircle,
 } from "lucide-react";
 
 function QueueCard({ name, status }: { name: string; status: QueueStatus }) {
@@ -80,19 +82,18 @@ function QueueCard({ name, status }: { name: string; status: QueueStatus }) {
 }
 
 export default function DashboardPage() {
-  const health = useApi(() => getHealth(), []);
-  const jobs = useApi(() => getJobsStatus(), []);
-  const ollama = useApi(() => getOllamaStatus(), []);
+  // Single aggregated call replaces 3 separate calls (health + jobs + ollama)
+  const status = useApi(() => getSystemStatus(), []);
   const suppliers = useApi(() => getSuppliers({ limit: 100 }), []);
   const unmatched = useApi(() => getUnmatched({ limit: 1, resolved: "false" }), []);
   const matchLogs = useApi(() => getMatchLogs({ limit: 1 }), []);
+
   const [aiTriggering, setAiTriggering] = useState(false);
   const [aiResult, setAiResult] = useState<"success" | "error" | null>(null);
+  const [runningAll, setRunningAll] = useState(false);
 
   useInterval(() => {
-    health.refetch();
-    jobs.refetch();
-    ollama.refetch();
+    status.refetch();
     suppliers.refetch();
   }, 10000);
 
@@ -103,7 +104,7 @@ export default function DashboardPage() {
       await triggerAiMatch();
       setAiResult("success");
       setTimeout(() => setAiResult(null), 4000);
-      jobs.refetch();
+      status.refetch();
     } catch {
       setAiResult("error");
       setTimeout(() => setAiResult(null), 5000);
@@ -112,15 +113,50 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleRunAll() {
+    setRunningAll(true);
+    try {
+      await runAllWorkers();
+      setTimeout(() => status.refetch(), 1000);
+    } finally {
+      setTimeout(() => setRunningAll(false), 2000);
+    }
+  }
+
+  const q = status.data?.jobs;
+  const h = status.data?.health;
+  const ollama = status.data?.ollama;
+  const alerts = status.data?.alerts ?? [];
+
   const activeSuppliers = suppliers.data?.items.filter((s) => s.active).length ?? 0;
   const totalProducts = suppliers.data?.items.reduce((sum, s) => sum + (s._count?.productMaps ?? 0), 0) ?? 0;
 
   return (
     <div className="space-y-8">
-      <div>
-        <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
-        <p className="text-muted-foreground">OEMline multi-supplier parts platform overview</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
+          <p className="text-muted-foreground">OEMline multi-supplier parts platform overview</p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleRunAll}
+          disabled={runningAll}
+          className="gap-2"
+        >
+          {runningAll ? (
+            <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting...</>
+          ) : (
+            <><PlayCircle className="h-3.5 w-3.5" /> Run All Workers</>
+          )}
+        </Button>
       </div>
+
+      {/* Failure alerts — auto-detected from system status */}
+      {alerts.length > 0 && (
+        <WorkerAlerts alerts={alerts} onRetried={() => status.refetch()} />
+      )}
 
       {/* KPI Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -179,25 +215,25 @@ export default function DashboardPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {health.loading ? (
+          {status.loading && !h ? (
             <p className="text-sm text-muted-foreground">Loading...</p>
-          ) : health.error ? (
-            <p className="text-sm text-destructive">Failed to load: {health.error}</p>
-          ) : health.data ? (
+          ) : status.error ? (
+            <p className="text-sm text-destructive">Failed to load: {status.error}</p>
+          ) : h ? (
             <div className="flex flex-wrap gap-4">
-              {Object.entries(health.data.checks).map(([name, status]) => (
+              {Object.entries(h.checks).map(([name, st]) => (
                 <div key={name} className="flex items-center gap-2">
                   <span className="text-sm font-medium capitalize">{name}</span>
-                  <Badge variant={status === "ok" ? "success" : "destructive"}>
-                    {status === "ok" ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <AlertTriangle className="mr-1 h-3 w-3" />}
-                    {status}
+                  <Badge variant={st === "ok" ? "success" : "destructive"}>
+                    {st === "ok" ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <AlertTriangle className="mr-1 h-3 w-3" />}
+                    {st}
                   </Badge>
                 </div>
               ))}
               <div className="flex items-center gap-2 ml-auto">
                 <Clock className="h-3 w-3 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">
-                  Uptime: {Math.floor(health.data.uptime / 3600)}h {Math.floor((health.data.uptime % 3600) / 60)}m
+                  Uptime: {Math.floor(h.uptime / 3600)}h {Math.floor((h.uptime % 3600) / 60)}m
                 </span>
               </div>
             </div>
@@ -210,18 +246,18 @@ export default function DashboardPage() {
         <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
           <Activity className="h-5 w-5" /> Background Workers
         </h3>
-        {jobs.loading ? (
+        {status.loading && !q ? (
           <p className="text-sm text-muted-foreground">Loading workers...</p>
-        ) : jobs.error ? (
-          <p className="text-sm text-destructive">Failed to load workers: {jobs.error}</p>
-        ) : jobs.data ? (
+        ) : status.error ? (
+          <p className="text-sm text-destructive">Failed to load workers: {status.error}</p>
+        ) : q ? (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            <QueueCard name="Sync" status={jobs.data.sync} />
-            <QueueCard name="Match" status={jobs.data.match} />
-            <QueueCard name="Index" status={jobs.data.index} />
-            <QueueCard name="Pricing" status={jobs.data.pricing} />
-            <QueueCard name="Stock" status={jobs.data.stock} />
-            <QueueCard name="IC Match" status={jobs.data.icMatch} />
+            {q.sync    && <QueueCard name="Sync"     status={q.sync} />}
+            {q.match   && <QueueCard name="Match"    status={q.match} />}
+            {q.index   && <QueueCard name="Index"    status={q.index} />}
+            {q.pricing && <QueueCard name="Pricing"  status={q.pricing} />}
+            {q.stock   && <QueueCard name="Stock"    status={q.stock} />}
+            {q.icMatch && <QueueCard name="IC Match" status={q.icMatch} />}
           </div>
         ) : null}
       </div>
@@ -237,7 +273,7 @@ export default function DashboardPage() {
               size="sm"
               variant={aiResult === "success" ? "default" : aiResult === "error" ? "destructive" : "outline"}
               onClick={handleTriggerAi}
-              disabled={aiTriggering || (jobs.data?.aiMatch.active ?? 0) > 0}
+              disabled={aiTriggering || (q?.aiMatch?.active ?? 0) > 0}
               className={aiResult === "success" ? "bg-green-600 hover:bg-green-700 border-0" : ""}
             >
               {aiTriggering ? (
@@ -250,23 +286,21 @@ export default function DashboardPage() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Discovers missing brand aliases via article number overlap + optional Ollama LLM confirmation
+            Discovers missing brand aliases via article number overlap + optional Ollama LLM confirmation (auto-runs every 6h)
           </p>
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 md:grid-cols-2">
-            {/* Queue card */}
-            {jobs.data && <QueueCard name="AI Match" status={jobs.data.aiMatch} />}
+            {q?.aiMatch && <QueueCard name="AI Match" status={q.aiMatch} />}
 
-            {/* Ollama status */}
             <div className="rounded-lg border p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold flex items-center gap-1.5">
                   <Cpu className="h-4 w-4 text-purple-500" /> Ollama LLM
                 </span>
-                {ollama.loading ? (
+                {status.loading && !ollama ? (
                   <Badge variant="outline"><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Checking</Badge>
-                ) : ollama.data?.available ? (
+                ) : ollama?.available ? (
                   <Badge variant="default" className="bg-green-600">
                     <CheckCircle2 className="mr-1 h-3 w-3" /> Online
                   </Badge>
@@ -276,22 +310,22 @@ export default function DashboardPage() {
                   </Badge>
                 )}
               </div>
-              {ollama.data && (
+              {ollama && (
                 <div className="grid grid-cols-1 gap-2 text-xs">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Model</span>
-                    <span className="font-mono font-medium truncate max-w-[140px]">{ollama.data.configuredModel}</span>
+                    <span className="font-mono font-medium truncate max-w-[140px]">{ollama.configuredModel}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Loaded</span>
                     <span className="font-mono font-medium">
-                      {ollama.data.loadedModels.length > 0 ? ollama.data.loadedModels.join(", ") : "none"}
+                      {ollama.loadedModels.length > 0 ? ollama.loadedModels.join(", ") : "none"}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Mode</span>
                     <span className="font-medium">
-                      {ollama.data.available ? "Phase A + B (LLM)" : "Phase A only"}
+                      {ollama.available ? "Phase A + B (LLM)" : "Phase A only"}
                     </span>
                   </div>
                 </div>

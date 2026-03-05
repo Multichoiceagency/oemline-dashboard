@@ -794,6 +794,197 @@ export async function jobRoutes(app: FastifyInstance) {
       matchingArticles: Number(r.matching_articles),
     }));
   });
+
+  /**
+   * Aggregated system status — health + all queues + Ollama in one request.
+   * Replaces 3 separate API calls from the dashboard/health/workflow pages.
+   */
+  app.get("/jobs/system-status", async () => {
+    const start = Date.now();
+    const { prisma: db } = await import("../lib/prisma.js");
+    const { redis: redisClient } = await import("../lib/redis.js");
+    const { meili: meiliClient } = await import("../lib/meilisearch.js");
+    const { getAllAdapters } = await import("../adapters/registry.js");
+    const { ollamaIsAvailable, ollamaListModels, OLLAMA_MODEL } = await import("../lib/ollama.js");
+
+    // All fetches in parallel — fast even if one service is slow
+    const [
+      syncR, matchR, indexR, pricingR, stockR, icMatchR, aiMatchR,
+      pgR, redisR, meiliR, ollamaR, modelsR,
+    ] = await Promise.allSettled([
+      getQueueCounts(syncQueue),
+      getQueueCounts(matchQueue),
+      getQueueCounts(indexQueue),
+      getQueueCounts(pricingQueue),
+      getQueueCounts(stockQueue),
+      getQueueCounts(icMatchQueue),
+      getQueueCounts(aiMatchQueue),
+      db.$queryRaw`SELECT 1`.then(() => true),
+      redisClient.ping().then(() => true),
+      meiliClient.health().then(() => true),
+      ollamaIsAvailable(),
+      ollamaListModels(),
+    ]);
+
+    const jobs = {
+      sync:    syncR.status    === "fulfilled" ? syncR.value    : null,
+      match:   matchR.status   === "fulfilled" ? matchR.value   : null,
+      index:   indexR.status   === "fulfilled" ? indexR.value   : null,
+      pricing: pricingR.status === "fulfilled" ? pricingR.value : null,
+      stock:   stockR.status   === "fulfilled" ? stockR.value   : null,
+      icMatch: icMatchR.status === "fulfilled" ? icMatchR.value : null,
+      aiMatch: aiMatchR.status === "fulfilled" ? aiMatchR.value : null,
+    };
+
+    const checks: Record<string, string> = {
+      postgres:    pgR.status    === "fulfilled" && pgR.value    ? "ok" : "error",
+      redis:       redisR.status === "fulfilled" && redisR.value ? "ok" : "error",
+      meilisearch: meiliR.status === "fulfilled" && meiliR.value ? "ok" : "error",
+    };
+
+    const ollamaAvailable = ollamaR.status  === "fulfilled" ? ollamaR.value  : false;
+    const ollamaModels    = modelsR.status   === "fulfilled" ? modelsR.value  : [];
+
+    const circuits: Record<string, { state: string; failures: number }> = {};
+    for (const adapter of getAllAdapters()) {
+      circuits[adapter.code] = {
+        state:    adapter.circuitBreaker.getState(),
+        failures: adapter.circuitBreaker.getFailures(),
+      };
+    }
+
+    type Alert = {
+      type: "failed" | "service_error" | "circuit_open";
+      queue?: string; service?: string; count?: number; message: string;
+    };
+    const alerts: Alert[] = [];
+
+    for (const [key, q] of Object.entries(jobs) as [string, { failed: number } | null][]) {
+      if (q && q.failed > 0) {
+        alerts.push({ type: "failed", queue: key, count: q.failed,
+          message: `${q.failed} failed job${q.failed > 1 ? "s" : ""} in ${key} queue` });
+      }
+    }
+    for (const [svc, st] of Object.entries(checks)) {
+      if (st !== "ok") alerts.push({ type: "service_error", service: svc, message: `${svc} is unreachable` });
+    }
+    for (const [code, cb] of Object.entries(circuits)) {
+      if (cb.state === "open") {
+        alerts.push({ type: "circuit_open", service: code,
+          message: `Circuit breaker OPEN for ${code} (${cb.failures} failures)` });
+      }
+    }
+
+    return {
+      health: {
+        status:  Object.values(checks).every((s) => s === "ok") ? "healthy" : "degraded",
+        uptime:  Math.floor(process.uptime()),
+        checks,
+        circuits,
+      },
+      jobs,
+      ollama: {
+        available:      ollamaAvailable,
+        ollamaUrl:      process.env.OLLAMA_URL ?? "http://ollama:11434",
+        configuredModel: OLLAMA_MODEL,
+        loadedModels:   ollamaModels,
+      },
+      alerts,
+      timestamp:      new Date().toISOString(),
+      responseTimeMs: Date.now() - start,
+    };
+  });
+
+  /** Retry all failed jobs in a queue (up to 100). */
+  app.post("/jobs/:queue/retry-failed", async (request) => {
+    const { queue } = request.params as { queue: string };
+    const q = getQueue(queue);
+    if (!q) return { error: "Unknown queue" };
+
+    const failed = await q.getFailed(0, 100);
+    let retried = 0;
+    for (const job of failed) {
+      try { await job.retry(); retried++; } catch { /* skip */ }
+    }
+    return { retried, total: failed.length, queue };
+  });
+
+  /**
+   * Run all workers immediately — triggers sync, match, ic-match, stock for every
+   * active supplier, plus index and ai-match. Uses jobId deduplication so it's
+   * safe to call multiple times.
+   */
+  app.post("/jobs/run-all", async () => {
+    const { prisma: db } = await import("../lib/prisma.js");
+    const suppliers = await db.supplier.findMany({
+      where: { active: true },
+      select: { code: true, adapterType: true },
+    });
+
+    const CATALOG_TYPES = new Set(["tecdoc", "intercars", "partspoint"]);
+    const queued: Array<{ queue: string; supplierCode?: string; jobId?: string }> = [];
+
+    for (const supplier of suppliers) {
+      const isDirect = !CATALOG_TYPES.has(supplier.adapterType);
+      if (!isDirect) {
+        const [sJob, mJob, icJob] = await Promise.all([
+          syncQueue.add(`sync-runall-${supplier.code}`,     { supplierCode: supplier.code }, { priority: 2, jobId: `sync-runall-${supplier.code}` }),
+          matchQueue.add(`match-runall-${supplier.code}`,   { supplierCode: supplier.code }, { priority: 2, jobId: `match-runall-${supplier.code}` }),
+          icMatchQueue.add(`ic-match-runall-${supplier.code}`, { supplierCode: supplier.code }, { priority: 2, jobId: `ic-match-runall-${supplier.code}` }),
+        ]);
+        queued.push({ queue: "sync",     supplierCode: supplier.code, jobId: sJob.id });
+        queued.push({ queue: "match",    supplierCode: supplier.code, jobId: mJob.id });
+        queued.push({ queue: "ic-match", supplierCode: supplier.code, jobId: icJob.id });
+      }
+      const stJob = await stockQueue.add(`stock-runall-${supplier.code}`, { supplierCode: supplier.code }, { priority: 3, jobId: `stock-runall-${supplier.code}` });
+      queued.push({ queue: "stock", supplierCode: supplier.code, jobId: stJob.id });
+    }
+
+    const [idxJob, aiJob] = await Promise.all([
+      indexQueue.add("index-runall",    {}, { priority: 3, jobId: "index-runall-dedup" }),
+      aiMatchQueue.add("ai-match-runall", {}, { priority: 3, jobId: "ai-match-runall-dedup" }),
+    ]);
+    queued.push({ queue: "index",    jobId: idxJob.id });
+    queued.push({ queue: "ai-match", jobId: aiJob.id });
+
+    return { queued: queued.length, jobs: queued };
+  });
+
+  /**
+   * Import TecDoc brand filter — stores selected brand IDs in settings.
+   * Body: { brandIds: number[] }
+   * These IDs are used as dataSupplierIds in TecDoc sync to restrict to selected brands.
+   */
+  app.post("/jobs/import-brand-filter", async (request) => {
+    const { prisma: db } = await import("../lib/prisma.js");
+    const body = (request.body ?? {}) as { brandIds?: unknown };
+    const brandIds = Array.isArray(body.brandIds)
+      ? (body.brandIds as unknown[]).filter((v) => typeof v === "number" && Number.isInteger(v))
+      : [];
+
+    if (brandIds.length === 0) {
+      return { error: "brandIds array is required and must contain integers" };
+    }
+
+    const value = JSON.stringify(brandIds);
+    await db.$executeRawUnsafe(
+      `INSERT INTO settings (key, value, updated_at) VALUES ('tecdoc_brand_filter_ids', $1, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+      value
+    );
+
+    return { stored: brandIds.length, brandIds };
+  });
+
+  /**
+   * Get current TecDoc brand filter.
+   */
+  app.get("/jobs/brand-filter", async () => {
+    const { prisma: db } = await import("../lib/prisma.js");
+    const row = await db.setting.findUnique({ where: { key: "tecdoc_brand_filter_ids" } });
+    const brandIds: number[] = row ? JSON.parse(row.value) : [];
+    return { count: brandIds.length, brandIds };
+  });
 }
 
 function getQueue(name: string) {

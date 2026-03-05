@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import { useApi, useInterval } from "@/lib/hooks";
-import { getHealth, getJobsStatus, getOllamaStatus, triggerAiMatch } from "@/lib/api";
+import { getSystemStatus, triggerAiMatch, runAllWorkers } from "@/lib/api";
 import type { QueueStatus } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { WorkerAlerts } from "@/components/worker-alerts";
 import {
   Table,
   TableBody,
@@ -31,6 +32,7 @@ import {
   RotateCw,
   Loader2,
   Zap,
+  PlayCircle,
 } from "lucide-react";
 
 const SERVICE_ICONS: Record<string, React.ReactNode> = {
@@ -95,17 +97,13 @@ function WorkerCard({ name, status }: { name: string; status: QueueStatus }) {
 }
 
 export default function HealthPage() {
-  const { data, error, loading, refetch } = useApi(() => getHealth(), []);
-  const jobs = useApi(() => getJobsStatus(), []);
-  const ollama = useApi(() => getOllamaStatus(), []);
+  // Single aggregated call replaces getHealth() + getJobsStatus() + getOllamaStatus()
+  const status = useApi(() => getSystemStatus(), []);
   const [aiTriggering, setAiTriggering] = useState(false);
   const [aiResult, setAiResult] = useState<"success" | "error" | null>(null);
+  const [runningAll, setRunningAll] = useState(false);
 
-  useInterval(() => {
-    refetch();
-    jobs.refetch();
-    ollama.refetch();
-  }, 10000);
+  useInterval(() => { status.refetch(); }, 10000);
 
   async function handleTriggerAi() {
     setAiTriggering(true);
@@ -114,7 +112,7 @@ export default function HealthPage() {
       await triggerAiMatch();
       setAiResult("success");
       setTimeout(() => setAiResult(null), 4000);
-      jobs.refetch();
+      status.refetch();
     } catch {
       setAiResult("error");
       setTimeout(() => setAiResult(null), 5000);
@@ -123,7 +121,23 @@ export default function HealthPage() {
     }
   }
 
-  const uptime = data?.uptime ?? 0;
+  async function handleRunAll() {
+    setRunningAll(true);
+    try {
+      await runAllWorkers();
+      setTimeout(() => status.refetch(), 1000);
+    } finally {
+      setTimeout(() => setRunningAll(false), 2000);
+    }
+  }
+
+  const data = status.data;
+  const h = data?.health;
+  const q = data?.jobs;
+  const ollama = data?.ollama;
+  const alerts = data?.alerts ?? [];
+
+  const uptime = h?.uptime ?? 0;
   const days = Math.floor(uptime / 86400);
   const hours = Math.floor((uptime % 86400) / 3600);
   const minutes = Math.floor((uptime % 3600) / 60);
@@ -131,24 +145,43 @@ export default function HealthPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-3xl font-bold tracking-tight">System Health</h2>
-        <p className="text-muted-foreground">Real-time monitoring of all platform services (auto-refreshes every 10s)</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">System Health</h2>
+          <p className="text-muted-foreground">Real-time monitoring of all platform services (auto-refreshes every 10s)</p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleRunAll}
+          disabled={runningAll}
+          className="gap-2"
+        >
+          {runningAll ? (
+            <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting...</>
+          ) : (
+            <><PlayCircle className="h-3.5 w-3.5" /> Run All Workers</>
+          )}
+        </Button>
       </div>
 
-      {loading && !data ? (
+      {status.loading && !data ? (
         <p className="text-muted-foreground">Loading health status...</p>
-      ) : error ? (
+      ) : status.error ? (
         <Card className="border-destructive">
           <CardContent className="pt-6">
             <div className="flex items-center gap-2 text-destructive">
               <XCircle className="h-5 w-5" />
-              <span className="font-medium">API Unreachable:</span> {error}
+              <span className="font-medium">API Unreachable:</span> {status.error}
             </div>
           </CardContent>
         </Card>
       ) : data ? (
         <>
+          {alerts.length > 0 && (
+            <WorkerAlerts alerts={alerts} onRetried={() => status.refetch()} />
+          )}
+
           {/* Overall status */}
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <Card>
@@ -158,12 +191,12 @@ export default function HealthPage() {
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-2">
-                  {data.status === "healthy" ? (
+                  {h?.status === "healthy" ? (
                     <CheckCircle2 className="h-6 w-6 text-green-500" />
                   ) : (
                     <AlertTriangle className="h-6 w-6 text-yellow-500" />
                   )}
-                  <span className="text-2xl font-bold capitalize">{data.status}</span>
+                  <span className="text-2xl font-bold capitalize">{h?.status ?? "—"}</span>
                 </div>
               </CardContent>
             </Card>
@@ -190,8 +223,8 @@ export default function HealthPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {Object.values(data.checks).filter((s) => s === "ok").length}/
-                  {Object.keys(data.checks).length}
+                  {h ? Object.values(h.checks).filter((s) => s === "ok").length : 0}/
+                  {h ? Object.keys(h.checks).length : 0}
                 </div>
                 <p className="text-xs text-muted-foreground">Services operational</p>
               </CardContent>
@@ -204,7 +237,7 @@ export default function HealthPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {Object.values(data.queues).reduce((sum, q) => sum + (typeof q === "number" ? q : (q.waiting + q.active)), 0)}
+                  {q ? Object.values(q).reduce((sum, qs) => sum + (qs ? qs.active + qs.waiting + qs.prioritized : 0), 0) : 0}
                 </div>
                 <p className="text-xs text-muted-foreground">Total active + pending jobs</p>
               </CardContent>
@@ -226,20 +259,20 @@ export default function HealthPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {Object.entries(data.checks).map(([name, status]) => (
+                  {h && Object.entries(h.checks).map(([name, st]) => (
                     <TableRow key={name}>
                       <TableCell className="font-medium flex items-center gap-2">
                         {SERVICE_ICONS[name] ?? <Server className="h-4 w-4" />}
                         <span className="capitalize">{name}</span>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={status === "ok" ? "success" : "destructive"}>
-                          {status === "ok" ? (
+                        <Badge variant={st === "ok" ? "success" : "destructive"}>
+                          {st === "ok" ? (
                             <CheckCircle2 className="mr-1 h-3 w-3" />
                           ) : (
                             <XCircle className="mr-1 h-3 w-3" />
                           )}
-                          {status}
+                          {st}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-muted-foreground">
@@ -259,16 +292,12 @@ export default function HealthPage() {
             <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
               <Activity className="h-5 w-5" /> Background Workers
             </h3>
-            {jobs.loading ? (
-              <p className="text-sm text-muted-foreground">Loading workers...</p>
-            ) : jobs.error ? (
-              <p className="text-sm text-destructive">Failed to load: {jobs.error}</p>
-            ) : jobs.data ? (
+            {q ? (
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {(Object.entries(QUEUE_LABELS) as [keyof typeof jobs.data, string][])
-                  .filter(([key]) => key !== "aiMatch" && jobs.data![key])
+                {(Object.entries(QUEUE_LABELS) as [keyof typeof q, string][])
+                  .filter(([key]) => key !== "aiMatch" && q[key])
                   .map(([key, label]) => (
-                    <WorkerCard key={key} name={label} status={jobs.data![key]} />
+                    <WorkerCard key={key} name={label} status={q[key]!} />
                   ))}
               </div>
             ) : null}
@@ -285,7 +314,7 @@ export default function HealthPage() {
                   size="sm"
                   variant={aiResult === "success" ? "default" : aiResult === "error" ? "destructive" : "outline"}
                   onClick={handleTriggerAi}
-                  disabled={aiTriggering || (jobs.data?.aiMatch.active ?? 0) > 0}
+                  disabled={aiTriggering || (q?.aiMatch?.active ?? 0) > 0}
                   className={aiResult === "success" ? "bg-green-600 hover:bg-green-700 border-0" : ""}
                 >
                   {aiTriggering ? (
@@ -298,22 +327,21 @@ export default function HealthPage() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Discovers missing brand aliases via article number overlap + optional Ollama LLM confirmation (Phase A + B)
+                Discovers missing brand aliases via article number overlap + optional Ollama LLM confirmation (auto-runs every 6h)
               </p>
             </CardHeader>
             <CardContent>
               <div className="grid gap-4 md:grid-cols-2">
-                {jobs.data && <WorkerCard name="AI Match Queue" status={jobs.data.aiMatch} />}
+                {q?.aiMatch && <WorkerCard name="AI Match Queue" status={q.aiMatch} />}
 
-                {/* Ollama status */}
                 <div className="rounded-lg border p-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-semibold flex items-center gap-1.5">
                       <Cpu className="h-4 w-4 text-purple-500" /> Ollama LLM Engine
                     </span>
-                    {ollama.loading ? (
+                    {!ollama ? (
                       <Badge variant="outline"><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Checking</Badge>
-                    ) : ollama.data?.available ? (
+                    ) : ollama.available ? (
                       <Badge variant="default" className="bg-green-600">
                         <CheckCircle2 className="mr-1 h-3 w-3" /> Online
                       </Badge>
@@ -323,26 +351,26 @@ export default function HealthPage() {
                       </Badge>
                     )}
                   </div>
-                  {ollama.data && (
+                  {ollama && (
                     <div className="grid grid-cols-1 gap-2 text-xs">
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Ollama URL</span>
-                        <span className="font-mono truncate max-w-[180px]">{ollama.data.ollamaUrl}</span>
+                        <span className="font-mono truncate max-w-[180px]">{ollama.ollamaUrl}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Configured Model</span>
-                        <span className="font-mono font-medium">{ollama.data.configuredModel}</span>
+                        <span className="font-mono font-medium">{ollama.configuredModel}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Loaded Models</span>
                         <span className="font-mono">
-                          {ollama.data.loadedModels.length > 0 ? ollama.data.loadedModels.join(", ") : "none"}
+                          {ollama.loadedModels.length > 0 ? ollama.loadedModels.join(", ") : "none"}
                         </span>
                       </div>
                       <div className="flex justify-between pt-1 border-t">
                         <span className="text-muted-foreground">Active Mode</span>
                         <span className="font-medium text-purple-600">
-                          {ollama.data.available ? "Phase A + B (with LLM)" : "Phase A only (code)"}
+                          {ollama.available ? "Phase A + B (with LLM)" : "Phase A only (code)"}
                         </span>
                       </div>
                     </div>
@@ -353,7 +381,7 @@ export default function HealthPage() {
           </Card>
 
           {/* Circuit breakers */}
-          {Object.keys(data.circuits).length > 0 && (
+          {h && Object.keys(h.circuits).length > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle>Circuit Breakers</CardTitle>
@@ -368,7 +396,7 @@ export default function HealthPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {Object.entries(data.circuits).map(([name, info]) => (
+                    {Object.entries(h.circuits).map(([name, info]) => (
                       <TableRow key={name}>
                         <TableCell className="font-medium">{name}</TableCell>
                         <TableCell>
@@ -395,6 +423,7 @@ export default function HealthPage() {
 
           <p className="text-xs text-muted-foreground text-center">
             Last updated: {new Date(data.timestamp).toLocaleString("nl-NL")}
+            {data.responseTimeMs && <span className="ml-2 opacity-60">({data.responseTimeMs}ms)</span>}
           </p>
         </>
       ) : null}

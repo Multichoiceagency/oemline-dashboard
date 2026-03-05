@@ -1,26 +1,23 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+async function apiFetch<T>(path: string, init?: RequestInit, _retries = 1): Promise<T> {
   const url = `${API_BASE}${path}`;
-  const headers: Record<string, string> = {
-    "X-API-Key": API_KEY,
-  };
-  // Only set Content-Type for requests with a body
-  if (init?.body) {
-    headers["Content-Type"] = "application/json";
-  }
+  const headers: Record<string, string> = { "X-API-Key": API_KEY };
+  if (init?.body) headers["Content-Type"] = "application/json";
+
   let res: Response;
   try {
-    res = await fetch(url, {
-      ...init,
-      headers: {
-        ...headers,
-        ...init?.headers,
-      },
-    });
+    res = await fetch(url, { ...init, headers: { ...headers, ...init?.headers } });
   } catch (err) {
     throw new Error(`Network error: ${err instanceof Error ? err.message : "fetch failed"}`);
+  }
+
+  // Auto-retry once on 429 — wait for retry-after header (capped at 20s)
+  if (res.status === 429 && _retries > 0) {
+    const wait = Math.min(parseInt(res.headers.get("retry-after") ?? "5", 10), 20) * 1000;
+    await new Promise((r) => setTimeout(r, wait));
+    return apiFetch(path, init, 0);
   }
 
   let body: unknown;
@@ -84,6 +81,43 @@ export const getJobsStatus = () => apiFetch<JobsStatusResponse>("/api/jobs/statu
 export const getOllamaStatus = () => apiFetch<OllamaStatus>("/api/jobs/ai-match/ollama-status");
 export const triggerAiMatch = (opts?: { autoApplyThreshold?: number; llmMinThreshold?: number; llmConfidenceThreshold?: number }) =>
   apiFetch<{ queued: boolean; jobId: string; message: string }>("/api/jobs/ai-match", { method: "POST", body: JSON.stringify(opts ?? {}) });
+
+// Aggregated system status — replaces 3 separate calls (health + jobs + ollama)
+export interface SystemAlert {
+  type: "failed" | "service_error" | "circuit_open";
+  queue?: string;
+  service?: string;
+  count?: number;
+  message: string;
+}
+
+export interface SystemStatus {
+  health: {
+    status: string;
+    uptime: number;
+    checks: Record<string, string>;
+    circuits: Record<string, { state: string; failures: number }>;
+  };
+  jobs: {
+    sync: QueueStatus | null;
+    match: QueueStatus | null;
+    index: QueueStatus | null;
+    pricing: QueueStatus | null;
+    stock: QueueStatus | null;
+    icMatch: QueueStatus | null;
+    aiMatch: QueueStatus | null;
+  };
+  ollama: OllamaStatus;
+  alerts: SystemAlert[];
+  timestamp: string;
+  responseTimeMs: number;
+}
+
+export const getSystemStatus = () => apiFetch<SystemStatus>("/api/jobs/system-status");
+export const retryFailedJobs = (queue: string) =>
+  apiFetch<{ retried: number; total: number; queue: string }>(`/api/jobs/${queue}/retry-failed`, { method: "POST" });
+export const runAllWorkers = () =>
+  apiFetch<{ queued: number; jobs: unknown[] }>("/api/jobs/run-all", { method: "POST" });
 
 // Suppliers
 export interface Supplier {

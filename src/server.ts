@@ -46,11 +46,15 @@ await app.register(cors, { origin: true });
 await app.register(helmet, { contentSecurityPolicy: false });
 await app.register(sensible);
 await app.register(rateLimit, {
-  max: 100,
   timeWindow: "1 minute",
   redis,
   keyGenerator: (req) => {
     return (req.headers["x-api-key"] as string) || req.ip;
+  },
+  max: (req) => {
+    // Authenticated dashboard requests get a high limit (3000/min ≈ 50/s)
+    // Unauthenticated IPs get the default 100/min
+    return req.headers["x-api-key"] === config.API_KEY ? 3000 : 100;
   },
 });
 

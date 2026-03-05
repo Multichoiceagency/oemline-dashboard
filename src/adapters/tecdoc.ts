@@ -287,6 +287,21 @@ export class TecDocAdapter extends BaseSupplierAdapter {
    */
   async *syncCatalog(cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
     try {
+      // Load brand filter from DB settings (null = sync all brands)
+      let dataSupplierIds: number[] | undefined;
+      try {
+        const { prisma } = await import("../lib/prisma.js");
+        const row = await prisma.setting.findUnique({ where: { key: "tecdoc_brand_filter_ids" } });
+        if (row?.value) {
+          const ids = JSON.parse(row.value) as number[];
+          if (Array.isArray(ids) && ids.length > 0) dataSupplierIds = ids;
+        }
+      } catch { /* ignore — proceed without filter */ }
+
+      if (dataSupplierIds) {
+        logger.info({ supplier: this.code, brandCount: dataSupplierIds.length }, "TecDoc sync: brand filter active");
+      }
+
       // Step 1: Discover assembly groups using facets
       const facetResult = (await this.tecdocFetch({
         getArticles: {
@@ -295,6 +310,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
           lang: "nl",
           perPage: 0,
           page: 1,
+          ...(dataSupplierIds ? { dataSupplierIds } : {}),
           assemblyGroupFacetOptions: {
             enabled: true,
             assemblyGroupType: "P",
@@ -372,6 +388,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
               includeOemNumbers: true,
               includeEanNumbers: true,
               includeImages: true,
+              ...(dataSupplierIds ? { dataSupplierIds } : {}),
             })) as GetArticlesResponse;
 
             const articles = result.articles ?? [];
