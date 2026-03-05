@@ -606,6 +606,247 @@ export async function jobRoutes(app: FastifyInstance) {
   });
 
   /**
+   * Import Van Wezel product catalog from a CSV file stored in MinIO.
+   *
+   * Upload the catalog file to MinIO at vanwezel/catalog.csv first,
+   * then POST to this endpoint.
+   *
+   * CSV columns (auto-detected by header name, semicolon or comma separated):
+   *   - Article number: "ArticleID", "Article", "Artikel", "Artikelnummer", "Part Number", col 0
+   *   - EAN:            "EAN", "GTIN", "Barcode"
+   *   - Description:    "Description", "Omschrijving", "Bezeichnung", "Name"
+   *   - OE Number:      "OE", "OE Number", "OE Nummer", "OENummer"
+   *
+   * Products are EAN-matched against TecDoc/IC for brand, category, image.
+   * Stock + price are set to 0/null — the stock worker refreshes them every 30 min
+   * via the VWA getstock API.
+   *
+   * Body (optional):
+   *   { "minioKey": "vanwezel/catalog.csv" }
+   *   { "csvPath": "/tmp/vanwezel.csv" }
+   */
+  app.post("/jobs/import-vanwezel-catalog", {
+    onRequest: async (request) => { request.raw.socket.setTimeout(300_000); },
+  }, async (request) => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { logger } = await import("../lib/logger.js");
+    const { Prisma } = await import("@prisma/client");
+    const { createInterface } = await import("node:readline");
+    const { createReadStream, existsSync } = await import("node:fs");
+    const { getObjectStream } = await import("../lib/minio.js");
+
+    const body = (request.body ?? {}) as { csvPath?: string; minioKey?: string };
+    const DEFAULT_MINIO_KEY = "vanwezel/catalog.csv";
+
+    let stream: NodeJS.ReadableStream;
+    if (body.minioKey) {
+      stream = await getObjectStream(body.minioKey);
+    } else if (body.csvPath && existsSync(body.csvPath)) {
+      stream = createReadStream(body.csvPath, { encoding: "latin1" });
+    } else {
+      try {
+        stream = await getObjectStream(DEFAULT_MINIO_KEY);
+      } catch {
+        return { error: `Catalog not found in MinIO at '${DEFAULT_MINIO_KEY}'. Upload it first or provide minioKey/csvPath.` };
+      }
+    }
+
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
+
+    interface VwRow { sku: string; ean: string; description: string; oem: string }
+    const rows: VwRow[] = [];
+    let lineNum = 0;
+    let delimiter = ";";
+    let skuCol = 0, eanCol = -1, descCol = -1, oemCol = -1;
+
+    for await (const raw of rl) {
+      lineNum++;
+
+      if (lineNum === 1) {
+        // Detect delimiter
+        delimiter = (raw.match(/;/g) ?? []).length >= (raw.match(/,/g) ?? []).length ? ";" : ",";
+
+        // Detect columns by header
+        const headers = raw.split(delimiter).map((h) => h.replace(/^"|"$/g, "").trim().toLowerCase().replace(/[\s\-_]/g, ""));
+        const articlePatterns = ["articleid", "articlenr", "articleno", "article", "partnumber", "partno", "artnr", "artikelnummer", "artikel"];
+        const eanPatterns     = ["ean", "gtin", "barcode", "ean13"];
+        const descPatterns    = ["description", "omschrijving", "bezeichnung", "articlename", "name"];
+        const oemPatterns     = ["oenumber", "oenummer", "oe", "oemnumber"];
+
+        for (let i = 0; i < headers.length; i++) {
+          const h = headers[i];
+          if (skuCol === 0 && i > 0 && articlePatterns.some((p) => h.includes(p))) skuCol = i;
+          if (eanCol  === -1 && eanPatterns.some((p) => h.includes(p)))  eanCol  = i;
+          if (descCol === -1 && descPatterns.some((p) => h.includes(p))) descCol = i;
+          if (oemCol  === -1 && oemPatterns.some((p) => h.includes(p)))  oemCol  = i;
+        }
+        continue;
+      }
+
+      const parts = raw.split(delimiter).map((p) => p.replace(/^"|"$/g, "").trim());
+      if (parts.length < 1) continue;
+
+      const sku  = parts[skuCol] ?? "";
+      const rawEan = eanCol  >= 0 ? (parts[eanCol]  ?? "") : "";
+      const desc = descCol >= 0 ? (parts[descCol] ?? "") : "";
+      const oem  = oemCol  >= 0 ? (parts[oemCol]  ?? "") : "";
+
+      if (!sku) continue;
+      const ean = /^\d{8,14}$/.test(rawEan.replace(/\s/g, "")) ? rawEan.replace(/\s/g, "") : "";
+      rows.push({ sku, ean, description: desc, oem });
+    }
+
+    logger.info({ parsed: rows.length, skuCol, eanCol, descCol, delimiter }, "Van Wezel catalog parsed");
+
+    if (rows.length === 0) {
+      return { error: "No valid rows parsed. Check the file format, delimiter, and encoding." };
+    }
+
+    // Ensure supplier exists and is activated
+    let supplier = await prisma.supplier.findUnique({ where: { code: "vanwezel" } });
+    if (!supplier) return { error: "Van Wezel supplier not found. Create it in the suppliers page first." };
+
+    if (supplier.adapterType !== "vanwezel" || !supplier.active) {
+      supplier = await prisma.supplier.update({
+        where: { id: supplier.id },
+        data: {
+          adapterType: "vanwezel",
+          baseUrl: "https://vwa.autopartscat.com/WcfVWAService/WcfVWAService/VWAService.svc",
+          active: true,
+        },
+      });
+    }
+
+    // Ensure Van Wezel brand exists for unlinked fallback products
+    let vwBrand = await prisma.brand.findFirst({ where: { name: { equals: "Van Wezel", mode: "insensitive" } } });
+    if (!vwBrand) {
+      vwBrand = await prisma.brand.create({ data: { name: "Van Wezel", code: "VANWEZEL" } });
+      logger.info({ brandId: vwBrand.id }, "Created Van Wezel brand");
+    }
+
+    const BATCH_SIZE = 500;
+    let upserted = 0, matched = 0, icMatched = 0;
+
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      const batch = rows.slice(i, i + BATCH_SIZE);
+      const eans  = batch.map((r) => r.ean).filter(Boolean);
+
+      // Strategy 1: EAN match against TecDoc products
+      const eanMap = new Map<string, {
+        ean: string; brandId: number | null; categoryId: number | null;
+        articleNo: string | null; tecdocId: number | null;
+        oem: string | null; description: string | null; imageUrl: string | null;
+      }>();
+
+      if (eans.length > 0) {
+        const tecdocProducts = await prisma.productMap.findMany({
+          where: { supplier: { code: "tecdoc" }, ean: { in: eans }, status: "active" },
+          select: { ean: true, brandId: true, categoryId: true, articleNo: true, tecdocId: true, oem: true, description: true, imageUrl: true },
+          distinct: ["ean"],
+        });
+        for (const p of tecdocProducts) {
+          if (p.ean) eanMap.set(p.ean, {
+            ean: p.ean,
+            brandId: p.brandId,
+            categoryId: p.categoryId,
+            articleNo: p.articleNo,
+            tecdocId: p.tecdocId != null ? Number(p.tecdocId) : null,
+            oem: p.oem,
+            description: p.description,
+            imageUrl: p.imageUrl,
+          });
+        }
+
+        // Strategy 2: IC mapping fallback
+        const unmatched = eans.filter((e) => !eanMap.has(e));
+        if (unmatched.length > 0) {
+          type IcRow = { ean: string; brand_id: number | null; category_id: number | null; article_no: string | null; tecdoc_id: number | null; oem: string | null; description: string | null; image_url: string | null };
+          const icRows = await prisma.$queryRawUnsafe<IcRow[]>(`
+            SELECT DISTINCT ON (im.ean)
+              im.ean,
+              pm.brand_id, pm.category_id, pm.article_no,
+              pm.tecdoc_id, pm.oem, pm.description, pm.image_url
+            FROM intercars_mappings im
+            JOIN brands b ON LOWER(b.name) = LOWER(im.manufacturer)
+            JOIN product_maps pm
+              ON pm.article_no = im.article_number
+              AND pm.brand_id = b.id
+              AND pm.status = 'active'
+            JOIN suppliers s ON s.id = pm.supplier_id AND s.code = 'tecdoc'
+            WHERE im.ean = ANY($1::text[])
+            LIMIT 2000
+          `, unmatched);
+          for (const r of icRows) {
+            if (r.ean) {
+              eanMap.set(r.ean, { ean: r.ean, brandId: r.brand_id ?? null, categoryId: r.category_id ?? null, articleNo: r.article_no ?? null, tecdocId: r.tecdoc_id ?? null, oem: r.oem ?? null, description: r.description ?? null, imageUrl: r.image_url ?? null });
+              icMatched++;
+            }
+          }
+        }
+      }
+
+      const values: ReturnType<typeof Prisma.sql>[] = [];
+      for (const row of batch) {
+        const td = row.ean ? eanMap.get(row.ean) : null;
+        const ean = row.ean || null;
+        const oem = row.oem || null;
+        const desc = row.description || "";
+
+        if (td) {
+          matched++;
+          values.push(Prisma.sql`(
+            ${supplier.id}, ${td.brandId}, ${td.categoryId},
+            ${row.sku}, ${td.articleNo ?? row.sku}, ${ean},
+            ${td.tecdocId}, ${td.oem ?? oem}, ${desc || td.description || ""},
+            ${td.imageUrl}, 'EUR',
+            0, 'active', NOW(), NOW()
+          )`);
+        } else {
+          values.push(Prisma.sql`(
+            ${supplier.id}, ${vwBrand!.id}, NULL,
+            ${row.sku}, ${row.sku}, ${ean},
+            NULL, ${oem}, ${desc},
+            NULL, 'EUR',
+            0, 'active', NOW(), NOW()
+          )`);
+        }
+      }
+
+      if (values.length === 0) continue;
+
+      await prisma.$executeRaw`
+        INSERT INTO product_maps (
+          supplier_id, brand_id, category_id, sku, article_no, ean,
+          tecdoc_id, oem, description, image_url, currency,
+          stock, status, created_at, updated_at
+        )
+        VALUES ${Prisma.join(values)}
+        ON CONFLICT (supplier_id, sku)
+        DO UPDATE SET
+          ean         = COALESCE(EXCLUDED.ean, product_maps.ean),
+          description = CASE WHEN EXCLUDED.description != '' THEN EXCLUDED.description ELSE product_maps.description END,
+          oem         = COALESCE(product_maps.oem, EXCLUDED.oem),
+          image_url   = COALESCE(product_maps.image_url, EXCLUDED.image_url),
+          brand_id    = COALESCE(product_maps.brand_id, EXCLUDED.brand_id),
+          category_id = COALESCE(product_maps.category_id, EXCLUDED.category_id),
+          updated_at  = NOW()
+      `;
+
+      upserted += values.length;
+      logger.info({ processed: i + batch.length, upserted, matched, icMatched }, "Van Wezel catalog import progress");
+    }
+
+    logger.info({ total: rows.length, matched, icMatched, upserted }, "Van Wezel catalog import completed");
+    return {
+      total: rows.length,
+      matched,
+      icMatched,
+      upserted,
+      message: "Stock and pricing will be refreshed automatically every 30 min via VWA getstock API",
+    };
+  });
+
+  /**
    * Import Van Wezel catalog/price data.
    * Activates Van Wezel supplier with REST API credentials.
    * Van Wezel stock is refreshed real-time via the VWA getstock API (every 30 min).
