@@ -96,32 +96,50 @@ export class TecDocAdapter extends BaseSupplierAdapter {
   }
 
   /**
-   * Direct fetch for TecDoc API with long timeout (bypasses circuit breaker for sync).
+   * Direct fetch for TecDoc API with long timeout and retry (bypasses circuit breaker for sync).
+   * Retries up to 3 times with exponential backoff (2s, 4s) on any transient failure.
    */
   private async tecdocFetch(body: Record<string, unknown>): Promise<unknown> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 120_000); // 120s timeout for bulk ops
+    const MAX_RETRIES = 3;
+    let lastErr: Error | undefined;
 
-    try {
-      const response = await fetch(this.tecdocUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Api-Key": this.credentials.apiKey,
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 120_000); // 120s timeout per attempt
 
-      const json = (await response.json()) as Record<string, unknown>;
-      if (json.status && json.status !== 200) {
-        throw new Error(`TecDoc API error: status=${json.status}`);
+      try {
+        const response = await fetch(this.tecdocUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Api-Key": this.credentials.apiKey,
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+
+        const json = (await response.json()) as Record<string, unknown>;
+        if (json.status && json.status !== 200) {
+          throw new Error(`TecDoc API error: status=${json.status}`);
+        }
+
+        return json;
+      } catch (err) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+        if (attempt < MAX_RETRIES) {
+          const delay = 2000 * (2 ** (attempt - 1)); // 2s, 4s
+          logger.warn(
+            { supplier: this.code, attempt, maxRetries: MAX_RETRIES, delayMs: delay, err: lastErr.message },
+            "TecDoc fetch failed, retrying with backoff"
+          );
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      } finally {
+        clearTimeout(timer);
       }
-
-      return json;
-    } finally {
-      clearTimeout(timer);
     }
+
+    throw lastErr!;
   }
 
   private async tecdocRequest(method: string, params: Record<string, unknown>): Promise<unknown> {

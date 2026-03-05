@@ -42,16 +42,29 @@ export async function processSyncJob(job: Job<SyncJobData>): Promise<void> {
     // Extend lock to prevent stalling during long sync operations
     try { await job.extendLock(job.token!, 600_000); } catch { /* ok */ }
 
-    // Resolve brands first
-    await ensureBrands(batch);
-
-    // Process in chunks using batch upsert via raw SQL
-    for (let i = 0; i < batch.length; i += UPSERT_BATCH_SIZE) {
-      const chunk = batch.slice(i, i + UPSERT_BATCH_SIZE);
-      await batchUpsertProducts(supplier.id, chunk);
+    // Resolve brands first — non-fatal if it fails (falls back to brand id 1)
+    try {
+      await ensureBrands(batch);
+    } catch (err) {
+      logger.warn({ supplier: supplierCode, batch: batchCount, err }, "ensureBrands failed, continuing with partial brand cache");
     }
 
-    totalProcessed += batch.length;
+    // Process in chunks — skip any chunk that fails rather than aborting the whole sync
+    let batchProcessed = 0;
+    for (let i = 0; i < batch.length; i += UPSERT_BATCH_SIZE) {
+      const chunk = batch.slice(i, i + UPSERT_BATCH_SIZE);
+      try {
+        await batchUpsertProducts(supplier.id, chunk);
+        batchProcessed += chunk.length;
+      } catch (err) {
+        logger.warn(
+          { supplier: supplierCode, batch: batchCount, chunkStart: i, chunkSize: chunk.length, err },
+          "Batch upsert failed, skipping chunk"
+        );
+      }
+    }
+
+    totalProcessed += batchProcessed;
     await job.updateProgress(totalProcessed);
 
     logger.info(

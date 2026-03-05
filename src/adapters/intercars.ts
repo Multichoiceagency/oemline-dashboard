@@ -74,6 +74,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
   /**
    * OAuth2 client_credentials with Basic Auth header.
+   * Retries up to 3 times with a 30s timeout per attempt and 5s/10s backoff.
    */
   private async getAccessToken(): Promise<string> {
     if (this.accessToken && Date.now() < this.tokenExpiresAt - 30_000) {
@@ -84,26 +85,50 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       `${this.credentials.clientId}:${this.credentials.clientSecret}`
     ).toString("base64");
 
-    const response = await fetch(this.credentials.tokenUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${basicAuth}`,
-      },
-      body: "grant_type=client_credentials&scope=allinone",
-    });
+    let lastErr: Error | undefined;
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`InterCars OAuth2 token failed: ${response.status} ${text}`);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30_000); // 30s timeout on auth
+
+      try {
+        const response = await fetch(this.credentials.tokenUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Authorization: `Basic ${basicAuth}`,
+          },
+          body: "grant_type=client_credentials&scope=allinone",
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`InterCars OAuth2 token failed: ${response.status} ${text}`);
+        }
+
+        const data = (await response.json()) as TokenResponse;
+        this.accessToken = data.access_token;
+        this.tokenExpiresAt = Date.now() + data.expires_in * 1000;
+
+        logger.info({ supplier: this.code }, "OAuth2 token refreshed");
+        return this.accessToken;
+      } catch (err) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+        if (attempt < 3) {
+          const delay = 5000 * attempt; // 5s, 10s
+          logger.warn(
+            { supplier: this.code, attempt, delayMs: delay, err: lastErr.message },
+            "IC OAuth2 token failed, retrying"
+          );
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      } finally {
+        clearTimeout(timer);
+      }
     }
 
-    const data = (await response.json()) as TokenResponse;
-    this.accessToken = data.access_token;
-    this.tokenExpiresAt = Date.now() + data.expires_in * 1000;
-
-    logger.info({ supplier: this.code }, "OAuth2 token refreshed");
-    return this.accessToken;
+    throw lastErr!;
   }
 
   private async authHeaders(): Promise<Record<string, string>> {
@@ -608,60 +633,80 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
   /**
    * Fetch price/stock for a batch of IC SKUs via /inventory/quote.
+   * Retries up to 3 times: 429 rate-limit waits 30s before retry; other
+   * transient errors (network, timeout, 5xx) wait 5s/10s before retry.
    */
   async fetchQuoteBatch(skus: string[]): Promise<Map<string, { price: number | null; currency: string; stock: number }>> {
-    const quoteMap = new Map<string, { price: number | null; currency: string; stock: number }>();
-
-    const headers = await this.authHeaders();
     const lines = skus.map((sku) => ({ sku, quantity: 1 }));
     const quoteUrl = `${this.apiUrl}/inventory/quote`;
 
-    const quoteResp = await this.syncFetch(quoteUrl, {
-      ...headers,
-      "Content-Type": "application/json",
-    }, {
-      method: "POST",
-      body: JSON.stringify({ lines }),
-    });
+    let lastErr: Error | undefined;
 
-    if (!quoteResp.ok) {
-      if (quoteResp.status === 429) {
-        // Rate limited — wait 30s and throw to retry
-        await new Promise((r) => setTimeout(r, 30_000));
-      }
-      throw new Error(`IC inventory/quote returned ${quoteResp.status}`);
-    }
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const headers = await this.authHeaders();
+        const quoteResp = await this.syncFetch(quoteUrl, {
+          ...headers,
+          "Content-Type": "application/json",
+        }, {
+          method: "POST",
+          body: JSON.stringify({ lines }),
+        });
 
-    const quoteData = (await quoteResp.json()) as Array<{
-      sku: string;
-      quantity: number;
-      price?: {
-        currencyCode?: string;
-        listPriceNet?: number;
-        customerPriceNet?: number;
-      };
-      lines?: Array<{ availability?: number }>;
-    }>;
-
-    const quoteItems = Array.isArray(quoteData) ? quoteData : [];
-
-    for (const item of quoteItems) {
-      const sku = item.sku;
-      const price = item.price?.customerPriceNet ?? item.price?.listPriceNet ?? null;
-      const currency = item.price?.currencyCode ?? "EUR";
-      const stock = item.lines?.reduce((sum, l) => sum + (l.availability ?? 0), 0) ?? 0;
-      const existing = quoteMap.get(sku);
-      if (existing) {
-        existing.stock += stock;
-        if (!existing.price && price) {
-          existing.price = price;
-          existing.currency = currency;
+        if (!quoteResp.ok) {
+          if (quoteResp.status === 429) {
+            const delay = 30_000 * attempt; // 30s, 60s, 90s
+            logger.warn({ attempt, delayMs: delay, supplier: this.code }, "IC inventory/quote rate limited (429), backing off");
+            await new Promise((r) => setTimeout(r, delay));
+          }
+          throw new Error(`IC inventory/quote returned ${quoteResp.status}`);
         }
-      } else {
-        quoteMap.set(sku, { price, currency, stock });
+
+        const quoteData = (await quoteResp.json()) as Array<{
+          sku: string;
+          quantity: number;
+          price?: {
+            currencyCode?: string;
+            listPriceNet?: number;
+            customerPriceNet?: number;
+          };
+          lines?: Array<{ availability?: number }>;
+        }>;
+
+        const quoteMap = new Map<string, { price: number | null; currency: string; stock: number }>();
+        const quoteItems = Array.isArray(quoteData) ? quoteData : [];
+
+        for (const item of quoteItems) {
+          const sku = item.sku;
+          const price = item.price?.customerPriceNet ?? item.price?.listPriceNet ?? null;
+          const currency = item.price?.currencyCode ?? "EUR";
+          const stock = item.lines?.reduce((sum, l) => sum + (l.availability ?? 0), 0) ?? 0;
+          const existing = quoteMap.get(sku);
+          if (existing) {
+            existing.stock += stock;
+            if (!existing.price && price) {
+              existing.price = price;
+              existing.currency = currency;
+            }
+          } else {
+            quoteMap.set(sku, { price, currency, stock });
+          }
+        }
+
+        return quoteMap;
+      } catch (err) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+        if (attempt < 3) {
+          const delay = 5000 * attempt; // 5s, 10s
+          logger.warn(
+            { supplier: this.code, attempt, delayMs: delay, err: lastErr.message },
+            "IC quote batch failed, retrying"
+          );
+          await new Promise((r) => setTimeout(r, delay));
+        }
       }
     }
 
-    return quoteMap;
+    throw lastErr!;
   }
 }

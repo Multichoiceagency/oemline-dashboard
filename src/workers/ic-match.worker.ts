@@ -33,6 +33,8 @@ export async function processIcMatchJob(job: Job<IcMatchJobData>): Promise<void>
   for await (const products of adapter.syncCatalog("")) {
     batchCount++;
     matchedCount += products.length;
+    // Extend lock — Phase 1D (unique article CTE) can run >10 min on large datasets
+    try { await job.extendLock(job.token!, 600_000); } catch { /* ok */ }
     await job.updateProgress(batchCount);
   }
 
