@@ -1183,27 +1183,34 @@ export async function jobRoutes(app: FastifyInstance) {
   });
 
   /**
-   * Check Ollama status + list available models.
+   * LLM provider status — shows active provider (Kimi or Ollama), model, and availability.
+   * Replaces the old ollama-status endpoint (kept as alias below).
    */
+  app.get("/jobs/ai-match/llm-status", async () => {
+    const { llmStatus, ollamaListModels } = await import("../lib/llm.js");
+    const [status, ollamaModels] = await Promise.all([llmStatus(), ollamaListModels()]);
+    return { ...status, ollamaModels };
+  });
+
+  // Backward-compat alias
   app.get("/jobs/ai-match/ollama-status", async () => {
-    const { ollamaIsAvailable, ollamaListModels, OLLAMA_MODEL } = await import("../lib/ollama.js");
-    const available = await ollamaIsAvailable();
-    const models = available ? await ollamaListModels() : [];
+    const { llmStatus, ollamaListModels, OLLAMA_MODEL } = await import("../lib/llm.js");
+    const [status, models] = await Promise.all([llmStatus(), ollamaListModels()]);
     return {
-      available,
+      available: status.available,
       ollamaUrl: process.env.OLLAMA_URL ?? "http://ollama:11434",
       configuredModel: OLLAMA_MODEL,
       loadedModels: models,
+      llmProvider: status.provider,
     };
   });
 
   /**
-   * Pull a model into Ollama (e.g. "llama3.2:1b").
-   * Call this once after deploying Ollama to download the model.
+   * Pull a model into Ollama (only relevant when using Ollama provider).
    */
   app.post("/jobs/ai-match/pull-model", async (request) => {
     const body = (request.body ?? {}) as { model?: string };
-    const { ollamaPullModel, OLLAMA_MODEL } = await import("../lib/ollama.js");
+    const { ollamaPullModel, OLLAMA_MODEL } = await import("../lib/llm.js");
     const model = body.model ?? OLLAMA_MODEL;
     try {
       await ollamaPullModel(model);
@@ -1263,7 +1270,7 @@ export async function jobRoutes(app: FastifyInstance) {
   });
 
   /**
-   * Aggregated system status — health + all queues + Ollama in one request.
+   * Aggregated system status — health + all queues + LLM in one request.
    * Replaces 3 separate API calls from the dashboard/health/workflow pages.
    */
   app.get("/jobs/system-status", async () => {
@@ -1272,12 +1279,12 @@ export async function jobRoutes(app: FastifyInstance) {
     const { redis: redisClient } = await import("../lib/redis.js");
     const { meili: meiliClient } = await import("../lib/meilisearch.js");
     const { getAllAdapters } = await import("../adapters/registry.js");
-    const { ollamaIsAvailable, ollamaListModels, OLLAMA_MODEL } = await import("../lib/ollama.js");
+    const { llmStatus } = await import("../lib/llm.js");
 
     // All fetches in parallel — fast even if one service is slow
     const [
       syncR, matchR, indexR, pricingR, stockR, icMatchR, aiMatchR,
-      pgR, redisR, meiliR, ollamaR, modelsR,
+      pgR, redisR, meiliR, llmR,
     ] = await Promise.allSettled([
       getQueueCounts(syncQueue),
       getQueueCounts(matchQueue),
@@ -1289,8 +1296,7 @@ export async function jobRoutes(app: FastifyInstance) {
       db.$queryRaw`SELECT 1`.then(() => true),
       redisClient.ping().then(() => true),
       meiliClient.health().then(() => true),
-      ollamaIsAvailable(),
-      ollamaListModels(),
+      llmStatus(),
     ]);
 
     const jobs = {
@@ -1309,8 +1315,7 @@ export async function jobRoutes(app: FastifyInstance) {
       meilisearch: meiliR.status === "fulfilled" && meiliR.value ? "ok" : "error",
     };
 
-    const ollamaAvailable = ollamaR.status  === "fulfilled" ? ollamaR.value  : false;
-    const ollamaModels    = modelsR.status   === "fulfilled" ? modelsR.value  : [];
+    const llm = llmR.status === "fulfilled" ? llmR.value : { provider: "none", model: "", available: false, kimiConfigured: false, ollamaUrl: "" };
 
     const circuits: Record<string, { state: string; failures: number }> = {};
     for (const adapter of getAllAdapters()) {
@@ -1350,11 +1355,13 @@ export async function jobRoutes(app: FastifyInstance) {
         circuits,
       },
       jobs,
+      llm,
+      // backward-compat alias
       ollama: {
-        available:      ollamaAvailable,
-        ollamaUrl:      process.env.OLLAMA_URL ?? "http://ollama:11434",
-        configuredModel: OLLAMA_MODEL,
-        loadedModels:   ollamaModels,
+        available:      llm.available,
+        ollamaUrl:      llm.ollamaUrl,
+        configuredModel: llm.model,
+        provider:       llm.provider,
       },
       alerts,
       timestamp:      new Date().toISOString(),

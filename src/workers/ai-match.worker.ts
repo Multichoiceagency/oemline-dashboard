@@ -1,7 +1,7 @@
 import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { ollamaIsAvailable, ollamaGenerate, OLLAMA_MODEL } from "../lib/ollama.js";
+import { llmIsAvailable, llmGenerate, activeLlmProvider, LLM_MODEL } from "../lib/llm.js";
 
 export interface AiMatchJobData {
   /** Min matching article numbers to auto-add alias without LLM review (default: 20) */
@@ -21,6 +21,42 @@ export interface AiMatchResult {
 }
 
 /**
+ * Rich system context describing the OEMline platform for the LLM.
+ * Gives the model enough context to make accurate brand alias decisions.
+ */
+const OEMLINE_SYSTEM_CONTEXT = `\
+You are a specialized agent for the OEMline automotive parts catalog platform.
+
+PLATFORM CONTEXT:
+OEMline aggregates automotive parts from multiple suppliers into a unified catalog:
+- TecDoc (1M+ products): Main European parts catalog — uses official manufacturer brand names
+- InterCars (565K mappings): European parts distributor — uses their own brand naming conventions
+- Diederichs (~46K products): Specializes in HELLA body parts
+- Van Wezel (~27K products): Body panels, front-end parts, air conditioning components
+
+MATCHING CHALLENGE:
+The same parts manufacturer may appear under DIFFERENT names in TecDoc vs InterCars:
+- TecDoc uses official ISO/international brand names (e.g., "KAYABA", "VALEO", "NGK")
+- InterCars uses their catalog names, often abbreviated or localized
+  (e.g., "KYB" for KAYABA, "VALEO" matches, "NGK" matches)
+- Subsidiaries, rebrands, and OEM relationships add further complexity
+
+COMMON AUTOMOTIVE BRAND ALIAS PATTERNS you should recognize:
+- Abbreviations: KAYABA→KYB, GATES→GAT, VALEO→VAL
+- Regional names: HELLA DE = HELLA, BOSAL BE = BOSAL
+- Parent/child: BEHR is owned by MAHLE → sometimes listed as "BEHR HELLA"
+- OEM cross-brands: TRW is now ZF but old parts still listed as TRW
+- Spelling variants: FEBI BILSTEIN = FEBI, BILSTEIN = FEBI BILSTEIN
+- Country suffixes: TEXTAR NL, TEXTAR DE → same brand
+- Catalogue codes: Some IC entries have codes prefixed (WEZ=Van Wezel, TYC=TYC)
+
+EVIDENCE PROVIDED: Each pair includes the count of SHARED article numbers (exact match
+after stripping non-alphanumeric chars). Higher counts = stronger evidence they're the same brand.
+
+YOUR TASK: Determine if each pair refers to the SAME automotive parts manufacturer.
+Respond ONLY with a JSON array — no explanation, no markdown, no extra text.`;
+
+/**
  * AI Match worker: discovers missing brand aliases using article number overlap analysis.
  *
  * Strategy:
@@ -28,10 +64,11 @@ export interface AiMatchResult {
  *     - Find IC manufacturers that share normalized article numbers with unmatched TecDoc brands
  *     - Auto-add pairs with >= autoApplyThreshold overlapping articles (high confidence)
  *
- *   Phase B (Ollama LLM, optional):
- *     - For candidates with 3-19 overlapping articles, ask Ollama to confirm equivalence
- *     - e.g. "Is 'KAYABA' the same auto parts brand as 'KYB'?" → YES → add alias
- *     - Falls back gracefully if Ollama is not available
+ *   Phase B (LLM confirmation — Kimi K2.5 or Ollama fallback):
+ *     - For candidates with 3-19 overlapping articles, ask LLM to confirm equivalence
+ *     - LLM has full OEMline context for better brand disambiguation
+ *     - Batch size: 50 pairs per call (Kimi has large context window)
+ *     - Falls back gracefully if LLM is not available
  *
  * Result: new entries in supplier_brand_rules → picked up by ic-match Phase 0
  *         → significantly increases IC-linked product count
@@ -43,9 +80,11 @@ export async function processAiMatchJob(job: Job<AiMatchJobData>): Promise<AiMat
     llmConfidenceThreshold = 85,
   } = job.data ?? {};
 
-  logger.info({ autoApplyThreshold, llmMinThreshold }, "AI match: starting brand alias discovery");
+  logger.info(
+    { autoApplyThreshold, llmMinThreshold, llmProvider: activeLlmProvider(), llmModel: LLM_MODEL },
+    "AI match: starting brand alias discovery"
+  );
 
-  // Get intercars supplier ID
   const intercarsSupplier = await prisma.supplier.findUnique({
     where: { code: "intercars" },
     select: { id: true },
@@ -56,8 +95,6 @@ export async function processAiMatchJob(job: Job<AiMatchJobData>): Promise<AiMat
   }
 
   // ── Phase A: SQL-based brand alias candidate discovery ──────────────────────
-  // For every unmatched product_map, find IC manufacturer entries sharing the same
-  // normalized article number. Group by TecDoc brand × IC manufacturer.
   type Candidate = {
     tecdoc_brand: string;
     brand_id: number;
@@ -80,14 +117,12 @@ export async function processAiMatchJob(job: Job<AiMatchJobData>): Promise<AiMat
        AND pm.status = 'active'
        AND pm.article_no IS NOT NULL
        AND pm.article_no != ''
-       -- Exclude pairs already in supplier_brand_rules
        AND NOT EXISTS (
          SELECT 1 FROM supplier_brand_rules sbr
          WHERE sbr.supplier_id = $1
            AND sbr.brand_id = b.id
            AND UPPER(sbr.supplier_brand) = UPPER(im.manufacturer)
        )
-       -- Exclude pairs where brand and IC manufacturer are already the same
        AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
          != UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
      GROUP BY b.name, b.id, im.manufacturer
@@ -108,7 +143,6 @@ export async function processAiMatchJob(job: Job<AiMatchJobData>): Promise<AiMat
   for (const c of candidates) {
     const count = Number(c.matching_articles);
     if (count >= autoApplyThreshold) {
-      // High confidence — add immediately
       const added = await upsertBrandAlias(intercarsSupplier.id, c.brand_id, c.ic_manufacturer);
       if (added) {
         autoAdded++;
@@ -130,25 +164,27 @@ export async function processAiMatchJob(job: Job<AiMatchJobData>): Promise<AiMat
   let llmSkipped = 0;
 
   if (pendingForLlm.length > 0) {
-    const available = await ollamaIsAvailable();
+    const available = await llmIsAvailable();
     if (available) {
-      logger.info({ model: OLLAMA_MODEL, candidates: pendingForLlm.length }, "AI match: starting LLM confirmation");
-      const result = await confirmWithLlm(
-        pendingForLlm,
-        intercarsSupplier.id,
-        llmConfidenceThreshold
+      logger.info(
+        { provider: activeLlmProvider(), model: LLM_MODEL, candidates: pendingForLlm.length },
+        "AI match: starting LLM confirmation"
       );
-      llmAdded = result.added;
+      const result = await confirmWithLlm(pendingForLlm, intercarsSupplier.id, llmConfidenceThreshold);
+      llmAdded   = result.added;
       llmSkipped = result.skipped;
     } else {
       llmSkipped = pendingForLlm.length;
-      logger.info("AI match: Ollama not available — LLM phase skipped");
+      logger.info(
+        { provider: activeLlmProvider() },
+        "AI match: LLM not available — confirmation phase skipped"
+      );
     }
   }
 
   await job.updateProgress(90);
 
-  // Trigger ic-match to immediately use the new aliases
+  // Trigger ic-match to immediately apply the new aliases
   let icMatchTriggered = false;
   if (autoAdded + llmAdded > 0) {
     const { icMatchQueue } = await import("./queues.js");
@@ -188,7 +224,8 @@ async function confirmWithLlm(
   supplierId: number,
   confidenceThreshold: number
 ): Promise<{ added: number; skipped: number }> {
-  const BATCH = 15; // LLM handles 15 pairs per call — keeps prompt small
+  // Kimi has a large context window — use 50 pairs per batch (vs 15 for Ollama)
+  const BATCH = activeLlmProvider() === "kimi" ? 50 : 15;
   let added = 0;
   let skipped = 0;
 
@@ -196,24 +233,30 @@ async function confirmWithLlm(
     const batch = candidates.slice(i, i + BATCH);
 
     const pairList = batch
-      .map((c, idx) => `${idx + 1}. TecDoc:"${c.tecdoc_brand}" vs IC:"${c.ic_manufacturer}" (${Number(c.matching_articles)} shared article numbers)`)
+      .map(
+        (c, idx) =>
+          `${idx + 1}. TecDoc:"${c.tecdoc_brand}" vs IC:"${c.ic_manufacturer}" ` +
+          `(${Number(c.matching_articles)} shared article numbers)`
+      )
       .join("\n");
 
     const prompt =
-      `You are an automotive parts catalog expert. Are these brand name pairs referring to the same manufacturer?\n\n` +
+      `Analyze these automotive brand name pairs from the OEMline catalog.\n\n` +
+      `Are these pairs the SAME manufacturer?\n\n` +
       pairList +
-      `\n\nRespond ONLY with a JSON array (no explanation):\n[{"idx":1,"same":true,"confidence":95},...]`;
+      `\n\nRespond ONLY with a JSON array:\n` +
+      `[{"idx":1,"same":true,"confidence":95,"reason":"abbreviation"},...]`;
 
     try {
-      const raw = await ollamaGenerate(prompt, {
-        system: "You are an automotive parts expert. Respond only with valid JSON, no extra text.",
+      const raw = await llmGenerate(prompt, {
+        system: OEMLINE_SYSTEM_CONTEXT,
         temperature: 0.05,
       });
 
-      // Extract JSON array from response (LLMs sometimes add surrounding text)
+      // Extract JSON array — LLMs sometimes wrap in markdown
       const jsonMatch = raw.match(/\[[\s\S]*?\]/);
       if (!jsonMatch) {
-        logger.warn({ raw: raw.slice(0, 200) }, "AI match: could not parse LLM JSON");
+        logger.warn({ raw: raw.slice(0, 300), provider: activeLlmProvider() }, "AI match: could not parse LLM JSON");
         skipped += batch.length;
         continue;
       }
@@ -222,6 +265,7 @@ async function confirmWithLlm(
         idx: number;
         same: boolean;
         confidence: number;
+        reason?: string;
       }>;
 
       for (const r of results) {
@@ -233,7 +277,13 @@ async function confirmWithLlm(
           if (ok) {
             added++;
             logger.info(
-              { tecdocBrand: c.tecdoc_brand, icManufacturer: c.ic_manufacturer, confidence: r.confidence },
+              {
+                tecdocBrand: c.tecdoc_brand,
+                icManufacturer: c.ic_manufacturer,
+                confidence: r.confidence,
+                reason: r.reason,
+                provider: activeLlmProvider(),
+              },
               "AI match: LLM confirmed brand alias"
             );
           }
@@ -242,13 +292,14 @@ async function confirmWithLlm(
         }
       }
     } catch (err) {
-      logger.warn({ err }, "AI match: LLM batch failed, skipping");
+      logger.warn({ err, provider: activeLlmProvider() }, "AI match: LLM batch failed, skipping");
       skipped += batch.length;
     }
 
-    // Gentle rate limit between LLM calls
+    // Rate limit between batches (Kimi allows faster calls)
     if (i + BATCH < candidates.length) {
-      await new Promise((r) => setTimeout(r, 300));
+      const delay = activeLlmProvider() === "kimi" ? 100 : 300;
+      await new Promise((r) => setTimeout(r, delay));
     }
   }
 

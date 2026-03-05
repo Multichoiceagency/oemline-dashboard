@@ -17,15 +17,25 @@ import { startScheduler } from "./workers/scheduler.js";
 
 /**
  * WORKER_QUEUES env var controls which queues this worker instance handles.
- * Comma-separated list: "sync,match,index,pricing,stock,ic-match"
+ * Comma-separated list: "sync,match,index,pricing,stock,ic-match,ai-match"
  *
  * Examples:
- *   WORKER_QUEUES=pricing,stock     → dedicated pricing+stock worker (no scheduler)
- *   WORKER_QUEUES=sync,match,index  → dedicated sync/match/index worker (runs scheduler)
- *   WORKER_QUEUES=ic-match          → dedicated IC matching worker (fast, ~2-5 min per run)
- *   (not set)                       → all queues + scheduler (default)
+ *   WORKER_QUEUES=pricing,stock       → dedicated pricing+stock worker (no scheduler)
+ *   WORKER_QUEUES=sync,match,index    → sync/match/index worker (runs scheduler)
+ *   WORKER_QUEUES=ic-match            → dedicated IC matching worker
+ *   WORKER_QUEUES=ai-match            → dedicated AI match worker
+ *   (not set)                         → all queues + scheduler (default)
  *
- * WORKER_CONCURRENCY overrides concurrency per queue (default varies by queue type).
+ * Concurrency tuning (all queues run in parallel within one process):
+ *   WORKER_CONCURRENCY=N              → apply N to all queues
+ *   WORKER_CONCURRENCY_STOCK=N        → stock queue specifically
+ *   WORKER_CONCURRENCY_PRICING=N      → pricing queue specifically
+ *   WORKER_CONCURRENCY_MATCH=N        → match queue specifically
+ *   WORKER_CONCURRENCY_SYNC=N         → sync queue specifically
+ *   WORKER_CONCURRENCY_IC_MATCH=N     → ic-match queue specifically
+ *
+ * Scaling: run multiple worker pods with the same WORKER_QUEUES — BullMQ
+ * distributes jobs across all instances automatically (ultra-fast scaling).
  */
 const WORKER_QUEUES = process.env.WORKER_QUEUES
   ? new Set(process.env.WORKER_QUEUES.split(",").map((q) => q.trim().toLowerCase()))
@@ -34,10 +44,25 @@ const WORKER_QUEUES = process.env.WORKER_QUEUES
 const isAllQueues = WORKER_QUEUES === null;
 const handles = (q: string) => isAllQueues || WORKER_QUEUES!.has(q);
 
-// In dedicated pricing/stock mode, run more concurrent API calls
+// Detect dedicated modes
 const isDedicatedPricing = WORKER_QUEUES?.has("pricing") && !WORKER_QUEUES?.has("sync");
-const pricingConcurrency = isDedicatedPricing ? 6 : 2;
-const stockConcurrency = isDedicatedPricing ? 6 : 2;
+const isDedicatedMatch   = WORKER_QUEUES?.has("match")   && !WORKER_QUEUES?.has("sync");
+
+/**
+ * Resolve concurrency for a queue.
+ * Priority: per-queue env → global WORKER_CONCURRENCY → mode-based default.
+ *
+ * @param envKey     e.g. "STOCK"
+ * @param base       default when running all queues together
+ * @param dedicated  default when this is a dedicated worker for this queue
+ */
+function concurrency(envKey: string, base: number, dedicated: number): number {
+  const perQueue = process.env[`WORKER_CONCURRENCY_${envKey}`];
+  if (perQueue) return Math.max(1, parseInt(perQueue, 10) || base);
+  const global = process.env.WORKER_CONCURRENCY;
+  if (global) return Math.max(1, parseInt(global, 10) || base);
+  return isDedicatedPricing || isDedicatedMatch ? dedicated : base;
+}
 
 const connection = {
   host: redisConfig.host,
@@ -55,7 +80,7 @@ const workers: Worker[] = [];
 if (handles("sync")) {
   workers.push(new Worker("sync", processSyncJob, {
     connection,
-    concurrency: 2, // Allow TecDoc + IC to run simultaneously (different APIs)
+    concurrency: concurrency("SYNC", 3, 6),
     stalledInterval: 300_000,
     lockDuration: 600_000,
   }));
@@ -64,7 +89,7 @@ if (handles("sync")) {
 if (handles("match")) {
   workers.push(new Worker("match", processRematchJob, {
     connection,
-    concurrency: 3,
+    concurrency: concurrency("MATCH", 5, 10),
     stalledInterval: 30_000,
   }));
 }
@@ -72,7 +97,7 @@ if (handles("match")) {
 if (handles("index")) {
   workers.push(new Worker("index", processIndexJob, {
     connection,
-    concurrency: 1,
+    concurrency: concurrency("INDEX", 2, 4),
     stalledInterval: 60_000,
   }));
 }
@@ -80,7 +105,7 @@ if (handles("index")) {
 if (handles("pricing")) {
   workers.push(new Worker("pricing", processPricingJob, {
     connection,
-    concurrency: pricingConcurrency,
+    concurrency: concurrency("PRICING", 6, 12),
     stalledInterval: 300_000,
     lockDuration: 600_000,
   }));
@@ -89,7 +114,7 @@ if (handles("pricing")) {
 if (handles("stock")) {
   workers.push(new Worker("stock", processStockJob, {
     connection,
-    concurrency: stockConcurrency,
+    concurrency: concurrency("STOCK", 6, 12),
     stalledInterval: 300_000,
     lockDuration: 600_000,
   }));
@@ -98,7 +123,7 @@ if (handles("stock")) {
 if (handles("ic-match")) {
   workers.push(new Worker("ic-match", processIcMatchJob, {
     connection,
-    concurrency: 1, // One IC match job at a time (fast ~2-5 min, isolated from TecDoc)
+    concurrency: concurrency("IC_MATCH", 2, 4),
     stalledInterval: 300_000,
     lockDuration: 600_000,
   }));
@@ -107,9 +132,9 @@ if (handles("ic-match")) {
 if (handles("ai-match")) {
   workers.push(new Worker("ai-match", processAiMatchJob, {
     connection,
-    concurrency: 1,       // Heavy SQL + optional LLM — run one at a time
+    concurrency: concurrency("AI_MATCH", 1, 2),
     stalledInterval: 300_000,
-    lockDuration: 1_800_000, // 30 min lock — LLM confirmation can be slow
+    lockDuration: 1_800_000,
   }));
 }
 
