@@ -23,6 +23,7 @@ import {
   Globe,
   Settings,
   LogOut,
+  Workflow,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useTranslation } from "@/lib/i18n";
@@ -43,6 +44,7 @@ const navItems = [
   { href: "/storage", labelKey: "nav.storage", icon: HardDrive },
   { href: "/overrides", labelKey: "nav.overrides", icon: GitCompare },
   { href: "/settings", labelKey: "nav.settings", icon: Settings },
+  { href: "/workflow", labelKey: "nav.workflow", icon: Workflow },
   { href: "/health", labelKey: "nav.health", icon: Activity },
   { href: "/api-reference", labelKey: "nav.apiReference", icon: Code2 },
 ];
