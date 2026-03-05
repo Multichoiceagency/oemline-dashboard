@@ -437,4 +437,96 @@ export async function finalizedRoutes(app: FastifyInstance) {
       createdAt: product.createdAt,
     };
   });
+
+  // ─── POST /finalized/:id/push ─── Push product to configured output API
+  app.post("/finalized/:id/push", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const productId = parseInt(id, 10);
+
+    if (isNaN(productId)) {
+      return reply.code(400).send({ error: "Invalid product ID" });
+    }
+
+    const settings = await getAllSettings();
+    const outputApiUrl = settings.output_api_url ?? "";
+    const outputApiKey = settings.output_api_key ?? "";
+
+    if (!outputApiUrl) {
+      return reply.code(400).send({ error: "Output API URL not configured. Set it in Settings." });
+    }
+
+    const product = await prisma.productMap.findUnique({
+      where: { id: productId },
+      include: {
+        brand: { select: { id: true, name: true, code: true, logoUrl: true } },
+        category: { select: { id: true, name: true, code: true } },
+        supplier: { select: { id: true, name: true, code: true } },
+      },
+    });
+
+    if (!product) {
+      return reply.code(404).send({ error: "Product not found" });
+    }
+
+    const taxRate = parseFloat(settings.tax_rate ?? "21") / 100;
+    const marginPct = parseFloat(settings.margin_percentage ?? "0") / 100;
+
+    const basePrice = product.price;
+    let priceWithMargin: number | null = null;
+    let priceWithTax: number | null = null;
+    if (basePrice != null) {
+      priceWithMargin = Math.round(basePrice * (1 + marginPct) * 100) / 100;
+      priceWithTax = Math.round(priceWithMargin * (1 + taxRate) * 100) / 100;
+    }
+
+    const payload = {
+      id: product.id,
+      articleNo: product.articleNo,
+      sku: product.sku,
+      description: product.description,
+      imageUrl: product.imageUrl,
+      images: product.images,
+      ean: product.ean,
+      tecdocId: product.tecdocId,
+      oem: product.oem,
+      genericArticle: product.genericArticle,
+      oemNumbers: product.oemNumbers,
+      price: basePrice,
+      priceWithMargin,
+      priceWithTax,
+      currency: product.currency ?? settings.currency,
+      stock: product.stock,
+      weight: product.weight,
+      status: product.status,
+      brand: product.brand,
+      category: product.category,
+      supplier: product.supplier,
+      updatedAt: product.updatedAt,
+    };
+
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (outputApiKey) headers["X-API-Key"] = outputApiKey;
+
+      const response = await fetch(outputApiUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(30_000),
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        logger.warn({ productId, status: response.status, url: outputApiUrl }, "Output API push failed");
+        return reply.code(502).send({ error: `Output API returned ${response.status}: ${text.slice(0, 200)}` });
+      }
+
+      logger.info({ productId, url: outputApiUrl }, "Product pushed to output API");
+      return { success: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn({ productId, err: message }, "Output API push error");
+      return reply.code(502).send({ error: `Failed to reach output API: ${message}` });
+    }
+  });
 }

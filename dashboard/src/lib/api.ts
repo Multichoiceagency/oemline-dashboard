@@ -743,11 +743,16 @@ export const getFinalizedStats = () =>
 export const getFinalizedProduct = (id: number) =>
   apiFetch<FinalizedDetail>(`/api/finalized/${id}`);
 
+export const pushFinalizedProduct = (id: number) =>
+  apiFetch<{ success: boolean }>(`/api/finalized/${id}/push`, { method: "POST" });
+
 // Settings
 export interface PricingSettings {
   taxRate: number;
   marginPercentage: number;
   currency: string;
+  outputApiUrl: string;
+  outputApiKey: string;
 }
 
 export interface PricingPreview {

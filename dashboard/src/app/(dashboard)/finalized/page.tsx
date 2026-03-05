@@ -13,6 +13,7 @@ import {
   uploadProductImage,
   getTecDocLinkages,
   getJobsStatus,
+  pushFinalizedProduct,
 } from "@/lib/api";
 import type { FinalizedProduct, FinalizedDetail, VehicleLinkage } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
@@ -69,6 +70,7 @@ import {
   AlertCircle,
   Clock,
   Zap,
+  Send,
 } from "lucide-react";
 
 export default function FinalizedPage() {
@@ -136,6 +138,8 @@ export default function FinalizedPage() {
     status: "active",
   });
   const [saving, setSaving] = useState(false);
+  const [pushing, setPushing] = useState(false);
+  const [pushResult, setPushResult] = useState<"success" | "error" | null>(null);
   const [uploading, setUploading] = useState(false);
   const imageFileRef = useRef<HTMLInputElement>(null);
 
@@ -210,6 +214,22 @@ export default function FinalizedPage() {
       alert(err instanceof Error ? err.message : "Failed to update product");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handlePush = async () => {
+    if (!detail) return;
+    setPushing(true);
+    setPushResult(null);
+    try {
+      await pushFinalizedProduct(detail.id);
+      setPushResult("success");
+      setTimeout(() => setPushResult(null), 4000);
+    } catch {
+      setPushResult("error");
+      setTimeout(() => setPushResult(null), 5000);
+    } finally {
+      setPushing(false);
     }
   };
 
@@ -883,7 +903,7 @@ export default function FinalizedPage() {
           ) : null}
 
           {detail && !loadingDetail && (
-            <DialogFooter>
+            <DialogFooter className="flex-wrap gap-2">
               {editMode ? (
                 <>
                   <Button variant="outline" onClick={() => setEditMode(false)} disabled={saving}>
@@ -895,10 +915,27 @@ export default function FinalizedPage() {
                   </Button>
                 </>
               ) : (
-                <Button onClick={() => openEdit(detail)}>
+                <Button variant="outline" onClick={() => openEdit(detail)}>
                   <Pencil className="mr-2 h-4 w-4" /> Edit Product
                 </Button>
               )}
+              <Button
+                variant={pushResult === "success" ? "default" : pushResult === "error" ? "destructive" : "secondary"}
+                onClick={handlePush}
+                disabled={pushing}
+                className={pushResult === "success" ? "bg-green-600 hover:bg-green-700" : ""}
+              >
+                {pushing ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : pushResult === "success" ? (
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                ) : pushResult === "error" ? (
+                  <AlertCircle className="mr-2 h-4 w-4" />
+                ) : (
+                  <Send className="mr-2 h-4 w-4" />
+                )}
+                {pushing ? "Pushing..." : pushResult === "success" ? "Pushed!" : pushResult === "error" ? "Push Failed" : "Push to Output API"}
+              </Button>
             </DialogFooter>
           )}
         </DialogContent>

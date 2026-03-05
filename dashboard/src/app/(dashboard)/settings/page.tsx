@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Settings, DollarSign, Percent, Calculator, Check, Loader2, ArrowRight } from "lucide-react";
+import { Settings, DollarSign, Percent, Calculator, Check, Loader2, ArrowRight, Globe, KeyRound } from "lucide-react";
 
 export default function SettingsPage() {
   const { t } = useTranslation();
@@ -26,6 +26,8 @@ export default function SettingsPage() {
   const [taxRate, setTaxRate] = useState("");
   const [marginPercentage, setMarginPercentage] = useState("");
   const [currency, setCurrency] = useState("");
+  const [outputApiUrl, setOutputApiUrl] = useState("");
+  const [outputApiKey, setOutputApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -34,6 +36,8 @@ export default function SettingsPage() {
       setTaxRate(String(settings.taxRate));
       setMarginPercentage(String(settings.marginPercentage));
       setCurrency(settings.currency);
+      setOutputApiUrl(settings.outputApiUrl ?? "");
+      setOutputApiKey(settings.outputApiKey ?? "");
     }
   }, [settings]);
 
@@ -45,6 +49,8 @@ export default function SettingsPage() {
         taxRate: parseFloat(taxRate) || 0,
         marginPercentage: parseFloat(marginPercentage) || 0,
         currency: currency || "EUR",
+        outputApiUrl,
+        outputApiKey,
       });
       setSaved(true);
       refetch();
@@ -230,6 +236,54 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Output API */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Globe className="h-5 w-5" />
+            Output API
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            When you click <strong>Push to Output API</strong> on a product, the full product data (including calculated prices) will be POSTed to this URL.
+          </p>
+          <div className="space-y-2">
+            <label className="text-sm font-medium flex items-center gap-2">
+              <Globe className="h-4 w-4 text-muted-foreground" />
+              Output API URL
+            </label>
+            <Input
+              value={outputApiUrl}
+              onChange={(e) => setOutputApiUrl(e.target.value)}
+              placeholder="https://your-api.example.com/products"
+              className="font-mono text-sm"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium flex items-center gap-2">
+              <KeyRound className="h-4 w-4 text-muted-foreground" />
+              API Key <span className="text-muted-foreground font-normal">(optional)</span>
+            </label>
+            <Input
+              type="password"
+              value={outputApiKey}
+              onChange={(e) => setOutputApiKey(e.target.value)}
+              placeholder="Sent as X-API-Key header"
+              className="font-mono text-sm"
+            />
+          </div>
+          <Button onClick={handleSave} disabled={saving} variant="outline">
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            ) : saved ? (
+              <Check className="h-4 w-4 mr-2 text-green-500" />
+            ) : null}
+            {saved ? "Saved" : "Save"}
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -8,6 +8,8 @@ const DEFAULTS: Record<string, string> = {
   tax_rate: "21",
   margin_percentage: "0",
   currency: "EUR",
+  output_api_url: "",
+  output_api_key: "",
 };
 
 // In-memory cache for settings (60s TTL)
@@ -62,6 +64,8 @@ export async function settingsRoutes(app: FastifyInstance) {
       taxRate: parseFloat(settings.tax_rate),
       marginPercentage: parseFloat(settings.margin_percentage),
       currency: settings.currency,
+      outputApiUrl: settings.output_api_url ?? "",
+      outputApiKey: settings.output_api_key ?? "",
     };
   });
 
@@ -71,6 +75,8 @@ export async function settingsRoutes(app: FastifyInstance) {
       taxRate: z.number().min(0).max(100).optional(),
       marginPercentage: z.number().min(0).max(1000).optional(),
       currency: z.string().min(1).max(10).optional(),
+      outputApiUrl: z.string().max(500).optional(),
+      outputApiKey: z.string().max(200).optional(),
     });
 
     const body = schema.parse(request.body);
@@ -79,6 +85,8 @@ export async function settingsRoutes(app: FastifyInstance) {
     if (body.taxRate !== undefined) updates.push({ key: "tax_rate", value: String(body.taxRate) });
     if (body.marginPercentage !== undefined) updates.push({ key: "margin_percentage", value: String(body.marginPercentage) });
     if (body.currency !== undefined) updates.push({ key: "currency", value: body.currency });
+    if (body.outputApiUrl !== undefined) updates.push({ key: "output_api_url", value: body.outputApiUrl });
+    if (body.outputApiKey !== undefined) updates.push({ key: "output_api_key", value: body.outputApiKey });
 
     if (updates.length > 0) {
       await prisma.$transaction(
@@ -100,6 +108,8 @@ export async function settingsRoutes(app: FastifyInstance) {
       taxRate: parseFloat(settings.tax_rate),
       marginPercentage: parseFloat(settings.margin_percentage),
       currency: settings.currency,
+      outputApiUrl: settings.output_api_url ?? "",
+      outputApiKey: settings.output_api_key ?? "",
     };
   });
 
