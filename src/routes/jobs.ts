@@ -847,6 +847,113 @@ export async function jobRoutes(app: FastifyInstance) {
   });
 
   /**
+   * Bootstrap Van Wezel VWA supplier from existing TecDoc Van Wezel products.
+   *
+   * Van Wezel (TecDoc brand ID 36) products are already synced in TecDoc product_maps
+   * with article numbers, EANs, descriptions, and images.
+   * Van Wezel uses the same article numbers as TecDoc for the getstock API.
+   *
+   * This copies those TecDoc products into the VWA supplier product_maps so the
+   * stock worker can call getstock for each one every 30 min.
+   */
+  app.post("/jobs/bootstrap-vanwezel-from-tecdoc", {
+    onRequest: async (request) => { request.raw.socket.setTimeout(120_000); },
+  }, async () => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { logger } = await import("../lib/logger.js");
+    const { Prisma } = await import("@prisma/client");
+
+    let vwSupplier = await prisma.supplier.findUnique({ where: { code: "vanwezel" } });
+    if (!vwSupplier) return { error: "Van Wezel supplier not found." };
+
+    if (vwSupplier.adapterType !== "vanwezel" || !vwSupplier.active) {
+      vwSupplier = await prisma.supplier.update({
+        where: { id: vwSupplier.id },
+        data: {
+          adapterType: "vanwezel",
+          baseUrl: "https://vwa.autopartscat.com/WcfVWAService/WcfVWAService/VWAService.svc",
+          active: true,
+        },
+      });
+    }
+
+    const vwBrand = await prisma.brand.findFirst({
+      where: { OR: [{ name: { equals: "VAN WEZEL", mode: "insensitive" } }, { tecdocId: 36 }] },
+    });
+    if (!vwBrand) return { error: "VAN WEZEL brand not found. Run TecDoc sync with brand filter (brand ID 36) first." };
+
+    const tecdocSupplier = await prisma.supplier.findUnique({ where: { code: "tecdoc" }, select: { id: true } });
+    if (!tecdocSupplier) return { error: "TecDoc supplier not found." };
+
+    const totalTecdoc = await prisma.productMap.count({
+      where: { supplierId: tecdocSupplier.id, brandId: vwBrand.id, status: "active" },
+    });
+
+    if (totalTecdoc === 0) {
+      return { error: "No TecDoc VAN WEZEL products found. Run TecDoc sync with brand filter first." };
+    }
+
+    logger.info({ totalTecdoc, brand: vwBrand.name }, "Bootstrapping Van Wezel from TecDoc");
+
+    const BATCH_SIZE = 500;
+    let upserted = 0;
+    let offset = 0;
+
+    while (offset < totalTecdoc) {
+      const products = await prisma.productMap.findMany({
+        where: { supplierId: tecdocSupplier.id, brandId: vwBrand.id, status: "active" },
+        select: { articleNo: true, ean: true, tecdocId: true, oem: true, description: true, imageUrl: true, categoryId: true },
+        skip: offset,
+        take: BATCH_SIZE,
+      });
+
+      const values: ReturnType<typeof Prisma.sql>[] = [];
+      for (const p of products) {
+        if (!p.articleNo) continue;
+        const tecdocId = p.tecdocId != null ? Number(p.tecdocId) : null;
+        values.push(Prisma.sql`(
+          ${vwSupplier.id}, ${vwBrand.id}, ${p.categoryId},
+          ${p.articleNo}, ${p.articleNo}, ${p.ean},
+          ${tecdocId}, ${p.oem}, ${p.description ?? ""},
+          ${p.imageUrl}, 'EUR',
+          0, 'active', NOW(), NOW()
+        )`);
+      }
+
+      if (values.length > 0) {
+        await prisma.$executeRaw`
+          INSERT INTO product_maps (
+            supplier_id, brand_id, category_id, sku, article_no, ean,
+            tecdoc_id, oem, description, image_url, currency,
+            stock, status, created_at, updated_at
+          )
+          VALUES ${Prisma.join(values)}
+          ON CONFLICT (supplier_id, sku)
+          DO UPDATE SET
+            ean         = COALESCE(EXCLUDED.ean, product_maps.ean),
+            image_url   = COALESCE(product_maps.image_url, EXCLUDED.image_url),
+            description = CASE WHEN EXCLUDED.description != '' THEN EXCLUDED.description ELSE product_maps.description END,
+            category_id = COALESCE(product_maps.category_id, EXCLUDED.category_id),
+            tecdoc_id   = COALESCE(product_maps.tecdoc_id, EXCLUDED.tecdoc_id),
+            updated_at  = NOW()
+        `;
+        upserted += values.length;
+      }
+
+      offset += BATCH_SIZE;
+      logger.info({ offset, upserted, total: totalTecdoc }, "Van Wezel bootstrap progress");
+    }
+
+    logger.info({ totalTecdoc, upserted }, "Van Wezel bootstrap from TecDoc completed");
+    return {
+      totalTecdoc,
+      upserted,
+      brand: vwBrand.name,
+      message: "Van Wezel products copied from TecDoc. Stock worker will refresh prices every 30 min via VWA getstock API.",
+    };
+  });
+
+  /**
    * Import Van Wezel catalog/price data.
    * Activates Van Wezel supplier with REST API credentials.
    * Van Wezel stock is refreshed real-time via the VWA getstock API (every 30 min).
