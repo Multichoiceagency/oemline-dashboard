@@ -487,6 +487,125 @@ export async function jobRoutes(app: FastifyInstance) {
   });
 
   /**
+   * Import Diederichs price list CSV.
+   *
+   * CSV format (semicolon-separated, latin-1, German decimal comma):
+   *   "Artikel Nr HOD";"Hersteller";"Typ";"Art.Gruppe Txt";"Bezeichnung";"Tuning";"Status";
+   *   "Nettopreis Handel";"Empf.Werkstattpreis";"Empf.Endverbr.Preis";"VPE";"OE-Nummer";"EAN";...
+   *
+   * Matches by EAN against Diederichs product_maps and updates price + description + oem.
+   *
+   * Body (optional):
+   *   { "minioKey": "diederichs/pricelist.csv" }  — read from MinIO (default)
+   *   { "csvPath": "/tmp/pricelist.csv" }          — read from local path
+   */
+  app.post("/jobs/import-diederichs-prices", {
+    onRequest: async (request) => { request.raw.socket.setTimeout(120_000); },
+  }, async (request) => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { logger } = await import("../lib/logger.js");
+    const { createInterface } = await import("node:readline");
+    const { createReadStream, existsSync } = await import("node:fs");
+    const { getObjectStream } = await import("../lib/minio.js");
+
+    const body = (request.body ?? {}) as { csvPath?: string; minioKey?: string };
+    const DEFAULT_MINIO_KEY = "diederichs/pricelist.csv";
+
+    // Resolve stream source: MinIO > local file > default MinIO key
+    let stream: NodeJS.ReadableStream;
+    if (body.minioKey) {
+      stream = await getObjectStream(body.minioKey);
+    } else if (body.csvPath && existsSync(body.csvPath)) {
+      stream = createReadStream(body.csvPath, { encoding: "latin1" });
+    } else {
+      try {
+        stream = await getObjectStream(DEFAULT_MINIO_KEY);
+      } catch {
+        return { error: `Price CSV not found in MinIO at '${DEFAULT_MINIO_KEY}'. Upload it to MinIO or provide minioKey/csvPath.` };
+      }
+    }
+
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
+
+    // Parse CSV: EAN → { price, sku, description, oeNumber }
+    const priceMap = new Map<string, { sku: string; price: number; description: string; oeNumber: string }>();
+    let lineNum = 0;
+
+    for await (const line of rl) {
+      lineNum++;
+      if (lineNum === 1) continue; // skip header
+
+      // Semicolon-separated, fields may be quoted
+      const parts = line.split(";").map((p) => p.replace(/^"|"$/g, "").trim());
+      const sku         = parts[0] ?? "";
+      const description = parts[4] ?? ""; // Bezeichnung
+      const status      = parts[6] ?? ""; // Status: "01" = active
+      const priceRaw    = parts[7] ?? ""; // Nettopreis Handel (German comma decimal)
+      const oeNumber    = parts[11] ?? ""; // OE-Nummer
+      const ean         = parts[12] ?? "";
+
+      if (!sku || !ean || !/^\d{8,14}$/.test(ean)) continue;
+      if (status && status !== "01") continue; // skip inactive
+
+      const price = parseFloat(priceRaw.replace(",", "."));
+      if (!price || price <= 0) continue;
+
+      priceMap.set(ean, { sku, price, description, oeNumber });
+    }
+
+    logger.info({ parsed: priceMap.size }, "Diederichs pricelist parsed");
+
+    if (priceMap.size === 0) {
+      return { error: "No valid price rows parsed from CSV (check format or encoding)" };
+    }
+
+    // Get Diederichs supplier
+    const supplier = await prisma.supplier.findUnique({ where: { code: "diederichs" } });
+    if (!supplier) return { error: "Diederichs supplier not found" };
+
+    // Batch update by EAN
+    const eans = Array.from(priceMap.keys());
+    const BATCH_SIZE = 500;
+    let updated = 0;
+
+    for (let i = 0; i < eans.length; i += BATCH_SIZE) {
+      const batch = eans.slice(i, i + BATCH_SIZE);
+
+      // Fetch matching Diederichs product_map IDs for this EAN batch
+      const products = await prisma.$queryRawUnsafe<Array<{ id: number; ean: string }>>(
+        `SELECT id, ean FROM product_maps WHERE supplier_id = $1 AND ean = ANY($2::text[])`,
+        supplier.id,
+        batch
+      );
+
+      for (const product of products) {
+        const entry = priceMap.get(product.ean);
+        if (!entry) continue;
+
+        await prisma.$executeRawUnsafe(
+          `UPDATE product_maps SET
+            price = $1,
+            currency = 'EUR',
+            description = CASE WHEN $2 != '' THEN $2 ELSE description END,
+            oem = CASE WHEN $3 != '' AND oem IS NULL THEN $3 ELSE oem END,
+            updated_at = NOW()
+           WHERE id = $4`,
+          entry.price,
+          entry.description,
+          entry.oeNumber,
+          product.id
+        );
+        updated++;
+      }
+
+      logger.info({ processed: i + batch.length, updated }, "Diederichs price import progress");
+    }
+
+    logger.info({ total: priceMap.size, updated }, "Diederichs price import completed");
+    return { total: priceMap.size, updated };
+  });
+
+  /**
    * Import Van Wezel catalog/price data.
    * Activates Van Wezel supplier with REST API credentials.
    * Van Wezel stock is refreshed real-time via the VWA getstock API (every 30 min).
