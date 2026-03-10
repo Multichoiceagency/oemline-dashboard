@@ -378,7 +378,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         JOIN brands b ON b.id = pm.brand_id
         JOIN supplier_brand_rules sbr ON sbr.brand_id = b.id AND sbr.active = true
         JOIN intercars_mappings im ON
-          UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+          im.normalized_article_number = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
           AND UPPER(im.manufacturer) = sbr.supplier_brand
         WHERE pm.status = 'active' AND pm.ic_sku IS NULL
         ORDER BY pm.id`
@@ -423,7 +423,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         FROM product_maps pm
         JOIN brands b ON b.id = pm.brand_id
         JOIN intercars_mappings im ON
-          UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+          im.normalized_article_number = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
           AND (
             UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
             OR (
@@ -569,12 +569,12 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         }>>(
           `WITH unique_articles AS (
             SELECT
-              UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')) AS norm_article,
+              normalized_article_number AS norm_article,
               MIN(tow_kod) AS tow_kod,
               MIN(ean) AS ic_ean,
               MIN(weight) AS ic_weight
             FROM intercars_mappings
-            GROUP BY UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g'))
+            GROUP BY normalized_article_number
             HAVING COUNT(*) = 1
           )
           SELECT
