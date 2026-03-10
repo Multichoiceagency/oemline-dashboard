@@ -166,9 +166,10 @@ export async function storefrontRoutes(app: FastifyInstance) {
     };
   });
 
-  // Get all brands with product counts
+  // Get all brands with product counts — only brands with at least 1 product
   app.get("/storefront/brands", async () => {
     const brands = await prisma.brand.findMany({
+      where: { productMaps: { some: {} } },
       orderBy: { name: "asc" },
       include: {
         _count: { select: { productMaps: true } },
@@ -197,6 +198,8 @@ export async function storefrontRoutes(app: FastifyInstance) {
     } else {
       where.parentId = null;
     }
+    // Only show categories that have products or non-empty children
+    where.OR = [{ products: { some: {} } }, { children: { some: {} } }];
 
     const categories = await prisma.category.findMany({
       where,
@@ -206,6 +209,7 @@ export async function storefrontRoutes(app: FastifyInstance) {
         children: {
           take: 500,
           orderBy: { name: "asc" },
+          where: { OR: [{ products: { some: {} } }, { children: { some: {} } }] },
           include: {
             _count: { select: { products: true, children: true } },
           },
