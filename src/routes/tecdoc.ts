@@ -219,19 +219,22 @@ export async function tecdocRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: "TECDOC_API_KEY not configured" });
     }
 
-    // Call dataSupplierFacetOptions — returns all brand facets for the provider's catalog
-    let rawBrands: Array<{ dataSupplierId: number; dataSupplierName: string; articleCount?: number }> = [];
+    // Call getBrands — returns all data suppliers (brands) for the provider's catalog.
+    // Response: { data: { array: [{ dataSupplierId, mfrName }] } }
+    // Note: perPage cap is 100 and the API returns the same set regardless of page,
+    // so a single page-1 fetch is sufficient.
+    let rawBrands: Array<{ dataSupplierId: number; dataSupplierName: string }> = [];
 
     try {
       const response = await fetch(apiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Api-Key": apiKey },
         body: JSON.stringify({
-          dataSupplierFacetOptions: {
+          getBrands: {
             articleCountry: "NL",
             providerId: 22691,
             lang: "nl",
-            perPage: 0, // 0 = return all facets without article results
+            perPage: 100,
             page: 1,
           },
         }),
@@ -240,25 +243,15 @@ export async function tecdocRoutes(app: FastifyInstance): Promise<void> {
 
       const json = (await response.json()) as Record<string, unknown>;
 
-      // dataSupplierFacetOptions returns nested facet data
-      type FacetItem = { dataSupplierId?: number; dataSupplierName?: string; articleCount?: number };
-      const facets = (json as {
-        data?: { array?: FacetItem[] };
-        dataSupplierFacets?: { countItems?: FacetItem[]; array?: FacetItem[] };
-      });
-
-      const items: FacetItem[] =
-        facets?.dataSupplierFacets?.countItems ??
-        facets?.dataSupplierFacets?.array ??
-        facets?.data?.array ??
-        [];
+      type BrandItem = { dataSupplierId?: number; mfrName?: string };
+      const items: BrandItem[] =
+        (json as { data?: { array?: BrandItem[] } })?.data?.array ?? [];
 
       rawBrands = items
-        .filter((f) => f.dataSupplierId != null && f.dataSupplierName)
+        .filter((f) => f.dataSupplierId != null && f.mfrName)
         .map((f) => ({
           dataSupplierId: f.dataSupplierId!,
-          dataSupplierName: f.dataSupplierName!,
-          articleCount: f.articleCount,
+          dataSupplierName: f.mfrName!,
         }));
     } catch (err) {
       logger.error({ err }, "TecDoc dataSupplierFacetOptions request failed");
@@ -326,7 +319,6 @@ export async function tecdocRoutes(app: FastifyInstance): Promise<void> {
       brands: rawBrands.slice(0, 20).map((b) => ({
         id: b.dataSupplierId,
         name: b.dataSupplierName,
-        articleCount: b.articleCount,
       })),
     };
   });
