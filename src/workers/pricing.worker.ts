@@ -15,6 +15,7 @@ interface PricingJobData {
  */
 export async function processPricingJob(job: Job<PricingJobData>): Promise<void> {
   const { supplierCode = "intercars", batchSize = 500 } = job.data;
+  const safeBatchSize = Math.min(Math.max(1, Math.floor(Number(batchSize))), 5000);
 
   const adapter = await getAdapterOrLoad(supplierCode);
   if (!adapter) {
@@ -45,11 +46,11 @@ export async function processPricingJob(job: Job<PricingJobData>): Promise<void>
       `SELECT id, ic_sku FROM product_maps
        WHERE ic_sku IS NOT NULL AND status = 'active'
        ORDER BY id ASC
-       LIMIT ${batchSize} OFFSET ${offset}`
+       LIMIT ${safeBatchSize} OFFSET ${offset}`
     );
 
     if (products.length === 0) break;
-    offset += batchSize;
+    offset += safeBatchSize;
 
     // Process in API batch sizes
     for (let i = 0; i < products.length; i += BATCH_SIZE) {
@@ -77,8 +78,11 @@ export async function processPricingJob(job: Job<PricingJobData>): Promise<void>
               product.id
             );
             totalUpdated++;
-          } catch {
-            // Skip
+          } catch (dbErr) {
+            totalErrors++;
+            if (totalErrors <= 10) {
+              logger.warn({ err: dbErr, productId: product.id }, "Pricing DB update failed");
+            }
           }
         }
       } catch (err) {

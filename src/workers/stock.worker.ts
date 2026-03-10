@@ -14,6 +14,7 @@ interface StockJobData {
  */
 export async function processStockJob(job: Job<StockJobData>): Promise<void> {
   const { supplierCode = "intercars", batchSize = 500 } = job.data;
+  const safeBatchSize = Math.min(Math.max(1, Math.floor(Number(batchSize))), 5000);
 
   const adapter = await getAdapterOrLoad(supplierCode);
   if (!adapter) {
@@ -45,7 +46,7 @@ export async function processStockJob(job: Job<StockJobData>): Promise<void> {
           `SELECT id, ic_sku FROM product_maps
            WHERE ic_sku IS NOT NULL AND status = 'active'
            ORDER BY id ASC
-           LIMIT ${batchSize} OFFSET ${offset}`
+           LIMIT ${safeBatchSize} OFFSET ${offset}`
         )
       : prisma.$queryRawUnsafe<Array<{ id: number; ic_sku: string }>>(
           `SELECT pm.id, pm.sku AS ic_sku
@@ -53,12 +54,12 @@ export async function processStockJob(job: Job<StockJobData>): Promise<void> {
            JOIN suppliers s ON s.id = pm.supplier_id
            WHERE s.code = $1 AND pm.status = 'active'
            ORDER BY pm.id ASC
-           LIMIT ${batchSize} OFFSET ${offset}`,
+           LIMIT ${safeBatchSize} OFFSET ${offset}`,
           supplierCode
         ));
 
     if (products.length === 0) break;
-    offset += batchSize;
+    offset += safeBatchSize;
 
     for (let i = 0; i < products.length; i += BATCH_SIZE) {
       const batch = products.slice(i, i + BATCH_SIZE);
@@ -85,8 +86,11 @@ export async function processStockJob(job: Job<StockJobData>): Promise<void> {
               product.id
             );
             totalUpdated++;
-          } catch {
-            // Skip
+          } catch (dbErr) {
+            totalErrors++;
+            if (totalErrors <= 10) {
+              logger.warn({ err: dbErr, productId: product.id }, "Stock DB update failed");
+            }
           }
         }
       } catch (err) {

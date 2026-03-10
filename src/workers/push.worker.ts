@@ -30,7 +30,8 @@ export async function processPushJob(job: Job<PushJobData>): Promise<void> {
   const baseWhere: Record<string, unknown> = { status: "active" };
   if (supplierCode) {
     const supplier = await prisma.supplier.findUnique({ where: { code: supplierCode } });
-    if (supplier) baseWhere.supplierId = supplier.id;
+    if (!supplier) throw new Error(`Push job aborted: supplier "${supplierCode}" not found`);
+    baseWhere.supplierId = supplier.id;
   }
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -128,7 +129,7 @@ export async function processPushJob(job: Job<PushJobData>): Promise<void> {
     "Push to output API completed"
   );
 
-  if (errors > 0 && totalPushed === 0) {
-    throw new Error(`Push failed: all ${errors} batches errored`);
+  if (errors > 0) {
+    throw new Error(`Push completed with errors: ${errors} batch(es) failed, ${totalPushed} products pushed`);
   }
 }

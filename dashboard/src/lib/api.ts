@@ -68,6 +68,7 @@ export interface JobsStatusResponse {
   stock: QueueStatus;
   icMatch: QueueStatus;
   aiMatch: QueueStatus;
+  push: QueueStatus;
 }
 
 export interface OllamaStatus {
@@ -106,6 +107,7 @@ export interface SystemStatus {
     stock: QueueStatus | null;
     icMatch: QueueStatus | null;
     aiMatch: QueueStatus | null;
+    push: QueueStatus | null;
   };
   ollama: OllamaStatus;
   alerts: SystemAlert[];
