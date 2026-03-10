@@ -9,6 +9,7 @@ const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(250).default(100),
   parentId: z.coerce.number().int().optional(),
   q: z.string().optional(),
+  hideEmpty: z.enum(["true", "false"]).default("true"),
 });
 
 const updateCategorySchema = z.object({
@@ -21,7 +22,7 @@ export async function categoryRoutes(app: FastifyInstance) {
   // List categories (tree or flat)
   app.get("/categories", async (request) => {
     const query = listQuerySchema.parse(request.query);
-    const { page, limit, parentId, q } = query;
+    const { page, limit, parentId, q, hideEmpty } = query;
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = {};
@@ -35,6 +36,11 @@ export async function categoryRoutes(app: FastifyInstance) {
 
     if (q) {
       where.name = { contains: q, mode: "insensitive" };
+    }
+
+    if (hideEmpty === "true") {
+      // Only show categories that have direct products or at least one child category
+      where.OR = [{ products: { some: {} } }, { children: { some: {} } }];
     }
 
     const [items, total] = await Promise.all([
