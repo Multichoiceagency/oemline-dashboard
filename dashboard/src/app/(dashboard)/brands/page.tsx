@@ -27,6 +27,24 @@ import {
 import { formatNumber } from "@/lib/utils";
 import { Search, Tag, Package, X, Loader2, Pencil, ImageIcon, Upload, Link2, AlertCircle, CheckCircle2, RefreshCw } from "lucide-react";
 
+function BrandLogo({ brand }: { brand: Brand }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const showLetter = !brand.logoUrl || imgFailed;
+
+  return showLetter ? (
+    <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-primary/10 text-primary font-bold text-xl">
+      {brand.name.charAt(0)}
+    </div>
+  ) : (
+    <img
+      src={brand.logoUrl!}
+      alt={brand.name}
+      className="h-16 w-16 object-contain rounded"
+      onError={() => setImgFailed(true)}
+    />
+  );
+}
+
 export default function BrandsPage() {
   const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
@@ -204,20 +222,7 @@ export default function BrandsPage() {
                     className="flex flex-col items-center gap-2 rounded-lg border p-4 cursor-pointer hover:bg-muted/50 transition-colors group relative"
                     onClick={() => openBrand(brand)}
                   >
-                    {brand.logoUrl ? (
-                      <img
-                        src={brand.logoUrl}
-                        alt={brand.name}
-                        className="h-16 w-16 object-contain rounded"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = "none";
-                          (e.target as HTMLImageElement).nextElementSibling?.classList.remove("hidden");
-                        }}
-                      />
-                    ) : null}
-                    <div className={`flex h-16 w-16 items-center justify-center rounded-lg bg-primary/10 text-primary font-bold text-xl ${brand.logoUrl ? "hidden" : ""}`}>
-                      {brand.name.charAt(0)}
-                    </div>
+                    <BrandLogo brand={brand} />
                     <div className="text-center">
                       <p className="font-medium text-sm">{brand.name}</p>
                       <p className="text-xs text-muted-foreground">

@@ -100,39 +100,27 @@ export async function categoryRoutes(app: FastifyInstance) {
 
   // Sync categories from TecDoc assembly groups
   app.post("/categories/sync-tecdoc", async (request, reply) => {
-    const supplier = await prisma.supplier.findUnique({ where: { code: "tecdoc" } });
-    if (!supplier) {
-      return reply.code(404).send({ error: "TecDoc supplier not found" });
+    const { config } = await import("../config.js");
+
+    const apiKey = config.TECDOC_API_KEY;
+    if (!apiKey) {
+      return reply.code(400).send({ error: "TECDOC_API_KEY not configured" });
     }
 
-    let creds: { apiKey: string; providerId?: number; articleCountry?: string } = { apiKey: "" };
-    try {
-      let raw = supplier.credentials as string;
-      try {
-        raw = decryptCredentials(raw);
-      } catch {
-        // Fallback: credentials stored as plaintext
-      }
-      creds = JSON.parse(raw);
-    } catch {
-      return reply.code(500).send({ error: "Invalid TecDoc credentials" });
-    }
-
-    const tecdocUrl = supplier.baseUrl || "https://webservice.tecalliance.services/pegasus-3-0/services/TecdocToCatDLB.jsonEndpoint";
+    const tecdocUrl = config.TECDOC_API_URL || "https://webservice.tecalliance.services/pegasus-3-0/services/TecdocToCatDLB.jsonEndpoint";
 
     logger.info("Starting TecDoc category sync");
 
-    // Fetch assembly groups via facets
+    // Fetch assembly groups via getArticles with assemblyGroupFacetOptions.
+    // Response: { assemblyGroupFacets: { total: N, counts: [...flat array...] } }
+    // Each item: { assemblyGroupNodeId, assemblyGroupName, parentNodeId, count, sortNo }
     const response = await fetch(tecdocUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Api-Key": creds.apiKey,
-      },
+      headers: { "Content-Type": "application/json", "X-Api-Key": apiKey },
       body: JSON.stringify({
         getArticles: {
-          articleCountry: creds.articleCountry ?? "NL",
-          providerId: creds.providerId ?? 22691,
+          articleCountry: "NL",
+          providerId: 22691,
           lang: "nl",
           perPage: 0,
           page: 1,
@@ -142,84 +130,34 @@ export async function categoryRoutes(app: FastifyInstance) {
           },
         },
       }),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!response.ok) {
       return reply.code(502).send({ error: `TecDoc API error: ${response.status}` });
     }
 
-    const data = (await response.json()) as Record<string, unknown>;
-
-    // Debug: log top-level keys to understand response shape
-    const topKeys = Object.keys(data);
-    logger.info({ topKeys }, "TecDoc API response top-level keys");
-
-    // The response may be nested under a wrapper key (e.g., "getArticlesResponse" or the first key)
-    let responseBody = data;
-    if (!data.assemblyGroupFacets && topKeys.length === 1) {
-      const inner = data[topKeys[0]];
-      if (inner && typeof inner === "object") {
-        responseBody = inner as Record<string, unknown>;
-        logger.info({ innerKeys: Object.keys(responseBody) }, "TecDoc API inner response keys");
-      }
-    }
-
-    const agf = responseBody.assemblyGroupFacets;
-    logger.info(
-      {
-        agfType: agf === null ? "null" : typeof agf,
-        agfIsArray: Array.isArray(agf),
-        agfKeys: agf && typeof agf === "object" && !Array.isArray(agf) ? Object.keys(agf as Record<string, unknown>) : undefined,
-        agfLength: Array.isArray(agf) ? agf.length : undefined,
-        agfSample: Array.isArray(agf) && agf.length > 0 ? JSON.stringify(agf[0]).slice(0, 300) : undefined,
-      },
-      "TecDoc assemblyGroupFacets debug"
-    );
-
-    let rawFacets: Array<Record<string, unknown>> = [];
-    if (Array.isArray(agf)) {
-      rawFacets = agf;
-    } else if (agf && typeof agf === "object") {
-      const obj = agf as Record<string, unknown>;
-      // Try all possible nested array keys
-      const possibleArrays = ["counts", "array", "data", "groups", "items", "assemblyGroups"];
-      for (const key of possibleArrays) {
-        if (Array.isArray(obj[key])) {
-          rawFacets = obj[key] as Array<Record<string, unknown>>;
-          logger.info({ key, count: rawFacets.length }, "Found facets under nested key");
-          break;
-        }
-      }
-      if (rawFacets.length === 0) {
-        // Last resort: try all keys that are arrays
-        for (const [key, val] of Object.entries(obj)) {
-          if (Array.isArray(val) && val.length > 0) {
-            rawFacets = val as Array<Record<string, unknown>>;
-            logger.info({ key, count: rawFacets.length }, "Found facets under fallback key");
-            break;
-          }
-        }
-      }
-    }
-
-    // If still 0, return debug info
-    if (rawFacets.length === 0) {
-      const debugSample = JSON.stringify(data).slice(0, 2000);
-      logger.warn({ debugSample }, "No assembly group facets found");
-      return {
-        created: 0, updated: 0, linked: 0, total: 0,
-        debug: {
-          topKeys,
-          responseBodyKeys: Object.keys(responseBody),
-          agfType: agf === null ? "null" : typeof agf,
-          agfIsArray: Array.isArray(agf),
-          agfKeys: agf && typeof agf === "object" && !Array.isArray(agf) ? Object.keys(agf as Record<string, unknown>) : undefined,
-          responseSample: debugSample,
-        },
+    const data = (await response.json()) as {
+      assemblyGroupFacets?: {
+        total?: number;
+        counts?: Array<{
+          assemblyGroupNodeId: number;
+          assemblyGroupName: string;
+          parentNodeId?: number;
+          count?: number;
+          sortNo?: number;
+        }>;
       };
+    };
+
+    const rawFacets = data.assemblyGroupFacets?.counts ?? [];
+    logger.info({ total: data.assemblyGroupFacets?.total, fetched: rawFacets.length }, "TecDoc assembly group facets");
+
+    if (rawFacets.length === 0) {
+      return { created: 0, updated: 0, linked: 0, total: 0, message: "No assembly groups returned from TecDoc" };
     }
 
-    // Recursive flatten with parent tracking
+    // TecDoc returns a flat list — each item carries its own parentNodeId
     interface FlatCategory {
       nodeId: number;
       name: string;
@@ -227,27 +165,14 @@ export async function categoryRoutes(app: FastifyInstance) {
       parentNodeId: number | null;
     }
 
-    function flattenWithParent(
-      facets: Array<Record<string, unknown>>,
-      parentId: number | null = null
-    ): FlatCategory[] {
-      const result: FlatCategory[] = [];
-      for (const f of facets) {
-        const nodeId = f.assemblyGroupNodeId as number | undefined;
-        const name = (f.assemblyGroupName ?? f.name ?? "") as string;
-        const count = (f.matchCount ?? f.count ?? 0) as number;
-        if (nodeId && name) {
-          result.push({ nodeId, name, count, parentNodeId: parentId });
-          const children = f.children as Array<Record<string, unknown>> | undefined;
-          if (Array.isArray(children) && children.length > 0) {
-            result.push(...flattenWithParent(children, nodeId));
-          }
-        }
-      }
-      return result;
-    }
-
-    const categories = flattenWithParent(rawFacets);
+    const categories: FlatCategory[] = rawFacets
+      .filter((f) => f.assemblyGroupNodeId && f.assemblyGroupName)
+      .map((f) => ({
+        nodeId: f.assemblyGroupNodeId,
+        name: f.assemblyGroupName,
+        count: f.count ?? 0,
+        parentNodeId: f.parentNodeId ?? null,
+      }));
     logger.info({ count: categories.length }, "Flattened TecDoc assembly groups");
 
     // Upsert categories - first pass: create all without parents
