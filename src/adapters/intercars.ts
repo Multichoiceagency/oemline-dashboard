@@ -315,7 +315,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
    */
   async *syncCatalog(_cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
     try {
-      const { prisma } = await import("../lib/prisma.js");
+      const { prisma, refreshIcUniqueArticles } = await import("../lib/prisma.js");
 
       // Check if mapping table has data
       let totalMappings = 0;
@@ -360,6 +360,10 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
       // =========== PHASE 1: Match unlinked products (no icSku yet) ===========
 
+      // Refresh the materialized view so Phase 1D uses current IC data.
+      // CONCURRENTLY: view stays readable, no lock on intercars_mappings.
+      await refreshIcUniqueArticles();
+
       // Strategy 0: Brand aliases from supplier_brand_rules table
       // This catches known mismatches like KAYABA→KYB, DT→DT Spare Parts, BLIC→DIEDERICHS
       logger.info({ supplier: this.code }, "Phase 0: Matching via brand aliases...");
@@ -378,7 +382,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         JOIN brands b ON b.id = pm.brand_id
         JOIN supplier_brand_rules sbr ON sbr.brand_id = b.id AND sbr.active = true
         JOIN intercars_mappings im ON
-          im.normalized_article_number = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+          im.normalized_article_number = pm.normalized_article_no
           AND UPPER(im.manufacturer) = sbr.supplier_brand
         WHERE pm.status = 'active' AND pm.ic_sku IS NULL
         ORDER BY pm.id`
@@ -423,7 +427,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         FROM product_maps pm
         JOIN brands b ON b.id = pm.brand_id
         JOIN intercars_mappings im ON
-          im.normalized_article_number = UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+          im.normalized_article_number = pm.normalized_article_no
           AND (
             UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
             OR (
@@ -554,41 +558,26 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
       yield []; // Heartbeat for BullMQ lock extension
 
-      // Strategy D: Article number only (no brand check, but only when article is unique in IC)
-      // Uses a CTE to pre-compute unique articles — avoids the O(N×M) correlated subquery
-      // Uses work_mem=512MB in a transaction to keep GROUP BY in RAM, avoiding pgsql_tmp spill
-      logger.info({ supplier: this.code }, "Phase 1D: Matching by unique article number (CTE)...");
-      const articleOnlyMatches = await prisma.$transaction(async (tx) => {
-        // Bump work_mem for this transaction so the 565K-row GROUP BY stays in memory
-        await tx.$executeRawUnsafe(`SET LOCAL work_mem = '512MB'`);
-        return tx.$queryRawUnsafe<Array<{
-          product_id: number;
-          tow_kod: string;
-          ic_ean: string | null;
-          ic_weight: number | null;
-        }>>(
-          `WITH unique_articles AS (
-            SELECT
-              normalized_article_number AS norm_article,
-              MIN(tow_kod) AS tow_kod,
-              MIN(ean) AS ic_ean,
-              MIN(weight) AS ic_weight
-            FROM intercars_mappings
-            GROUP BY normalized_article_number
-            HAVING COUNT(*) = 1
-          )
-          SELECT
-            pm.id AS product_id,
-            ua.tow_kod,
-            ua.ic_ean,
-            ua.ic_weight
-          FROM product_maps pm
-          JOIN unique_articles ua ON
-            UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g')) = ua.norm_article
-          WHERE pm.status = 'active' AND pm.ic_sku IS NULL
-          ORDER BY pm.id`
-        );
-      }, { timeout: 300_000 }); // 5 min timeout for large GROUP BY
+      // Strategy D: Article number only (no brand check, only when article is unique in IC)
+      // Uses the ic_unique_articles materialized view (pre-aggregated at run start) instead
+      // of a live GROUP BY/HAVING — turns a 5-min hash agg into a millisecond index join.
+      logger.info({ supplier: this.code }, "Phase 1D: Matching by unique article number (mat-view)...");
+      const articleOnlyMatches = await prisma.$queryRawUnsafe<Array<{
+        product_id: number;
+        tow_kod: string;
+        ic_ean: string | null;
+        ic_weight: number | null;
+      }>>(
+        `SELECT
+          pm.id AS product_id,
+          ua.tow_kod,
+          ua.ic_ean,
+          ua.ic_weight
+        FROM product_maps pm
+        JOIN ic_unique_articles ua ON ua.norm_article = pm.normalized_article_no
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+        ORDER BY pm.id`
+      );
 
       if (articleOnlyMatches.length > 0) {
         logger.info({ supplier: this.code, count: articleOnlyMatches.length }, "Unique article matches found, storing icSku");

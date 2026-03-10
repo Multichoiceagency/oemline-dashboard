@@ -22,49 +22,110 @@ export async function validateConnection(): Promise<void> {
 }
 
 /**
- * Create functional indexes for normalized matching queries.
- * Uses CREATE INDEX IF NOT EXISTS so safe to run on every startup.
+ * Ensure stored generated columns, indexes, and materialized views for fast IC matching.
  *
- * Also ensures the intercars_mappings.normalized_article_number stored generated
- * column exists (PostgreSQL 12+ GENERATED ALWAYS AS STORED). This eliminates
- * UPPER(regexp_replace(...)) computation at query time across all IC match phases.
+ * Strategy:
+ * 1. GENERATED ALWAYS AS STORED columns on both tables — zero runtime regexp cost.
+ * 2. Plain B-tree indexes on stored columns — much smaller/faster than functional indexes.
+ * 3. Partial index on product_maps (normalized_article_no) WHERE ic_sku IS NULL — skips
+ *    already-matched rows entirely during the join.
+ * 4. Materialized view ic_unique_articles — pre-aggregates the Phase 1D GROUP BY/HAVING
+ *    once; subsequent queries are a pure index lookup instead of a 565K-row hash agg.
+ *
+ * All operations use IF NOT EXISTS / CONCURRENTLY so they are safe on every startup.
  */
 export async function ensureNormalizedIndexes(): Promise<void> {
-  // Step 1: Add the stored generated column for IC article normalization.
-  // GENERATED ALWAYS AS STORED: Postgres computes + persists value on write.
-  // ADD COLUMN IF NOT EXISTS: no-op if already present.
-  // Initial creation backfills all existing rows automatically.
-  try {
-    await prisma.$executeRawUnsafe(
+  // ── Stored generated columns ──────────────────────────────────────────────────
+  const generatedColumns: Array<[string, string]> = [
+    [
+      "intercars_mappings",
       `ALTER TABLE intercars_mappings
          ADD COLUMN IF NOT EXISTS normalized_article_number TEXT
-         GENERATED ALWAYS AS (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g'))) STORED`
-    );
-  } catch (err) {
-    // Column may already exist with a different definition — log and continue
-    logger.warn({ err }, "intercars_mappings normalized_article_number column setup (non-critical)");
+         GENERATED ALWAYS AS (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g'))) STORED`,
+    ],
+    [
+      "product_maps",
+      `ALTER TABLE product_maps
+         ADD COLUMN IF NOT EXISTS normalized_article_no TEXT
+         GENERATED ALWAYS AS (UPPER(regexp_replace(article_no, '[^a-zA-Z0-9]', '', 'g'))) STORED`,
+    ],
+  ];
+
+  for (const [table, sql] of generatedColumns) {
+    try {
+      await prisma.$executeRawUnsafe(sql);
+    } catch (err) {
+      logger.warn({ err, table }, "Generated column setup (non-critical — may already exist)");
+    }
   }
 
+  // ── Indexes ───────────────────────────────────────────────────────────────────
   const indexes = [
-    `CREATE INDEX IF NOT EXISTS idx_pm_article_no_norm ON product_maps (UPPER(regexp_replace(article_no, '[^a-zA-Z0-9]', '', 'g')))`,
+    // IC mappings — stored article column + manufacturer functional
+    `CREATE INDEX IF NOT EXISTS idx_im_norm_article_stored ON intercars_mappings (normalized_article_number)`,
+    `CREATE INDEX IF NOT EXISTS idx_im_manufacturer_norm ON intercars_mappings (UPPER(regexp_replace(manufacturer, '[^a-zA-Z0-9]', '', 'g')))`,
+    // product_maps — stored article column, full + partial (unmatched only)
+    `CREATE INDEX IF NOT EXISTS idx_pm_norm_article_stored ON product_maps (normalized_article_no)`,
+    `CREATE INDEX IF NOT EXISTS idx_pm_norm_article_unmatched ON product_maps (normalized_article_no) WHERE ic_sku IS NULL AND status = 'active'`,
+    // product_maps — other normalized lookups
     `CREATE INDEX IF NOT EXISTS idx_pm_oem_norm ON product_maps (UPPER(regexp_replace(oem, '[^a-zA-Z0-9]', '', 'g'))) WHERE oem IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_pm_ean_norm ON product_maps (regexp_replace(ean, '[^0-9]', '', 'g')) WHERE ean IS NOT NULL`,
-    // Plain B-tree index on the stored generated column — much cheaper than functional index
-    `CREATE INDEX IF NOT EXISTS idx_im_norm_article_stored ON intercars_mappings (normalized_article_number)`,
-    // Keep functional indexes as fallback during column creation/backfill
-    `CREATE INDEX IF NOT EXISTS idx_im_article_norm ON intercars_mappings (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')))`,
-    `CREATE INDEX IF NOT EXISTS idx_im_manufacturer_norm ON intercars_mappings (UPPER(regexp_replace(manufacturer, '[^a-zA-Z0-9]', '', 'g')))`,
+    // brands
     `CREATE INDEX IF NOT EXISTS idx_brands_name_norm ON brands (UPPER(regexp_replace(name, '[^a-zA-Z0-9]', '', 'g')))`,
+    // Legacy functional indexes kept as fallback while generated columns backfill
+    `CREATE INDEX IF NOT EXISTS idx_im_article_norm ON intercars_mappings (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')))`,
+    `CREATE INDEX IF NOT EXISTS idx_pm_article_no_norm ON product_maps (UPPER(regexp_replace(article_no, '[^a-zA-Z0-9]', '', 'g')))`,
   ];
 
   for (const sql of indexes) {
     try {
       await prisma.$executeRawUnsafe(sql);
     } catch (err) {
-      logger.warn({ err, sql: sql.slice(0, 80) }, "Failed to create normalized index (non-critical)");
+      logger.warn({ err, sql: sql.slice(0, 80) }, "Failed to create index (non-critical)");
     }
   }
-  logger.info("Normalized matching indexes ensured");
+
+  // ── Materialized view: ic_unique_articles ─────────────────────────────────────
+  // Pre-aggregates the Phase 1D GROUP BY/HAVING COUNT(*) = 1 query so it runs
+  // once at refresh time instead of scanning 565K rows on every ic-match job.
+  // REFRESH MATERIALIZED VIEW CONCURRENTLY keeps it readable during refresh.
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE MATERIALIZED VIEW IF NOT EXISTS ic_unique_articles AS
+      SELECT
+        normalized_article_number AS norm_article,
+        MIN(tow_kod)  AS tow_kod,
+        MIN(ean)      AS ic_ean,
+        MIN(weight)   AS ic_weight
+      FROM intercars_mappings
+      GROUP BY normalized_article_number
+      HAVING COUNT(*) = 1
+    `);
+    // Unique index required for CONCURRENTLY refresh
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_ic_unique_articles_norm ON ic_unique_articles (norm_article)`
+    );
+  } catch (err) {
+    logger.warn({ err }, "ic_unique_articles materialized view setup (non-critical)");
+  }
+
+  logger.info("Normalized matching indexes and materialized view ensured");
+}
+
+/**
+ * Refresh the ic_unique_articles materialized view.
+ * Call this at the start of every ic-match run so Phase 1D sees current data.
+ * CONCURRENTLY means the view stays readable while refreshing.
+ */
+export async function refreshIcUniqueArticles(): Promise<void> {
+  try {
+    await prisma.$executeRawUnsafe(
+      `REFRESH MATERIALIZED VIEW CONCURRENTLY ic_unique_articles`
+    );
+    logger.info("ic_unique_articles materialized view refreshed");
+  } catch (err) {
+    logger.warn({ err }, "Failed to refresh ic_unique_articles (non-critical)");
+  }
 }
 
 export async function disconnectPrisma(): Promise<void> {
