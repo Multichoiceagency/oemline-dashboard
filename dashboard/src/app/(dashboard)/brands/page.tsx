@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import { useApi, useInterval } from "@/lib/hooks";
-import { getBrands, getProducts, updateBrand, uploadBrandLogo, getInterCarsUnmatchedBrands, seedInterCarsAliases, createInterCarsAlias } from "@/lib/api";
+import { getBrands, getProducts, updateBrand, uploadBrandLogo, getInterCarsUnmatchedBrands, seedInterCarsAliases, createInterCarsAlias, syncBrandsFromTecDoc } from "@/lib/api";
 import type { Brand } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -49,6 +49,25 @@ export default function BrandsPage() {
         : Promise.resolve(null),
     [selectedBrand?.id]
   );
+
+  // TecDoc brand sync
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ fetched: number; totalInDb: number } | null>(null);
+
+  const handleSyncBrands = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const result = await syncBrandsFromTecDoc();
+      setSyncResult({ fetched: result.fetched, totalInDb: result.totalInDb });
+      refetch();
+      setTimeout(() => setSyncResult(null), 8000);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   // Edit mode
   const [editMode, setEditMode] = useState(false);
@@ -147,11 +166,27 @@ export default function BrandsPage() {
 
       {/* Brands Grid */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="flex items-center gap-2">
             <Tag className="h-5 w-5" />
             Brands ({data?.total ?? 0})
           </CardTitle>
+          <div className="flex items-center gap-2">
+            {syncResult && (
+              <span className="text-xs text-green-600 flex items-center gap-1">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {syncResult.fetched} fetched · {syncResult.totalInDb} in DB
+              </span>
+            )}
+            <Button size="sm" variant="outline" disabled={syncing} onClick={handleSyncBrands}>
+              {syncing ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              {syncing ? "Syncing..." : "Sync Brands from TecDoc"}
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (

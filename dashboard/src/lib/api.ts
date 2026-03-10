@@ -545,6 +545,12 @@ export const updateBrand = (id: number, data: { name?: string; logoUrl?: string 
     body: JSON.stringify(data),
   });
 
+export const syncBrandsFromTecDoc = () =>
+  apiFetch<{ fetched: number; upserted: number; totalInDb: number; brands: Array<{ id: number; name: string; articleCount?: number }> }>(
+    "/api/tecdoc/sync-brands",
+    { method: "POST" }
+  );
+
 // Categories
 export interface Category {
   id: number;

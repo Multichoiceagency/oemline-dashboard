@@ -199,4 +199,102 @@ export async function tecdocRoutes(app: FastifyInstance): Promise<void> {
       total: totalImported + totalUpdated,
     };
   });
+
+  /**
+   * POST /tecdoc/sync-brands
+   *
+   * Fetches all data suppliers (brands) directly from TecDoc via
+   * `dataSupplierFacetOptions` and upserts them into the `brands` table.
+   *
+   * TecDoc Pegasus 3.0 does not have a getBrands endpoint — brands come
+   * from dataSupplierFacetOptions filtered by your catalog scope.
+   */
+  app.post("/tecdoc/sync-brands", async (request, reply) => {
+    const { config } = await import("../config.js");
+
+    const apiUrl = config.TECDOC_API_URL;
+    const apiKey = config.TECDOC_API_KEY;
+
+    if (!apiKey) {
+      return reply.code(400).send({ error: "TECDOC_API_KEY not configured" });
+    }
+
+    // Call dataSupplierFacetOptions — returns all brand facets for the provider's catalog
+    let rawBrands: Array<{ dataSupplierId: number; dataSupplierName: string; articleCount?: number }> = [];
+
+    try {
+      const response = await fetch(apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Api-Key": apiKey },
+        body: JSON.stringify({
+          dataSupplierFacetOptions: {
+            articleCountry: "NL",
+            providerId: 22691,
+            lang: "nl",
+            perPage: 0, // 0 = return all facets without article results
+            page: 1,
+          },
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+
+      const json = (await response.json()) as Record<string, unknown>;
+
+      // dataSupplierFacetOptions returns nested facet data
+      type FacetItem = { dataSupplierId?: number; dataSupplierName?: string; articleCount?: number };
+      const facets = (json as {
+        data?: { array?: FacetItem[] };
+        dataSupplierFacets?: { countItems?: FacetItem[]; array?: FacetItem[] };
+      });
+
+      const items: FacetItem[] =
+        facets?.dataSupplierFacets?.countItems ??
+        facets?.dataSupplierFacets?.array ??
+        facets?.data?.array ??
+        [];
+
+      rawBrands = items
+        .filter((f) => f.dataSupplierId != null && f.dataSupplierName)
+        .map((f) => ({
+          dataSupplierId: f.dataSupplierId!,
+          dataSupplierName: f.dataSupplierName!,
+          articleCount: f.articleCount,
+        }));
+    } catch (err) {
+      logger.error({ err }, "TecDoc dataSupplierFacetOptions request failed");
+      return reply.code(502).send({
+        error: "TecDoc API request failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    if (rawBrands.length === 0) {
+      logger.warn("TecDoc sync-brands: no brands returned from dataSupplierFacetOptions");
+      return { upserted: 0, total: 0, message: "No brands returned from TecDoc API" };
+    }
+
+    // Upsert all into brands table
+    const brandData = rawBrands.map((b) => ({
+      name: b.dataSupplierName,
+      code: b.dataSupplierName.toLowerCase().replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, ""),
+    }));
+
+    await prisma.brand.createMany({ data: brandData, skipDuplicates: true });
+
+    // Return count from DB after upsert
+    const totalInDb = await prisma.brand.count();
+
+    logger.info({ fetched: rawBrands.length, totalInDb }, "TecDoc sync-brands completed");
+
+    return {
+      fetched: rawBrands.length,
+      upserted: rawBrands.length,
+      totalInDb,
+      brands: rawBrands.slice(0, 20).map((b) => ({
+        id: b.dataSupplierId,
+        name: b.dataSupplierName,
+        articleCount: b.articleCount,
+      })),
+    };
+  });
 }
