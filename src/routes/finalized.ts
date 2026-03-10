@@ -4,6 +4,7 @@ import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { getAllSettings } from "./settings.js";
 import { meili, PRODUCTS_INDEX } from "../lib/meilisearch.js";
+import { pushQueue } from "../workers/queues.js";
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -436,6 +437,23 @@ export async function finalizedRoutes(app: FastifyInstance) {
       updatedAt: product.updatedAt,
       createdAt: product.createdAt,
     };
+  });
+
+  // ─── POST /finalized/push-all ─── Enqueue bulk push of all active products to output API
+  app.post("/finalized/push-all", async (request, reply) => {
+    const settings = await getAllSettings();
+    const outputApiUrl = settings.output_api_url ?? "";
+
+    if (!outputApiUrl) {
+      return reply.code(400).send({ error: "Output API URL not configured. Set it in Settings." });
+    }
+
+    const body = (request.body ?? {}) as { supplierCode?: string };
+    const jobName = `push-all-manual${body.supplierCode ? `-${body.supplierCode}` : ""}`;
+
+    const job = await pushQueue.add(jobName, { supplierCode: body.supplierCode }, { priority: 1 });
+
+    return { jobId: job.id, queue: "push", status: "queued", outputApiUrl };
   });
 
   // ─── POST /finalized/:id/push ─── Push product to configured output API

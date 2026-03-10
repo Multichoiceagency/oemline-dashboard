@@ -81,3 +81,14 @@ export const aiMatchQueue = new Queue("ai-match", {
     attempts: 1,
   },
 });
+
+// Push finalized products to configured output API (manual or auto after index)
+export const pushQueue = new Queue("push", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 20 },
+    removeOnFail: { count: 50 },
+    attempts: 2,
+    backoff: { type: "exponential", delay: 10_000 },
+  },
+});

@@ -10,6 +10,7 @@ const DEFAULTS: Record<string, string> = {
   currency: "EUR",
   output_api_url: "",
   output_api_key: "",
+  auto_push_enabled: "false",
 };
 
 // In-memory cache for settings (60s TTL)
@@ -66,6 +67,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       currency: settings.currency,
       outputApiUrl: settings.output_api_url ?? "",
       outputApiKey: settings.output_api_key ?? "",
+      autoPushEnabled: settings.auto_push_enabled === "true",
     };
   });
 
@@ -77,6 +79,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       currency: z.string().min(1).max(10).optional(),
       outputApiUrl: z.string().max(500).optional(),
       outputApiKey: z.string().max(200).optional(),
+      autoPushEnabled: z.boolean().optional(),
     });
 
     const body = schema.parse(request.body);
@@ -87,6 +90,7 @@ export async function settingsRoutes(app: FastifyInstance) {
     if (body.currency !== undefined) updates.push({ key: "currency", value: body.currency });
     if (body.outputApiUrl !== undefined) updates.push({ key: "output_api_url", value: body.outputApiUrl });
     if (body.outputApiKey !== undefined) updates.push({ key: "output_api_key", value: body.outputApiKey });
+    if (body.autoPushEnabled !== undefined) updates.push({ key: "auto_push_enabled", value: String(body.autoPushEnabled) });
 
     if (updates.length > 0) {
       await prisma.$transaction(
@@ -110,6 +114,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       currency: settings.currency,
       outputApiUrl: settings.output_api_url ?? "",
       outputApiKey: settings.output_api_key ?? "",
+      autoPushEnabled: settings.auto_push_enabled === "true",
     };
   });
 

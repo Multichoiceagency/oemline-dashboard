@@ -14,6 +14,7 @@ import {
   getTecDocLinkages,
   getJobsStatus,
   pushFinalizedProduct,
+  pushAllFinalized,
 } from "@/lib/api";
 import type { FinalizedProduct, FinalizedDetail, VehicleLinkage } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
@@ -140,6 +141,8 @@ export default function FinalizedPage() {
   const [saving, setSaving] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [pushResult, setPushResult] = useState<"success" | "error" | null>(null);
+  const [bulkPushing, setBulkPushing] = useState(false);
+  const [bulkPushResult, setBulkPushResult] = useState<"queued" | "error" | null>(null);
   const [uploading, setUploading] = useState(false);
   const imageFileRef = useRef<HTMLInputElement>(null);
 
@@ -230,6 +233,21 @@ export default function FinalizedPage() {
       setTimeout(() => setPushResult(null), 5000);
     } finally {
       setPushing(false);
+    }
+  };
+
+  const handleBulkPush = async () => {
+    setBulkPushing(true);
+    setBulkPushResult(null);
+    try {
+      await pushAllFinalized();
+      setBulkPushResult("queued");
+      setTimeout(() => setBulkPushResult(null), 5000);
+    } catch {
+      setBulkPushResult("error");
+      setTimeout(() => setBulkPushResult(null), 5000);
+    } finally {
+      setBulkPushing(false);
     }
   };
 
@@ -576,6 +594,22 @@ export default function FinalizedPage() {
               <Badge variant="secondary">{formatNumber(data.total)}</Badge>
             )}
           </CardTitle>
+          <Button
+            size="sm"
+            variant={bulkPushResult === "queued" ? "default" : bulkPushResult === "error" ? "destructive" : "outline"}
+            disabled={bulkPushing}
+            className={bulkPushResult === "queued" ? "bg-green-600 hover:bg-green-700" : ""}
+            onClick={handleBulkPush}
+          >
+            {bulkPushing ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : bulkPushResult === "queued" ? (
+              <CheckCircle2 className="mr-2 h-4 w-4" />
+            ) : (
+              <Send className="mr-2 h-4 w-4" />
+            )}
+            {bulkPushing ? "Queuing..." : bulkPushResult === "queued" ? "Push Queued!" : bulkPushResult === "error" ? "Push Failed" : "Push All to Output API"}
+          </Button>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -599,7 +633,7 @@ export default function FinalizedPage() {
                       <TableHead>{t("filter.price")}</TableHead>
                       <TableHead>{t("finalized.stock")}</TableHead>
                       <TableHead>{t("finalized.supplier")}</TableHead>
-                      <TableHead className="w-[60px]"></TableHead>
+                      <TableHead className="w-[100px]"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -608,6 +642,7 @@ export default function FinalizedPage() {
                         key={product.id}
                         product={product}
                         onClick={() => setSelectedId(product.id)}
+                        onPush={pushFinalizedProduct}
                       />
                     ))}
                   </TableBody>
@@ -947,10 +982,29 @@ export default function FinalizedPage() {
 function ProductRow({
   product,
   onClick,
+  onPush,
 }: {
   product: FinalizedProduct;
   onClick: () => void;
+  onPush: (id: number) => Promise<{ success: boolean }>;
 }) {
+  const [rowPushing, setRowPushing] = useState(false);
+  const [rowPushDone, setRowPushDone] = useState(false);
+
+  const handleRowPush = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRowPushing(true);
+    try {
+      await onPush(product.id);
+      setRowPushDone(true);
+      setTimeout(() => setRowPushDone(false), 3000);
+    } catch {
+      // ignore — user can open detail for error feedback
+    } finally {
+      setRowPushing(false);
+    }
+  };
+
   return (
     <TableRow className="cursor-pointer hover:bg-accent/50" onClick={onClick}>
       <TableCell>
@@ -1014,9 +1068,27 @@ function ProductRow({
         </Badge>
       </TableCell>
       <TableCell>
-        <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); onClick(); }}>
-          <Eye className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            title="Push to Output API"
+            disabled={rowPushing}
+            onClick={handleRowPush}
+            className={rowPushDone ? "text-green-600" : ""}
+          >
+            {rowPushing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : rowPushDone ? (
+              <CheckCircle2 className="h-4 w-4" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
+          </Button>
+          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); onClick(); }}>
+            <Eye className="h-4 w-4" />
+          </Button>
+        </div>
       </TableCell>
     </TableRow>
   );

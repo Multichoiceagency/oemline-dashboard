@@ -791,6 +791,12 @@ export const getFinalizedProduct = (id: number) =>
 export const pushFinalizedProduct = (id: number) =>
   apiFetch<{ success: boolean }>(`/api/finalized/${id}/push`, { method: "POST" });
 
+export const pushAllFinalized = (supplierCode?: string) =>
+  apiFetch<{ jobId: string; queue: string; status: string; outputApiUrl: string }>(
+    "/api/finalized/push-all",
+    { method: "POST", body: JSON.stringify({ supplierCode }), headers: { "Content-Type": "application/json" } }
+  );
+
 // Settings
 export interface PricingSettings {
   taxRate: number;
@@ -798,6 +804,7 @@ export interface PricingSettings {
   currency: string;
   outputApiUrl: string;
   outputApiKey: string;
+  autoPushEnabled?: boolean;
 }
 
 export interface PricingPreview {

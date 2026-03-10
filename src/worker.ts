@@ -12,6 +12,7 @@ import { processPricingJob } from "./workers/pricing.worker.js";
 import { processStockJob } from "./workers/stock.worker.js";
 import { processIcMatchJob } from "./workers/ic-match.worker.js";
 import { processAiMatchJob } from "./workers/ai-match.worker.js";
+import { processPushJob } from "./workers/push.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 
@@ -80,24 +81,27 @@ const workers: Worker[] = [];
 if (handles("sync")) {
   workers.push(new Worker("sync", processSyncJob, {
     connection,
-    concurrency: concurrency("SYNC", 3, 6),
-    stalledInterval: 300_000,
-    lockDuration: 600_000,
+    // base 6 (was 3), dedicated 12 (was 6) — batches are now parallel so more concurrency helps
+    concurrency: concurrency("SYNC", 6, 12),
+    stalledInterval: 600_000, // 10 min (was 5 min) — large batches take longer
+    lockDuration:    900_000, // 15 min lock
   }));
 }
 
 if (handles("match")) {
   workers.push(new Worker("match", processRematchJob, {
     connection,
-    concurrency: concurrency("MATCH", 5, 10),
-    stalledInterval: 30_000,
+    // base 10 (was 5), dedicated 20 (was 10)
+    concurrency: concurrency("MATCH", 10, 20),
+    stalledInterval: 60_000,
   }));
 }
 
 if (handles("index")) {
   workers.push(new Worker("index", processIndexJob, {
     connection,
-    concurrency: concurrency("INDEX", 2, 4),
+    // base 4 (was 2), dedicated 8 (was 4)
+    concurrency: concurrency("INDEX", 4, 8),
     stalledInterval: 60_000,
   }));
 }
@@ -105,7 +109,8 @@ if (handles("index")) {
 if (handles("pricing")) {
   workers.push(new Worker("pricing", processPricingJob, {
     connection,
-    concurrency: concurrency("PRICING", 6, 12),
+    // base 10 (was 6), dedicated 20 (was 12)
+    concurrency: concurrency("PRICING", 10, 20),
     stalledInterval: 300_000,
     lockDuration: 600_000,
   }));
@@ -114,7 +119,8 @@ if (handles("pricing")) {
 if (handles("stock")) {
   workers.push(new Worker("stock", processStockJob, {
     connection,
-    concurrency: concurrency("STOCK", 6, 12),
+    // base 10 (was 6), dedicated 20 (was 12)
+    concurrency: concurrency("STOCK", 10, 20),
     stalledInterval: 300_000,
     lockDuration: 600_000,
   }));
@@ -123,9 +129,10 @@ if (handles("stock")) {
 if (handles("ic-match")) {
   workers.push(new Worker("ic-match", processIcMatchJob, {
     connection,
-    concurrency: concurrency("IC_MATCH", 2, 4),
-    stalledInterval: 600_000,  // 10 min — ic-match can take ~5 min per run
-    lockDuration:   1_200_000, // 20 min lock
+    // base 3 (was 2), dedicated 6 (was 4)
+    concurrency: concurrency("IC_MATCH", 3, 6),
+    stalledInterval: 600_000,
+    lockDuration:   1_200_000,
   }));
 }
 
@@ -135,6 +142,15 @@ if (handles("ai-match")) {
     concurrency: concurrency("AI_MATCH", 1, 2),
     stalledInterval: 300_000,
     lockDuration: 1_800_000,
+  }));
+}
+
+if (handles("push")) {
+  workers.push(new Worker("push", processPushJob, {
+    connection,
+    concurrency: 1, // One push job at a time — sequential batches to avoid hammering output API
+    stalledInterval: 300_000,
+    lockDuration: 1_800_000, // 30 min — large catalogs can take a while
   }));
 }
 

@@ -1,17 +1,18 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue } from "../workers/queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue } from "../workers/queues.js";
 
 export async function jobRoutes(app: FastifyInstance) {
   // Get all job queue status
   app.get("/jobs/status", async () => {
-    const [syncCounts, matchCounts, indexCounts, pricingCounts, stockCounts, icMatchCounts] = await Promise.all([
+    const [syncCounts, matchCounts, indexCounts, pricingCounts, stockCounts, icMatchCounts, pushCounts] = await Promise.all([
       getQueueCounts(syncQueue),
       getQueueCounts(matchQueue),
       getQueueCounts(indexQueue),
       getQueueCounts(pricingQueue),
       getQueueCounts(stockQueue),
       getQueueCounts(icMatchQueue),
+      getQueueCounts(pushQueue),
     ]);
 
     const aiMatchCounts = await getQueueCounts(aiMatchQueue);
@@ -23,6 +24,7 @@ export async function jobRoutes(app: FastifyInstance) {
       stock: stockCounts,
       icMatch: icMatchCounts,
       aiMatch: aiMatchCounts,
+      push: pushCounts,
     };
   });
 
@@ -124,6 +126,14 @@ export async function jobRoutes(app: FastifyInstance) {
     );
 
     return { jobId: job.id, queue: "index", status: "queued" };
+  });
+
+  // Manually trigger a push-to-output-API job
+  app.post("/jobs/push", async (request) => {
+    const body = (request.body ?? {}) as { supplierCode?: string };
+    const jobName = `push-manual${body.supplierCode ? `-${body.supplierCode}` : ""}`;
+    const job = await pushQueue.add(jobName, { supplierCode: body.supplierCode }, { priority: 1 });
+    return { jobId: job.id, queue: "push", status: "queued" };
   });
 
   // Debug: check Redis connection and queue state (non-destructive)
@@ -1283,7 +1293,7 @@ export async function jobRoutes(app: FastifyInstance) {
 
     // All fetches in parallel — fast even if one service is slow
     const [
-      syncR, matchR, indexR, pricingR, stockR, icMatchR, aiMatchR,
+      syncR, matchR, indexR, pricingR, stockR, icMatchR, aiMatchR, pushR,
       pgR, redisR, meiliR, llmR, modelsR,
     ] = await Promise.allSettled([
       getQueueCounts(syncQueue),
@@ -1293,6 +1303,7 @@ export async function jobRoutes(app: FastifyInstance) {
       getQueueCounts(stockQueue),
       getQueueCounts(icMatchQueue),
       getQueueCounts(aiMatchQueue),
+      getQueueCounts(pushQueue),
       db.$queryRaw`SELECT 1`.then(() => true),
       redisClient.ping().then(() => true),
       meiliClient.health().then(() => true),
@@ -1308,6 +1319,7 @@ export async function jobRoutes(app: FastifyInstance) {
       stock:   stockR.status   === "fulfilled" ? stockR.value   : null,
       icMatch: icMatchR.status === "fulfilled" ? icMatchR.value : null,
       aiMatch: aiMatchR.status === "fulfilled" ? aiMatchR.value : null,
+      push:    pushR.status    === "fulfilled" ? pushR.value    : null,
     };
 
     const checks: Record<string, string> = {
@@ -1473,6 +1485,7 @@ function getQueue(name: string) {
     case "stock": return stockQueue;
     case "ic-match": return icMatchQueue;
     case "ai-match": return aiMatchQueue;
+    case "push": return pushQueue;
     default: return null;
   }
 }

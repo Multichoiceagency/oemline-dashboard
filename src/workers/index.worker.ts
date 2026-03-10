@@ -2,6 +2,8 @@ import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { meili, PRODUCTS_INDEX } from "../lib/meilisearch.js";
 import { logger } from "../lib/logger.js";
+import { pushQueue } from "./queues.js";
+import { getAllSettings } from "../routes/settings.js";
 
 interface IndexJobData {
   supplierCode?: string;
@@ -131,4 +133,22 @@ export async function processIndexJob(job: Job<IndexJobData>): Promise<void> {
     { total: totalIndexed, supplier: supplierCode ?? "all" },
     "Search index rebuild completed"
   );
+
+  // Auto-push to output API if configured
+  try {
+    const settings = await getAllSettings();
+    if (settings.output_api_url && settings.auto_push_enabled === "true") {
+      await pushQueue.add(
+        `push-auto-post-index${supplierCode ? `-${supplierCode}` : ""}`,
+        { supplierCode },
+        {
+          priority: 10, // low priority — runs after urgent jobs
+          jobId: `push-auto-${supplierCode ?? "all"}`, // deduplicates: only 1 auto-push queued at a time
+        }
+      );
+      logger.info({ supplierCode: supplierCode ?? "all" }, "Auto-push job enqueued after index");
+    }
+  } catch (err) {
+    logger.warn({ err }, "Failed to enqueue auto-push after index");
+  }
 }

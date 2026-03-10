@@ -28,6 +28,7 @@ export default function SettingsPage() {
   const [currency, setCurrency] = useState("");
   const [outputApiUrl, setOutputApiUrl] = useState("");
   const [outputApiKey, setOutputApiKey] = useState("");
+  const [autoPushEnabled, setAutoPushEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -38,6 +39,7 @@ export default function SettingsPage() {
       setCurrency(settings.currency);
       setOutputApiUrl(settings.outputApiUrl ?? "");
       setOutputApiKey(settings.outputApiKey ?? "");
+      setAutoPushEnabled(settings.autoPushEnabled === true);
     }
   }, [settings]);
 
@@ -51,6 +53,7 @@ export default function SettingsPage() {
         currency: currency || "EUR",
         outputApiUrl,
         outputApiKey,
+        autoPushEnabled,
       });
       setSaved(true);
       refetch();
@@ -273,6 +276,25 @@ export default function SettingsPage() {
               placeholder="Sent as X-API-Key header"
               className="font-mono text-sm"
             />
+          </div>
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <p className="text-sm font-medium">Auto-push after index rebuild</p>
+              <p className="text-xs text-muted-foreground">
+                Automatically push all products to the Output API after every index rebuild completes.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoPushEnabled}
+              onClick={() => setAutoPushEnabled(!autoPushEnabled)}
+              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${autoPushEnabled ? "bg-primary" : "bg-input"}`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform ${autoPushEnabled ? "translate-x-5" : "translate-x-0"}`}
+              />
+            </button>
           </div>
           <Button onClick={handleSave} disabled={saving} variant="outline">
             {saving ? (
