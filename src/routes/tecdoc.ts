@@ -273,22 +273,55 @@ export async function tecdocRoutes(app: FastifyInstance): Promise<void> {
       return { upserted: 0, total: 0, message: "No brands returned from TecDoc API" };
     }
 
-    // Upsert all into brands table
-    const brandData = rawBrands.map((b) => ({
-      name: b.dataSupplierName,
-      code: b.dataSupplierName.toLowerCase().replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, ""),
-    }));
+    // Upsert every brand from TecDoc.
+    // createMany(skipDuplicates) silently drops rows when code OR name already
+    // exists — causing brands to be missed. Instead we use raw SQL with two
+    // conflict targets so every TecDoc brand lands in the DB regardless.
+    let upserted = 0;
 
-    await prisma.brand.createMany({ data: brandData, skipDuplicates: true });
+    for (const b of rawBrands) {
+      const name = b.dataSupplierName;
+      const code = name.toLowerCase().replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+      const tecdocId = b.dataSupplierId;
 
-    // Return count from DB after upsert
+      try {
+        // Primary: upsert on code (most common conflict). Sets tecdocId so
+        // future syncs can match by tecdocId directly.
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO brands (name, code, tecdoc_id, created_at, updated_at)
+           VALUES ($1, $2, $3, NOW(), NOW())
+           ON CONFLICT (code) DO UPDATE SET
+             tecdoc_id = EXCLUDED.tecdoc_id,
+             updated_at = NOW()`,
+          name, code, tecdocId
+        );
+        upserted++;
+      } catch {
+        // Secondary: name conflict with a different code — append tecdocId to
+        // make the code unique while still inserting the brand.
+        try {
+          await prisma.$executeRawUnsafe(
+            `INSERT INTO brands (name, code, tecdoc_id, created_at, updated_at)
+             VALUES ($1, $2, $3, NOW(), NOW())
+             ON CONFLICT (name) DO UPDATE SET
+               tecdoc_id = EXCLUDED.tecdoc_id,
+               updated_at = NOW()`,
+            name, `${code}_${tecdocId}`, tecdocId
+          );
+          upserted++;
+        } catch (err2) {
+          logger.warn({ err: err2, name, code }, "Brand upsert failed (skipping)");
+        }
+      }
+    }
+
     const totalInDb = await prisma.brand.count();
 
-    logger.info({ fetched: rawBrands.length, totalInDb }, "TecDoc sync-brands completed");
+    logger.info({ fetched: rawBrands.length, upserted, totalInDb }, "TecDoc sync-brands completed");
 
     return {
       fetched: rawBrands.length,
-      upserted: rawBrands.length,
+      upserted,
       totalInDb,
       brands: rawBrands.slice(0, 20).map((b) => ({
         id: b.dataSupplierId,
