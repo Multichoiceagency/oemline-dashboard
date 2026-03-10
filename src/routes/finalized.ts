@@ -12,6 +12,7 @@ const listQuerySchema = z.object({
   q: z.string().optional(),
   brand: z.string().optional(),
   category: z.string().optional(),
+  categoryId: z.coerce.number().int().optional(),
   supplier: z.string().optional(),
   hasStock: z.enum(["true", "false"]).optional(),
   hasPrice: z.enum(["true", "false"]).optional(),
@@ -32,7 +33,7 @@ export async function finalizedRoutes(app: FastifyInstance) {
   // ─── GET /finalized ─── Paginated finalized products with all combined data
   app.get("/finalized", async (request) => {
     const query = listQuerySchema.parse(request.query);
-    const { page, limit, q, brand, category, supplier, hasStock, hasPrice, hasImage } = query;
+    const { page, limit, q, brand, category, categoryId, supplier, hasStock, hasPrice, hasImage } = query;
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = {
@@ -43,7 +44,9 @@ export async function finalizedRoutes(app: FastifyInstance) {
       where.brand = { code: brand };
     }
 
-    if (category) {
+    if (categoryId) {
+      where.categoryId = categoryId;
+    } else if (category) {
       where.category = { code: category };
     }
 
