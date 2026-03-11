@@ -61,7 +61,7 @@ await app.register(rateLimit, {
 
 app.addHook("onRequest", async (request, reply) => {
   const path = request.url;
-  if (path === "/health" || path.startsWith("/api/auth/")) return;
+  if (path === "/health" || path.startsWith("/api/auth/") || request.method === "OPTIONS") return;
 
   const apiKey = request.headers["x-api-key"];
   if (!apiKey || apiKey !== config.API_KEY) {

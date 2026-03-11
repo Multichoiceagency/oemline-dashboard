@@ -308,13 +308,26 @@ export async function tecdocRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
+    // Delete brands not in TecDoc (including null tecdocId) with no products
+    const tecdocIds = rawBrands.map((b) => b.dataSupplierId);
+    const deleted = await prisma.brand.deleteMany({
+      where: {
+        OR: [
+          { tecdocId: { notIn: tecdocIds } },
+          { tecdocId: null },
+        ],
+        productMaps: { none: {} },
+      },
+    });
+
     const totalInDb = await prisma.brand.count();
 
-    logger.info({ fetched: rawBrands.length, upserted, totalInDb }, "TecDoc sync-brands completed");
+    logger.info({ fetched: rawBrands.length, upserted, deleted: deleted.count, totalInDb }, "TecDoc sync-brands completed");
 
     return {
       fetched: rawBrands.length,
       upserted,
+      deleted: deleted.count,
       totalInDb,
       brands: rawBrands.slice(0, 20).map((b) => ({
         id: b.dataSupplierId,
