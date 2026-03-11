@@ -13,6 +13,7 @@ import { processStockJob } from "./workers/stock.worker.js";
 import { processIcMatchJob } from "./workers/ic-match.worker.js";
 import { processAiMatchJob } from "./workers/ai-match.worker.js";
 import { processPushJob } from "./workers/push.worker.js";
+import { processBrandSyncJob } from "./workers/brand.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 
@@ -151,6 +152,15 @@ if (handles("push")) {
     concurrency: 1, // One push job at a time — sequential batches to avoid hammering output API
     stalledInterval: 300_000,
     lockDuration: 1_800_000, // 30 min — large catalogs can take a while
+  }));
+}
+
+if (handles("brand")) {
+  workers.push(new Worker("brand", processBrandSyncJob, {
+    connection,
+    concurrency: 1,
+    stalledInterval: 60_000,
+    lockDuration: 120_000,
   }));
 }
 

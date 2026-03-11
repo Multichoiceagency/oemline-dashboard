@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue } from "./queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue } from "./queues.js";
 
 /**
  * Sets up repeatable jobs for continuous sync, match, pricing, stock, and index.
@@ -20,7 +20,7 @@ export async function startScheduler(): Promise<void> {
   logger.info("Starting job scheduler...");
 
   // Clean up old repeatable jobs to avoid duplicates
-  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue]) {
+  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue]) {
     const existing = await queue.getRepeatableJobs();
     for (const job of existing) {
       await queue.removeRepeatableByKey(job.key);
@@ -112,6 +112,17 @@ export async function startScheduler(): Promise<void> {
 
   logger.info("Scheduled index rebuild (2h)");
 
+  // Brand sync: every 24 hours — sync brands from TecDoc + fetch logos + cleanup empty
+  await brandQueue.add(
+    "brand-sync-scheduled",
+    {},
+    {
+      repeat: { every: 24 * 60 * 60 * 1000 },
+      jobId: "brand-sync-repeat",
+    }
+  );
+  logger.info("Scheduled brand sync (24h)");
+
   // AI match: every 6 hours — brand alias discovery via article overlap + Ollama LLM
   await aiMatchQueue.add(
     "ai-match-scheduled",
@@ -161,6 +172,9 @@ export async function startScheduler(): Promise<void> {
       { priority: 2, jobId: `stock-initial-dedup-${supplier.code}` }
     );
   }
+
+  // Initial brand sync (low priority — let product sync run first)
+  await brandQueue.add("brand-sync-initial", {}, { priority: 3, jobId: "brand-sync-initial-dedup" });
 
   // Initial index
   await indexQueue.add("reindex-initial", {}, { priority: 1, jobId: "index-initial-dedup" });

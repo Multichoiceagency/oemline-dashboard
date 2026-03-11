@@ -82,6 +82,17 @@ export const aiMatchQueue = new Queue("ai-match", {
   },
 });
 
+// Brand sync: TecDoc getBrands + logo fetch + cleanup (every 24h)
+export const brandQueue = new Queue("brand", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 10 },
+    removeOnFail: { count: 20 },
+    attempts: 3,
+    backoff: { type: "exponential", delay: 10_000 },
+  },
+});
+
 // Push finalized products to configured output API (manual or auto after index)
 export const pushQueue = new Queue("push", {
   connection,
