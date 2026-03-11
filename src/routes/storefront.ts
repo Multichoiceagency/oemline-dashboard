@@ -166,10 +166,9 @@ export async function storefrontRoutes(app: FastifyInstance) {
     };
   });
 
-  // Get all brands with product counts — only brands with at least 1 product
+  // Get all brands with product counts
   app.get("/storefront/brands", async () => {
     const brands = await prisma.brand.findMany({
-      where: { productMaps: { some: {} } },
       orderBy: { name: "asc" },
       include: {
         _count: { select: { productMaps: true } },
