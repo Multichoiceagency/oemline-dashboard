@@ -197,8 +197,11 @@ export async function storefrontRoutes(app: FastifyInstance) {
     } else {
       where.parentId = null;
     }
-    // Only show categories that have products or non-empty children
-    where.OR = [{ products: { some: {} } }, { children: { some: {} } }];
+    // Only show categories that have products directly OR have children with products
+    where.OR = [
+      { products: { some: {} } },
+      { children: { some: { products: { some: {} } } } },
+    ];
 
     const categories = await prisma.category.findMany({
       where,
@@ -208,7 +211,8 @@ export async function storefrontRoutes(app: FastifyInstance) {
         children: {
           take: 500,
           orderBy: { name: "asc" },
-          where: { OR: [{ products: { some: {} } }, { children: { some: {} } }] },
+          // Only include children that have products
+          where: { products: { some: {} } },
           include: {
             _count: { select: { products: true, children: true } },
           },
@@ -223,7 +227,7 @@ export async function storefrontRoutes(app: FastifyInstance) {
         code: c.code,
         parentId: c.parentId,
         productCount: c._count.products,
-        childCount: c._count.children,
+        childCount: c.children.length,
         children: c.children.map((ch) => ({
           id: ch.id,
           name: ch.name,
