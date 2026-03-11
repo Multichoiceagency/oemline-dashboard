@@ -306,6 +306,7 @@ export async function brandRoutes(app: FastifyInstance) {
   // Delete a single brand (only if it has no products)
   app.delete("/brands/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
+    const { force } = (request.query ?? {}) as { force?: string };
     const brandId = parseInt(id, 10);
 
     const brand = await prisma.brand.findUnique({
@@ -317,16 +318,46 @@ export async function brandRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: "Brand not found" });
     }
 
-    if (brand._count.productMaps > 0) {
+    if (brand._count.productMaps > 0 && force !== "true") {
       return reply.code(400).send({
-        error: `Cannot delete brand "${brand.name}" — it has ${brand._count.productMaps} products. Reassign them first.`,
+        error: `Cannot delete brand "${brand.name}" — it has ${brand._count.productMaps} products. Use ?force=true to delete with products.`,
       });
     }
 
-    await prisma.brand.delete({ where: { id: brandId } });
-    logger.info({ brandId, brandName: brand.name }, "Deleted brand");
+    if (brand._count.productMaps > 0) {
+      await prisma.productMap.deleteMany({ where: { brandId } });
+    }
 
-    return { success: true, deleted: { id: brand.id, name: brand.name } };
+    await prisma.brand.delete({ where: { id: brandId } });
+    logger.info({ brandId, brandName: brand.name, force: force === "true" }, "Deleted brand");
+
+    return { success: true, deleted: { id: brand.id, name: brand.name, productsRemoved: brand._count.productMaps } };
+  });
+
+  // Bulk delete brands not in the provided tecdocId list (with their products)
+  app.post("/brands/cleanup-unselected", async (request, reply) => {
+    const { keepTecdocIds } = request.body as { keepTecdocIds: number[] };
+    if (!Array.isArray(keepTecdocIds) || keepTecdocIds.length === 0) {
+      return reply.code(400).send({ error: "keepTecdocIds array required" });
+    }
+    const toDelete = await prisma.brand.findMany({
+      where: { tecdocId: { notIn: keepTecdocIds } },
+      include: { _count: { select: { productMaps: true } } },
+    });
+    let deletedProducts = 0;
+    for (const b of toDelete) {
+      if (b._count.productMaps > 0) {
+        await prisma.productMap.deleteMany({ where: { brandId: b.id } });
+        deletedProducts += b._count.productMaps;
+      }
+      await prisma.brand.delete({ where: { id: b.id } });
+    }
+    logger.info({ deletedBrands: toDelete.length, deletedProducts }, "cleanup-unselected completed");
+    return {
+      deletedBrands: toDelete.length,
+      deletedProducts,
+      brands: toDelete.map((b) => ({ id: b.id, name: b.name, tecdocId: b.tecdocId, products: b._count.productMaps })),
+    };
   });
 
   // Update brand
