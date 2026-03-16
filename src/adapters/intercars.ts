@@ -611,6 +611,74 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       totalNewMatches += phaseResults.crossBrand;
       yield [];
 
+      // ── Phase 3A: OEM → IC "OE {brand}" articles ────────────────────────
+      // IC has OE brand entries (OE BMW, OE VW, OE MERCEDES, etc.) where the
+      // article_number IS the vehicle manufacturer's OEM part number.
+      // This phase matches product OEM numbers against these OE brand articles.
+      // Safe: OE articles are genuine OEM numbers, not aftermarket article numbers.
+      logger.info({ supplier: this.code }, "Phase 3A: OEM number → IC OE brand articles...");
+      phaseResults.oemToOE = await runPhase("Phase3A-oemToOE",
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        JOIN intercars_mappings im ON
+          im.normalized_article_number = UPPER(regexp_replace(pm.oem, '[^a-zA-Z0-9]', '', 'g'))
+          AND im.manufacturer LIKE 'OE %'
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+          AND pm.oem IS NOT NULL AND LENGTH(pm.oem) >= 5
+        ORDER BY pm.id`, 300_000);
+      totalNewMatches += phaseResults.oemToOE;
+      yield [];
+
+      // ── Phase 3B: OEM numbers array → IC "OE {brand}" articles ──────────
+      // Same as 3A but uses the full oem_numbers JSON array (populated by OEM enrichment worker)
+      logger.info({ supplier: this.code }, "Phase 3B: OEM numbers array → IC OE brand articles...");
+      phaseResults.oemArrayToOE = await runPhase("Phase3B-oemArrayToOE",
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        CROSS JOIN LATERAL jsonb_array_elements_text(pm.oem_numbers::jsonb) AS oem_val
+        JOIN intercars_mappings im ON
+          im.normalized_article_number = UPPER(regexp_replace(oem_val, '[^a-zA-Z0-9]', '', 'g'))
+          AND im.manufacturer LIKE 'OE %'
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+          AND pm.oem_numbers IS NOT NULL AND pm.oem_numbers::text != '[]'
+          AND LENGTH(oem_val) >= 5
+        ORDER BY pm.id`, 600_000);
+      totalNewMatches += phaseResults.oemArrayToOE;
+      yield [];
+
+      // ── Phase 3C: OEM numbers array → ANY IC article (brand-validated) ──
+      // Matches oem_numbers entries against IC aftermarket articles, but requires
+      // brand validation via tecdoc_prod to prevent false cross-brand matches.
+      logger.info({ supplier: this.code }, "Phase 3C: OEM numbers array → IC article (brand-validated)...");
+      phaseResults.oemArrayBrandValidated = await runPhase("Phase3C-oemArrayBrandValidated",
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        CROSS JOIN LATERAL jsonb_array_elements_text(pm.oem_numbers::jsonb) AS oem_val
+        JOIN intercars_mappings im ON
+          im.normalized_article_number = UPPER(regexp_replace(oem_val, '[^a-zA-Z0-9]', '', 'g'))
+          AND im.manufacturer NOT LIKE 'OE %'
+        JOIN brands b ON b.id = pm.brand_id
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+          AND pm.oem_numbers IS NOT NULL AND pm.oem_numbers::text != '[]'
+          AND LENGTH(oem_val) >= 5
+          AND im.tecdoc_prod IS NOT NULL AND b.tecdoc_id IS NOT NULL
+          AND im.tecdoc_prod = b.tecdoc_id
+        ORDER BY pm.id`, 600_000);
+      totalNewMatches += phaseResults.oemArrayBrandValidated;
+      yield [];
+
       logger.info(
         { supplier: this.code, totalNewMatches, byPhase: phaseResults },
         "IC matching complete — pricing/stock handled by dedicated workers"

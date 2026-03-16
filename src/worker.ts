@@ -15,6 +15,7 @@ import { processAiMatchJob } from "./workers/ai-match.worker.js";
 import { processPushJob } from "./workers/push.worker.js";
 import { processBrandSyncJob } from "./workers/brand.worker.js";
 import { processSwarmWorkerJob } from "./workers/swarm.worker.js";
+import { processOemEnrichJob } from "./workers/oem-enrich.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 import { sendWorkerNotification } from "./lib/notify.js";
@@ -170,6 +171,16 @@ if (handles("brand")) {
     concurrency: 1,
     stalledInterval: 60_000,
     lockDuration: 120_000,
+  }));
+}
+
+// OEM enrichment: fetch OEM cross-references from TecDoc for unmatched products
+if (handles("oem-enrich") || handles("sync")) {
+  workers.push(new Worker("oem-enrich", processOemEnrichJob, {
+    connection,
+    concurrency: 1, // Single job at a time — heavy API usage
+    stalledInterval: 600_000,
+    lockDuration: 1_800_000,
   }));
 }
 

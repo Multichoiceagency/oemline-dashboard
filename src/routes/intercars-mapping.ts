@@ -795,6 +795,10 @@ export async function intercarsRoutes(app: FastifyInstance) {
       const icUpper = ic.manufacturer.toUpperCase();
       if (existingSet.has(icUpper)) { skipped++; continue; }
 
+      // Skip OE brands — they use OEM part numbers, not aftermarket article numbers
+      // Matching them to aftermarket brands creates false product links
+      if (icUpper.startsWith("OE ")) { skipped++; continue; }
+
       const icNorm = normalize(ic.manufacturer);
       let match: { id: number; name: string } | undefined;
 
@@ -976,6 +980,31 @@ export async function intercarsRoutes(app: FastifyInstance) {
 
     logger.info({ imported, errors, totalLines: lineNum - 1 }, "Stock CSV file import complete");
     return { imported, errors, totalLines: lineNum - 1 };
+  });
+
+  // Fix wrong OE brand aliases — remove any alias where IC brand starts with "OE "
+  app.post("/intercars/brand-aliases/fix-oe", async () => {
+    const icSupplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });
+    if (!icSupplier) return { error: "InterCars supplier not found" };
+
+    const wrongAliases = await prisma.supplierBrandRule.findMany({
+      where: { supplierId: icSupplier.id, supplierBrand: { startsWith: "OE " } },
+      include: { brand: { select: { name: true } } },
+    });
+
+    let deleted = 0;
+    for (const alias of wrongAliases) {
+      await prisma.supplierBrandRule.delete({ where: { id: alias.id } });
+      deleted++;
+    }
+
+    return {
+      deleted,
+      removedAliases: wrongAliases.map(a => ({
+        icBrand: a.supplierBrand,
+        wasMappedTo: a.brand.name,
+      })),
+    };
   });
 
   // Diagnostic: understand why fuzzy phases find 0 matches

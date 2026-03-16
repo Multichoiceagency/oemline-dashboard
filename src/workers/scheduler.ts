@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue } from "./queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue } from "./queues.js";
 
 /**
  * Sets up repeatable jobs for continuous sync, match, pricing, stock, and index.
@@ -20,7 +20,7 @@ export async function startScheduler(): Promise<void> {
   logger.info("Starting job scheduler...");
 
   // Clean up old repeatable jobs to avoid duplicates
-  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue]) {
+  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue]) {
     const existing = await queue.getRepeatableJobs();
     for (const job of existing) {
       await queue.removeRepeatableByKey(job.key);
@@ -162,6 +162,18 @@ export async function startScheduler(): Promise<void> {
   );
 
   logger.info("Scheduled AI match (6h)");
+
+  // OEM enrichment: every 6 hours — fetch OEM cross-references from TecDoc API
+  // Populates product_maps.oem_numbers for IC matching Phase 2B
+  await oemEnrichQueue.add(
+    "oem-enrich-scheduled",
+    { batchSize: 100, maxProducts: 50_000 },
+    {
+      repeat: { every: 6 * 60 * 60 * 1000 },
+      jobId: "oem-enrich-repeat",
+    }
+  );
+  logger.info("Scheduled OEM enrichment (6h)");
 
   // Fire initial jobs immediately for all suppliers
   // Use jobId for deduplication — prevents duplicate jobs accumulating across restarts

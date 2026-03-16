@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue, swarmQueue } from "../workers/queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue, swarmQueue, oemEnrichQueue } from "../workers/queues.js";
 
 export async function jobRoutes(app: FastifyInstance) {
   // Get all job queue status
@@ -16,7 +16,10 @@ export async function jobRoutes(app: FastifyInstance) {
       getQueueCounts(swarmQueue),
     ]);
 
-    const aiMatchCounts = await getQueueCounts(aiMatchQueue);
+    const [aiMatchCounts, oemEnrichCounts] = await Promise.all([
+      getQueueCounts(aiMatchQueue),
+      getQueueCounts(oemEnrichQueue),
+    ]);
     return {
       sync: syncCounts,
       match: matchCounts,
@@ -25,6 +28,7 @@ export async function jobRoutes(app: FastifyInstance) {
       stock: stockCounts,
       icMatch: icMatchCounts,
       aiMatch: aiMatchCounts,
+      oemEnrich: oemEnrichCounts,
       push: pushCounts,
       swarm: swarmCounts,
     };
@@ -115,6 +119,17 @@ export async function jobRoutes(app: FastifyInstance) {
     );
 
     return { jobId: job.id, queue: "ic-match", supplierCode, status: "queued" };
+  });
+
+  // Manually trigger OEM enrichment
+  app.post("/jobs/oem-enrich", async (request) => {
+    const body = (request.body ?? {}) as { batchSize?: number; maxProducts?: number };
+    const job = await oemEnrichQueue.add(
+      "oem-enrich-manual",
+      { batchSize: body.batchSize ?? 100, maxProducts: body.maxProducts ?? 50_000 },
+      { priority: 1 }
+    );
+    return { jobId: job.id, queue: "oem-enrich", status: "queued" };
   });
 
   // Manually trigger an index rebuild
@@ -1577,6 +1592,7 @@ function getQueue(name: string) {
     case "ic-match": return icMatchQueue;
     case "ai-match": return aiMatchQueue;
     case "push": return pushQueue;
+    case "oem-enrich": return oemEnrichQueue;
     default: return null;
   }
 }

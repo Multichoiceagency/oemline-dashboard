@@ -97,6 +97,8 @@ export async function ensureNormalizedIndexes(): Promise<void> {
     // Legacy functional indexes kept as fallback while generated columns backfill
     `CREATE INDEX IF NOT EXISTS idx_im_article_norm ON intercars_mappings (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')))`,
     `CREATE INDEX IF NOT EXISTS idx_pm_article_no_norm ON product_maps (UPPER(regexp_replace(article_no, '[^a-zA-Z0-9]', '', 'g')))`,
+    // Phase 3A/3B: IC OE brand articles — index for manufacturer LIKE 'OE %' + article
+    `CREATE INDEX IF NOT EXISTS idx_im_oe_brands ON intercars_mappings (normalized_article_number) WHERE manufacturer LIKE 'OE %'`,
     // Pricing/stock worker: cursor + staleness queries on 1M+ rows
     `CREATE INDEX IF NOT EXISTS idx_pm_active_ic_sku ON product_maps (id) WHERE ic_sku IS NOT NULL AND status = 'active'`,
     `CREATE INDEX IF NOT EXISTS idx_pm_stale_pricing ON product_maps (id, updated_at) WHERE ic_sku IS NOT NULL AND status = 'active'`,
