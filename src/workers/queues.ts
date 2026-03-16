@@ -127,6 +127,18 @@ export const icCatalogQueue = new Queue("ic-catalog", {
   },
 });
 
+// IC enrichment: fix article numbers, SKU detail lookups, brand aliases, aggressive matching
+// Runs after IC catalog sync to maximize match rate toward 100%
+export const icEnrichQueue = new Queue("ic-enrich", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 20 },
+    removeOnFail: { count: 50 },
+    attempts: 2,
+    backoff: { type: "exponential", delay: 30_000 },
+  },
+});
+
 // Swarm orchestration queue: parallel sync, matching, and pricing
 // Replaces sequential workers with 4-5x faster parallel execution
 export const swarmQueue = new Queue("swarm", {

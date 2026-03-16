@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue, swarmQueue, oemEnrichQueue, icCatalogQueue } from "../workers/queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue } from "../workers/queues.js";
 
 export async function jobRoutes(app: FastifyInstance) {
   // Get all job queue status
@@ -16,10 +16,11 @@ export async function jobRoutes(app: FastifyInstance) {
       getQueueCounts(swarmQueue),
     ]);
 
-    const [aiMatchCounts, oemEnrichCounts, icCatalogCounts] = await Promise.all([
+    const [aiMatchCounts, oemEnrichCounts, icCatalogCounts, icEnrichCounts] = await Promise.all([
       getQueueCounts(aiMatchQueue),
       getQueueCounts(oemEnrichQueue),
       getQueueCounts(icCatalogQueue),
+      getQueueCounts(icEnrichQueue),
     ]);
     return {
       sync: syncCounts,
@@ -31,6 +32,7 @@ export async function jobRoutes(app: FastifyInstance) {
       aiMatch: aiMatchCounts,
       oemEnrich: oemEnrichCounts,
       icCatalog: icCatalogCounts,
+      icEnrich: icEnrichCounts,
       push: pushCounts,
       swarm: swarmCounts,
     };
@@ -153,6 +155,27 @@ export async function jobRoutes(app: FastifyInstance) {
       { priority: 1 }
     );
     return { jobId: job.id, queue: "ic-catalog", status: "queued" };
+  });
+
+  // IC enrichment: fix articles, SKU lookups, brand aliases, aggressive matching → 100% match
+  app.post("/jobs/ic-enrich", async (request) => {
+    const body = (request.body ?? {}) as {
+      mode?: "full" | "enrich-only" | "fix-articles" | "aliases-only" | "match-only";
+      maxEnrich?: number;
+      parallelism?: number;
+      batchSize?: number;
+    };
+    const job = await icEnrichQueue.add(
+      "ic-enrich-manual",
+      {
+        mode: body.mode ?? "full",
+        maxEnrich: body.maxEnrich ?? 0,
+        parallelism: body.parallelism ?? 20,
+        batchSize: body.batchSize ?? 500,
+      },
+      { priority: 1 }
+    );
+    return { jobId: job.id, queue: "ic-enrich", status: "queued" };
   });
 
   // Manually trigger an index rebuild
@@ -1617,6 +1640,7 @@ function getQueue(name: string) {
     case "push": return pushQueue;
     case "oem-enrich": return oemEnrichQueue;
     case "ic-catalog": return icCatalogQueue;
+    case "ic-enrich": return icEnrichQueue;
     default: return null;
   }
 }

@@ -17,6 +17,7 @@ import { processBrandSyncJob } from "./workers/brand.worker.js";
 import { processSwarmWorkerJob } from "./workers/swarm.worker.js";
 import { processOemEnrichJob } from "./workers/oem-enrich.worker.js";
 import { processIcCatalogJob } from "./workers/ic-catalog.worker.js";
+import { processIcEnrichJob } from "./workers/ic-enrich.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 import { sendWorkerNotification } from "./lib/notify.js";
@@ -196,6 +197,17 @@ if (handles("ic-catalog") || handles("sync")) {
   }));
 }
 
+// IC enrichment: fix article numbers, SKU detail lookups, brand aliases, aggressive matching
+// Runs alongside sync/ic-match worker or as dedicated "ic-enrich" worker
+if (handles("ic-enrich") || handles("ic-match") || handles("sync")) {
+  workers.push(new Worker("ic-enrich", processIcEnrichJob, {
+    connection,
+    concurrency: 1, // Single job — heavy API + DB usage
+    stalledInterval: 600_000,
+    lockDuration: 3_600_000, // 1 hour lock
+  }));
+}
+
 // Swarm worker: parallel orchestration (4-5x faster than sequential workers)
 // Enable with USE_SWARM_MODE=true or add "swarm" to WORKER_QUEUES
 if (handles("swarm")) {
@@ -208,7 +220,7 @@ if (handles("swarm")) {
 }
 
 // Queues that send email on completion (parent jobs only, not sub-jobs)
-const NOTIFY_ON_COMPLETE = new Set(["sync", "ic-match", "index", "swarm", "brand", "ic-catalog"]);
+const NOTIFY_ON_COMPLETE = new Set(["sync", "ic-match", "index", "swarm", "brand", "ic-catalog", "ic-enrich"]);
 
 for (const worker of workers) {
   worker.on("completed", (job) => {

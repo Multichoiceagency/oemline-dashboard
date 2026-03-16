@@ -287,25 +287,22 @@ async function batchUpsertMappings(
   if (values.length === 0) return { inserted, updated, skipped };
 
   try {
+    // IMPORTANT: On conflict, do NOT overwrite article_number if it already has a
+    // value from CSV import (which has the correct clean article number).
+    // Only update ic_index, manufacturer, description (metadata refresh).
     const result = await prisma.$executeRawUnsafe(
       `INSERT INTO intercars_mappings (tow_kod, ic_index, article_number, manufacturer, description, blocked_return, created_at)
        VALUES ${values.join(", ")}
        ON CONFLICT (tow_kod) DO UPDATE SET
          ic_index = EXCLUDED.ic_index,
-         article_number = EXCLUDED.article_number,
-         manufacturer = EXCLUDED.manufacturer,
-         description = EXCLUDED.description,
-         blocked_return = EXCLUDED.blocked_return
-       WHERE intercars_mappings.article_number != EXCLUDED.article_number
-          OR intercars_mappings.manufacturer != EXCLUDED.manufacturer`,
+         manufacturer = COALESCE(NULLIF(EXCLUDED.manufacturer, ''), intercars_mappings.manufacturer),
+         description = COALESCE(NULLIF(EXCLUDED.description, ''), intercars_mappings.description),
+         blocked_return = EXCLUDED.blocked_return`,
       ...params
     );
-    // result is number of rows affected (inserted + updated)
-    // We can't distinguish exactly, but estimate
     inserted = result;
   } catch (err) {
     logger.warn({ err, count: values.length }, "IC batch upsert error — falling back to individual");
-    // Fallback: individual upserts
     for (const p of products) {
       if (!p.sku || !p.index || !p.brand) continue;
       try {
@@ -314,8 +311,7 @@ async function batchUpsertMappings(
            VALUES ($1, $2, $3, $4, $5, $6, NOW())
            ON CONFLICT (tow_kod) DO UPDATE SET
              ic_index = EXCLUDED.ic_index,
-             article_number = EXCLUDED.article_number,
-             manufacturer = EXCLUDED.manufacturer`,
+             manufacturer = COALESCE(NULLIF(EXCLUDED.manufacturer, ''), intercars_mappings.manufacturer)`,
           p.sku, p.index, p.index, p.brand,
           p.shortDescription || "", p.blockedReturn ?? false
         );
