@@ -880,7 +880,11 @@ export async function intercarsRoutes(app: FastifyInstance) {
 
     const flushBatch = async () => {
       if (batch.length === 0) return;
-      const valuesStr = batch.map((r) =>
+      // Deduplicate by towKod within the batch (keep last occurrence)
+      const deduped = new Map<string, typeof batch[0]>();
+      for (const r of batch) deduped.set(r.towKod, r);
+      const unique = Array.from(deduped.values());
+      const valuesStr = unique.map((r) =>
         `('${esc(r.towKod)}', '${esc(r.icIndex)}', '${esc(r.articleNumber)}', '', ${r.tecdocProd ?? "NULL"}, '', NULL, NULL, false, NOW())`
       ).join(",\n");
 
@@ -897,10 +901,10 @@ export async function intercarsRoutes(app: FastifyInstance) {
             article_number = CASE WHEN EXCLUDED.article_number != '' AND intercars_mappings.article_number = '' THEN EXCLUDED.article_number ELSE intercars_mappings.article_number END,
             tecdoc_prod = COALESCE(EXCLUDED.tecdoc_prod, intercars_mappings.tecdoc_prod)
         `);
-        imported += batch.length;
+        imported += unique.length;
       } catch (err) {
         errors++;
-        logger.warn({ err, lineNum, batchSize: batch.length }, "Stock CSV file import batch failed");
+        logger.warn({ err, lineNum, batchSize: unique.length }, "Stock CSV file import batch failed");
       }
       batch = [];
     };
