@@ -21,6 +21,7 @@ Thumbs.db
 .idea/
 ProductInformation_2026-02-26.csv
 *.csv
+!data/*.csv
 *.csv.zip
 *.pdf
 docs-intercars/

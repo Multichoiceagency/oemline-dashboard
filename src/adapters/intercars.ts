@@ -405,6 +405,28 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         }
       };
 
+      // ── Phase DIRECT: tecdoc_prod + article (numeric brand ID, no fuzzy match) ──
+      // Uses Stock CSV's TEC_DOC_PROD (= brands.tecdoc_id) for exact brand match
+      // combined with normalized article number. Fastest, highest-confidence phase.
+      logger.info({ supplier: this.code }, "Phase DIRECT: Matching by tecdoc_prod + article...");
+      phaseResults.direct = await runPhase("PhaseDIRECT-tecdocProd+article",
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        JOIN brands b ON b.id = pm.brand_id
+        JOIN intercars_mappings im ON
+          im.tecdoc_prod IS NOT NULL
+          AND b.tecdoc_id IS NOT NULL
+          AND im.tecdoc_prod = b.tecdoc_id
+          AND im.normalized_article_number = pm.normalized_article_no
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+        ORDER BY pm.id`, 300_000);
+      totalNewMatches += phaseResults.direct;
+      yield [];
+
       // ── Phase 0: Brand aliases ──────────────────────────────────────────────
       logger.info({ supplier: this.code }, "Phase 0: Matching via brand aliases...");
       phaseResults.aliases = await runPhase("Phase0-aliases",

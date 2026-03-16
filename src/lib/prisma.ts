@@ -85,6 +85,10 @@ export async function ensureNormalizedIndexes(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_pm_ean_norm ON product_maps (regexp_replace(ean, '[^0-9]', '', 'g')) WHERE ean IS NOT NULL`,
     // brands — stored normalized name for fast IC matching joins
     `CREATE INDEX IF NOT EXISTS idx_brands_norm_name_stored ON brands (normalized_name)`,
+    // IC mappings — tecdoc_prod + article for Phase DIRECT (numeric brand ID match)
+    `CREATE INDEX IF NOT EXISTS idx_im_tecdoc_prod_article ON intercars_mappings (tecdoc_prod, normalized_article_number) WHERE tecdoc_prod IS NOT NULL`,
+    // brands — tecdoc_id for Phase DIRECT join
+    `CREATE INDEX IF NOT EXISTS idx_brands_tecdoc_id ON brands (tecdoc_id) WHERE tecdoc_id IS NOT NULL`,
     // Legacy functional indexes kept as fallback while generated columns backfill
     `CREATE INDEX IF NOT EXISTS idx_im_article_norm ON intercars_mappings (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')))`,
     `CREATE INDEX IF NOT EXISTS idx_pm_article_no_norm ON product_maps (UPPER(regexp_replace(article_no, '[^a-zA-Z0-9]', '', 'g')))`,

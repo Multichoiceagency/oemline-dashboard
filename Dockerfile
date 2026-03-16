@@ -15,6 +15,7 @@ RUN npm install --production
 COPY prisma ./prisma
 RUN npx prisma generate
 COPY --from=base /app/dist ./dist
+COPY data ./data
 
 EXPOSE 3000
 COPY docker-entrypoint.sh ./

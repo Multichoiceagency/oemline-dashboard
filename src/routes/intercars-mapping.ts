@@ -804,6 +804,152 @@ export async function intercarsRoutes(app: FastifyInstance) {
     };
   });
 
+  // Import Stock CSV: upsert TOW_KOD + TEC_DOC + TEC_DOC_PROD into intercars_mappings
+  // This adds tecdoc_prod for direct brand-ID matching (bypasses fuzzy brand name matching)
+  app.post("/intercars/import-stock-csv", async (request) => {
+    const body = request.body as { rows: Array<{ towKod: string; icIndex: string; tecdoc: string; tecdocProd: number | null; warehouse?: string; availability?: number }> };
+    const rows = body?.rows;
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return { imported: 0 };
+    }
+
+    // Deduplicate by towKod within the batch (keep last occurrence)
+    const deduped = new Map<string, typeof rows[0]>();
+    for (const r of rows) {
+      if (r.towKod) deduped.set(r.towKod, r);
+    }
+    const uniqueRows = Array.from(deduped.values());
+
+    // Batch upsert in chunks of 500
+    let imported = 0;
+    for (let i = 0; i < uniqueRows.length; i += 500) {
+      const batch = uniqueRows.slice(i, i + 500);
+      const values = batch.map((r) =>
+        Prisma.sql`(
+          ${r.towKod}, ${r.icIndex ?? ""}, ${r.tecdoc ?? ""}, '',
+          ${r.tecdocProd}, '', NULL, NULL,
+          false, NOW()
+        )`
+      );
+
+      try {
+        await prisma.$executeRaw`
+          INSERT INTO intercars_mappings (
+            tow_kod, ic_index, article_number, manufacturer,
+            tecdoc_prod, description, ean, weight,
+            blocked_return, created_at
+          )
+          VALUES ${Prisma.join(values)}
+          ON CONFLICT (tow_kod) DO UPDATE SET
+            ic_index = CASE WHEN EXCLUDED.ic_index != '' THEN EXCLUDED.ic_index ELSE intercars_mappings.ic_index END,
+            article_number = CASE WHEN EXCLUDED.article_number != '' AND intercars_mappings.article_number = '' THEN EXCLUDED.article_number ELSE intercars_mappings.article_number END,
+            tecdoc_prod = COALESCE(EXCLUDED.tecdoc_prod, intercars_mappings.tecdoc_prod)
+        `;
+        imported += batch.length;
+      } catch (err) {
+        logger.warn({ err, chunk: i }, "Stock CSV import chunk failed");
+      }
+    }
+
+    return { imported, uniqueRows: uniqueRows.length };
+  });
+
+  // Bulk import Stock CSV server-side from file path
+  app.post("/intercars/import-stock-file", async (request) => {
+    const { filePath } = request.body as { filePath?: string };
+    const csvPath = filePath || "/app/data/Stock_2026-02-26.csv";
+
+    const fs = await import("fs");
+    const readline = await import("readline");
+
+    if (!fs.existsSync(csvPath)) {
+      return { error: `File not found: ${csvPath}` };
+    }
+
+    const fileStream = fs.createReadStream(csvPath);
+    const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+    let header: string[] = [];
+    let lineNum = 0;
+    let imported = 0;
+    let batch: Array<{ towKod: string; icIndex: string; articleNumber: string; tecdocProd: number | null }> = [];
+
+    for await (const line of rl) {
+      lineNum++;
+      if (lineNum === 1) {
+        header = line.split(";").map((h: string) => h.trim());
+        continue;
+      }
+
+      const cols = line.split(";");
+      const towKod = cols[header.indexOf("TOW_KOD")]?.trim();
+      const icIndex = cols[header.indexOf("IC_INDEX")]?.trim() || "";
+      const tecdoc = cols[header.indexOf("TEC_DOC")]?.trim() || "";
+      const tecdocProd = cols[header.indexOf("TEC_DOC_PROD")]?.trim();
+
+      if (!towKod) continue;
+
+      batch.push({
+        towKod,
+        icIndex,
+        articleNumber: tecdoc,
+        tecdocProd: tecdocProd ? parseInt(tecdocProd, 10) : null,
+      });
+
+      if (batch.length >= 1000) {
+        const values = batch.map((r) =>
+          Prisma.sql`(${r.towKod}, ${r.icIndex}, ${r.articleNumber}, '', ${r.tecdocProd}, '', NULL, NULL, false, NOW())`
+        );
+        try {
+          await prisma.$executeRaw`
+            INSERT INTO intercars_mappings (
+              tow_kod, ic_index, article_number, manufacturer,
+              tecdoc_prod, description, ean, weight,
+              blocked_return, created_at
+            )
+            VALUES ${Prisma.join(values)}
+            ON CONFLICT (tow_kod) DO UPDATE SET
+              ic_index = CASE WHEN EXCLUDED.ic_index != '' THEN EXCLUDED.ic_index ELSE intercars_mappings.ic_index END,
+              article_number = CASE WHEN EXCLUDED.article_number != '' AND intercars_mappings.article_number = '' THEN EXCLUDED.article_number ELSE intercars_mappings.article_number END,
+              tecdoc_prod = COALESCE(EXCLUDED.tecdoc_prod, intercars_mappings.tecdoc_prod)
+          `;
+          imported += batch.length;
+        } catch (err) {
+          logger.warn({ err, lineNum }, "Stock CSV file import batch failed");
+        }
+        batch = [];
+      }
+    }
+
+    // Flush remaining
+    if (batch.length > 0) {
+      const values = batch.map((r) =>
+        Prisma.sql`(${r.towKod}, ${r.icIndex}, ${r.articleNumber}, '', ${r.tecdocProd}, '', NULL, NULL, false, NOW())`
+      );
+      try {
+        await prisma.$executeRaw`
+          INSERT INTO intercars_mappings (
+            tow_kod, ic_index, article_number, manufacturer,
+            tecdoc_prod, description, ean, weight,
+            blocked_return, created_at
+          )
+          VALUES ${Prisma.join(values)}
+          ON CONFLICT (tow_kod) DO UPDATE SET
+            ic_index = CASE WHEN EXCLUDED.ic_index != '' THEN EXCLUDED.ic_index ELSE intercars_mappings.ic_index END,
+            article_number = CASE WHEN EXCLUDED.article_number != '' AND intercars_mappings.article_number = '' THEN EXCLUDED.article_number ELSE intercars_mappings.article_number END,
+            tecdoc_prod = COALESCE(EXCLUDED.tecdoc_prod, intercars_mappings.tecdoc_prod)
+        `;
+        imported += batch.length;
+      } catch (err) {
+        logger.warn({ err }, "Stock CSV file import final batch failed");
+      }
+    }
+
+    logger.info({ imported, totalLines: lineNum - 1 }, "Stock CSV file import complete");
+    return { imported, totalLines: lineNum - 1 };
+  });
+
   // Clean up old IC duplicate product_maps (products with IC supplier_id that duplicate TecDoc products)
   app.delete("/intercars/cleanup-duplicates", async () => {
     const icSupplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });
