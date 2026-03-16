@@ -149,6 +149,12 @@ export async function processIcEnrichJob(job: Job<IcEnrichJobData>): Promise<voi
   }
 
   if (mode === "match-only") {
+    // Always fix aliases before matching — aliases are essential for brand matching
+    logger.info("Fixing brand aliases before matching...");
+    stats.aliasesCreated = await autoCreateBrandAliases();
+    logger.info({ created: stats.aliasesCreated }, "Brand aliases done");
+    await job.updateProgress(10);
+
     logger.info("Running matching phases...");
     try {
       await prisma.$executeRawUnsafe(`REFRESH MATERIALIZED VIEW CONCURRENTLY ic_unique_articles`);
