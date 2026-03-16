@@ -119,7 +119,7 @@ export async function runPhase1B(): Promise<PhaseResult> {
 export async function runPhase1C(): Promise<PhaseResult> {
   const start = Date.now();
   const matches = await prisma.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe(`SET LOCAL work_mem = '256MB'`);
+    await tx.$executeRawUnsafe(`SET LOCAL work_mem = '16MB'`);
     return tx.$queryRawUnsafe<MatchResult[]>(
       `SELECT DISTINCT ON (pm.id)
         pm.id as product_id,

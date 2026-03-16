@@ -688,7 +688,7 @@ async function runAllMatchingPhases(): Promise<number> {
     const start = Date.now();
     try {
       const matches = await prisma.$transaction(async (tx) => {
-        await tx.$executeRawUnsafe(`SET LOCAL work_mem = '512MB'`);
+        await tx.$executeRawUnsafe(`SET LOCAL work_mem = '16MB'`);
         await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '${timeoutMs}'`);
         return tx.$queryRawUnsafe<MatchRow[]>(sql);
       }, { timeout: timeoutMs + 60_000 });
