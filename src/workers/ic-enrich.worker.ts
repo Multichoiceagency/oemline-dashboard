@@ -663,30 +663,29 @@ async function autoCreateBrandAliases(): Promise<number> {
     logger.info({ deleted }, "Deleted wrong brand aliases");
   }
 
-  // Method 1: tecdoc_prod → brands.tecdoc_id — BUT only when brand names are similar
-  // tecdoc_prod is the TecDoc data supplier ID, which maps to brands.tecdoc_id.
-  // We validate that the IC manufacturer name somewhat matches the TecDoc brand name
-  // to avoid cross-brand matches (e.g. ELRING products with FEBI tecdoc_id).
-  const tecdocMatches = await prisma.$queryRawUnsafe<Array<{ brand_id: number; manufacturer: string; brand_name: string }>>(
-    `SELECT DISTINCT ON (UPPER(im.manufacturer))
-      b.id AS brand_id, im.manufacturer, b.name AS brand_name
-    FROM intercars_mappings im
-    JOIN brands b ON b.tecdoc_id = im.tecdoc_prod
-    WHERE im.tecdoc_prod IS NOT NULL
-      AND (
-        -- Exact normalized name match
-        UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
-        -- One contains the other (TRW AUTOMOTIVE ↔ TRW, MAGNETI MARELLI ↔ MARELLI)
-        OR UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
-        OR UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+  // Method 1: tecdoc_prod → brands.tecdoc_id — validated by name similarity
+  let tecdocMatches: Array<{ brand_id: number; manufacturer: string; brand_name: string }> = [];
+  try {
+    tecdocMatches = await prisma.$queryRawUnsafe<typeof tecdocMatches>(
+      `SELECT DISTINCT ON (im.normalized_manufacturer)
+        b.id AS brand_id, im.manufacturer, b.name AS brand_name
+      FROM (SELECT DISTINCT manufacturer, normalized_manufacturer, tecdoc_prod FROM intercars_mappings WHERE tecdoc_prod IS NOT NULL) im
+      JOIN brands b ON b.tecdoc_id = im.tecdoc_prod
+      WHERE (
+        COALESCE(b.normalized_name, UPPER(b.name)) = im.normalized_manufacturer
+        OR COALESCE(b.normalized_name, UPPER(b.name)) LIKE im.normalized_manufacturer || '%'
+        OR im.normalized_manufacturer LIKE COALESCE(b.normalized_name, UPPER(b.name)) || '%'
       )
       AND NOT EXISTS (
         SELECT 1 FROM supplier_brand_rules sbr
         WHERE sbr.supplier_id = $1 AND sbr.brand_id = b.id
       )
-    ORDER BY UPPER(im.manufacturer)`,
-    supplierId
-  );
+      ORDER BY im.normalized_manufacturer`,
+      supplierId
+    );
+  } catch (err) {
+    logger.warn({ err }, "Method 1 (tecdoc_prod) failed");
+  }
 
   for (const m of tecdocMatches) {
     try {
@@ -700,18 +699,23 @@ async function autoCreateBrandAliases(): Promise<number> {
   }
 
   // Method 2: Exact normalized name match (most reliable)
-  const nameMatches = await prisma.$queryRawUnsafe<Array<{ brand_id: number; manufacturer: string }>>(
-    `SELECT DISTINCT ON (UPPER(im.manufacturer))
-      b.id AS brand_id, im.manufacturer
-    FROM (SELECT DISTINCT manufacturer FROM intercars_mappings) im
-    JOIN brands b ON UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
-    WHERE NOT EXISTS (
-      SELECT 1 FROM supplier_brand_rules sbr
-      WHERE sbr.supplier_id = $1 AND sbr.brand_id = b.id
-    )
-    ORDER BY UPPER(im.manufacturer)`,
-    supplierId
-  );
+  let nameMatches: Array<{ brand_id: number; manufacturer: string }> = [];
+  try {
+    nameMatches = await prisma.$queryRawUnsafe<typeof nameMatches>(
+      `SELECT DISTINCT ON (im.norm_mfr)
+        b.id AS brand_id, im.manufacturer
+      FROM (SELECT DISTINCT manufacturer, normalized_manufacturer AS norm_mfr FROM intercars_mappings) im
+      JOIN brands b ON COALESCE(b.normalized_name, UPPER(b.name)) = im.norm_mfr
+      WHERE NOT EXISTS (
+        SELECT 1 FROM supplier_brand_rules sbr
+        WHERE sbr.supplier_id = $1 AND sbr.brand_id = b.id
+      )
+      ORDER BY im.norm_mfr`,
+      supplierId
+    );
+  } catch (err) {
+    logger.warn({ err }, "Method 2 (exact name) failed");
+  }
 
   for (const m of nameMatches) {
     try {
@@ -726,22 +730,22 @@ async function autoCreateBrandAliases(): Promise<number> {
 
   // Method 3: Containment match — only when one full name contains the other
   // e.g. "TRW AUTOMOTIVE" contains "TRW", "MAGNETI MARELLI" contains "MARELLI"
-  // Requires minimum 4 chars to avoid false positives with short brand names
+  // Uses stored normalized columns for index-backed joins
   const containMatches = await prisma.$queryRawUnsafe<Array<{ brand_id: number; manufacturer: string }>>(
-    `SELECT DISTINCT ON (UPPER(im.manufacturer))
+    `SELECT DISTINCT ON (im.norm_mfr)
       b.id AS brand_id, im.manufacturer
-    FROM (SELECT DISTINCT manufacturer FROM intercars_mappings) im
+    FROM (SELECT DISTINCT manufacturer, normalized_manufacturer AS norm_mfr FROM intercars_mappings) im
     JOIN brands b ON (
-      UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
-      OR UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+      COALESCE(b.normalized_name, UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))) LIKE im.norm_mfr || '%'
+      OR im.norm_mfr LIKE COALESCE(b.normalized_name, UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))) || '%'
     )
-    WHERE LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 4
-      AND LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 4
+    WHERE LENGTH(im.norm_mfr) >= 4
+      AND LENGTH(COALESCE(b.normalized_name, b.name)) >= 4
       AND NOT EXISTS (
         SELECT 1 FROM supplier_brand_rules sbr
         WHERE sbr.supplier_id = $1 AND sbr.brand_id = b.id
       )
-    ORDER BY UPPER(im.manufacturer), LENGTH(b.name) DESC`,
+    ORDER BY im.norm_mfr, LENGTH(b.name) DESC`,
     supplierId
   );
 
@@ -775,27 +779,38 @@ async function autoCreateBrandAliases(): Promise<number> {
   }
 
   // Method 5: Data-driven alias discovery — find TecDoc brands that share article numbers
-  // with unmatched IC brands. If IC has article "123456" under brand "AKUSAN" and TecDoc has
-  // the same article "123456" under brand "Akusan", they must be the same brand.
-  const dataMatches = await prisma.$queryRawUnsafe<Array<{ brand_id: number; manufacturer: string; brand_name: string; matches: bigint }>>(
-    `SELECT
-      pm.brand_id, im.manufacturer, b.name AS brand_name, COUNT(*) AS matches
-    FROM intercars_mappings im
-    JOIN product_maps pm ON UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
-                          = UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
-    JOIN brands b ON b.id = pm.brand_id
-    WHERE NOT EXISTS (
-      SELECT 1 FROM supplier_brand_rules sbr
-      WHERE sbr.supplier_id = $1
-        AND UPPER(sbr.supplier_brand) = UPPER(im.manufacturer)
-    )
-    AND im.manufacturer NOT IN (SELECT UPPER(b2.name) FROM brands b2)
-    GROUP BY pm.brand_id, im.manufacturer, b.name
-    HAVING COUNT(*) >= 3
-    ORDER BY COUNT(*) DESC
-    LIMIT 200`,
-    supplierId
-  );
+  // with unmatched IC brands. Uses stored normalized columns for index-backed joins.
+  // Only check top 50 unmatched brands to keep query fast.
+  let dataMatches: Array<{ brand_id: number; manufacturer: string; brand_name: string; matches: bigint }> = [];
+  try {
+    dataMatches = await prisma.$queryRawUnsafe<typeof dataMatches>(
+      `WITH unmatched_mfr AS (
+        SELECT manufacturer, COUNT(*) AS cnt
+        FROM intercars_mappings im
+        WHERE NOT EXISTS (
+          SELECT 1 FROM supplier_brand_rules sbr
+          WHERE sbr.supplier_id = $1 AND UPPER(sbr.supplier_brand) = UPPER(im.manufacturer)
+        )
+        AND UPPER(im.manufacturer) NOT IN (SELECT COALESCE(normalized_name, UPPER(name)) FROM brands)
+        GROUP BY manufacturer
+        ORDER BY cnt DESC
+        LIMIT 50
+      )
+      SELECT pm.brand_id, um.manufacturer, b.name AS brand_name, COUNT(*) AS matches
+      FROM unmatched_mfr um
+      JOIN intercars_mappings im ON im.manufacturer = um.manufacturer
+      JOIN product_maps pm ON pm.normalized_article_no = im.normalized_article_number
+      JOIN brands b ON b.id = pm.brand_id
+      WHERE pm.status = 'active'
+      GROUP BY pm.brand_id, um.manufacturer, b.name
+      HAVING COUNT(*) >= 5
+      ORDER BY COUNT(*) DESC
+      LIMIT 100`,
+      supplierId
+    );
+  } catch (err) {
+    logger.warn({ err }, "Data-driven alias discovery failed (non-critical)");
+  }
 
   const seenMfr = new Set<string>();
   for (const m of dataMatches) {
