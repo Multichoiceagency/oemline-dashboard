@@ -50,12 +50,36 @@ export async function intercarsRoutes(app: FastifyInstance) {
       );
       const total = Number(result[0]?.count ?? 0);
 
+      const withTecdocProd = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+        `SELECT COUNT(*) as count FROM intercars_mappings WHERE tecdoc_prod IS NOT NULL`
+      );
+
       const topBrands = await prisma.$queryRawUnsafe<Array<{ manufacturer: string; count: bigint }>>(
         `SELECT manufacturer, COUNT(*) as count FROM intercars_mappings GROUP BY manufacturer ORDER BY count DESC LIMIT 20`
       );
 
+      // Phase DIRECT diagnostic: how many products could be matched by tecdoc_prod + article?
+      const directMatchPotential = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+        `SELECT COUNT(DISTINCT pm.id) as count
+         FROM product_maps pm
+         JOIN brands b ON b.id = pm.brand_id
+         JOIN intercars_mappings im ON
+           im.tecdoc_prod IS NOT NULL
+           AND b.tecdoc_id IS NOT NULL
+           AND im.tecdoc_prod = b.tecdoc_id
+           AND im.normalized_article_number = pm.normalized_article_no
+         WHERE pm.status = 'active'`
+      );
+
+      const brandsWithTecdocId = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+        `SELECT COUNT(*) as count FROM brands WHERE tecdoc_id IS NOT NULL`
+      );
+
       return {
         totalMappings: total,
+        withTecdocProd: Number(withTecdocProd[0]?.count ?? 0),
+        brandsWithTecdocId: Number(brandsWithTecdocId[0]?.count ?? 0),
+        directMatchPotential: Number(directMatchPotential[0]?.count ?? 0),
         topBrands: topBrands.map((b) => ({ brand: b.manufacturer, count: Number(b.count) })),
       };
     } catch {
