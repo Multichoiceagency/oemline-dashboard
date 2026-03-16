@@ -81,7 +81,7 @@ interface IcProduct {
 // ── Main worker ──────────────────────────────────────────────────────────
 
 export async function processIcEnrichJob(job: Job<IcEnrichJobData>): Promise<void> {
-  const { mode = "full", maxLookup = 0, parallelism = 50 } = job.data;
+  const { mode = "full", maxLookup = 0, parallelism = 10 } = job.data;
 
   if (!IC_CLIENT_ID || !IC_CLIENT_SECRET) {
     logger.warn("IC enrich: no INTERCARS_CLIENT_ID/SECRET configured");
@@ -89,82 +89,71 @@ export async function processIcEnrichJob(job: Job<IcEnrichJobData>): Promise<voi
   }
 
   logger.info({ mode, maxLookup, parallelism }, "IC enrichment starting");
-  const stats = { prefixBrands: 0, aliasesCreated: 0, looked: 0, found: 0, matched: 0 };
+  const stats = { prefixBrands: 0, aliasesCreated: 0, looked: 0, found: 0, matched: 0, learnedBrands: 0 };
 
-  // ── Step 1: Build brand prefix map ────────────────────────────────────
   if (mode === "full" || mode === "direct-lookup") {
-    logger.info("Step 1: Building brand → IC index prefix map from CSV data...");
-    const prefixMap = await buildBrandPrefixMap();
-    stats.prefixBrands = Object.keys(prefixMap).length;
-    logger.info({ brands: stats.prefixBrands, sample: Object.entries(prefixMap).slice(0, 10) }, "Brand prefix map built");
-    await job.updateProgress(5);
-
-    // ── Step 2: Auto brand aliases ────────────────────────────────────
-    logger.info("Step 2: Auto-creating brand aliases...");
+    // ── Step 1: Fix aliases first ──────────────────────────────────────
+    logger.info("Step 1: Fixing brand aliases...");
     stats.aliasesCreated = await autoCreateBrandAliases();
     logger.info({ created: stats.aliasesCreated }, "Brand aliases done");
-    await job.updateProgress(10);
+    await job.updateProgress(3);
 
-    // ── Step 3: Direct IC lookup for unmatched products ──────────────
-    logger.info("Step 3: Direct IC API lookup for unmatched products...");
-    const lookupResult = await directIcLookup(job, prefixMap, parallelism, maxLookup);
-    stats.looked = lookupResult.looked;
-    stats.found = lookupResult.found;
-    logger.info({ looked: stats.looked, found: stats.found }, "Direct IC lookup done");
-    await job.updateProgress(85);
-  }
-
-  if (mode === "aliases-only" || mode === "full") {
-    if (mode === "aliases-only") {
-      stats.aliasesCreated = await autoCreateBrandAliases();
-    }
-  }
-
-  // ── Step 3.5: Reset wrongly-matched products ─────────────────────────
-  // Products matched via wrong aliases need to be reset so they can re-match correctly
-  if (mode === "full") {
-    logger.info("Step 3.5: Resetting products matched via deleted aliases...");
-    const resetCount = await prisma.$executeRawUnsafe(
-      `UPDATE product_maps SET ic_sku = NULL, ic_matched_at = NULL
-       WHERE ic_sku IS NOT NULL
-         AND NOT EXISTS (
-           SELECT 1 FROM intercars_mappings im
-           WHERE im.tow_kod = product_maps.ic_sku
-             AND (
-               -- Verify the IC mapping brand matches the product brand via alias or direct
-               EXISTS (
-                 SELECT 1 FROM brands b
-                 JOIN supplier_brand_rules sbr ON sbr.brand_id = b.id AND sbr.active = true
-                 WHERE b.id = product_maps.brand_id
-                   AND UPPER(im.manufacturer) = sbr.supplier_brand
-               )
-               OR EXISTS (
-                 SELECT 1 FROM brands b
-                 WHERE b.id = product_maps.brand_id
-                   AND b.tecdoc_id IS NOT NULL
-                   AND im.tecdoc_prod = b.tecdoc_id
-               )
-               OR EXISTS (
-                 SELECT 1 FROM brands b
-                 WHERE b.id = product_maps.brand_id
-                   AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) = im.normalized_manufacturer
-               )
-             )
-         )`
-    );
-    logger.info({ resetCount }, "Reset wrongly-matched products");
-    await job.updateProgress(87);
-  }
-
-  // ── Step 4: Run matching ──────────────────────────────────────────────
-  if (mode === "full" || mode === "match-only") {
-    logger.info("Step 4: Running all matching phases...");
+    // ── Step 2: Run matching phases on existing IC data FIRST ─────────
+    // This is instant and catches all low-hanging fruit before slow API lookups
+    logger.info("Step 2: Running matching phases on existing IC data...");
     try {
       await prisma.$executeRawUnsafe(`REFRESH MATERIALIZED VIEW CONCURRENTLY ic_unique_articles`);
     } catch { /* ok */ }
+    const earlyMatches = await runAllMatchingPhases();
+    stats.matched += earlyMatches;
+    logger.info({ earlyMatches }, "Early matching done");
+    await job.updateProgress(15);
 
+    // ── Step 3: Learn prefix map from EXISTING matches ─────────────────
+    // We have ~240K+ matched products with ic_sku. Use those to learn the IC index
+    // format for every brand, then apply to unmatched products.
+    logger.info("Step 3: Building prefix map from CSV + learning from existing matches...");
+    const prefixMap = await buildBrandPrefixMap();
+    stats.prefixBrands = Object.keys(prefixMap).length;
+
+    // Also learn from existing matched products (ic_sku → IC API detail → index format)
+    const learnedCount = await learnPrefixFromMatches(job, prefixMap, parallelism);
+    stats.learnedBrands = learnedCount;
+    stats.prefixBrands = Object.keys(prefixMap).length; // Updated after learning
+    logger.info({ prefixBrands: stats.prefixBrands, learned: learnedCount }, "Prefix map complete");
+    await job.updateProgress(25);
+
+    // ── Step 4: Direct IC lookup for unmatched products ─────────────────
+    // Now with a comprehensive prefix map, search IC for remaining unmatched products
+    // Use parallelism=10 to avoid IC API rate limits (was 50, caused 429s)
+    logger.info("Step 4: Direct IC API lookup for unmatched products...");
+    const lookupResult = await directIcLookup(job, prefixMap, Math.min(parallelism, 10), maxLookup);
+    stats.looked = lookupResult.looked;
+    stats.found = lookupResult.found;
+    logger.info({ looked: stats.looked, found: stats.found }, "Direct IC lookup done");
+    await job.updateProgress(80);
+
+    // ── Step 5: Run matching phases AGAIN on newly added IC data ────────
+    logger.info("Step 5: Running matching phases on new IC data...");
+    try {
+      await prisma.$executeRawUnsafe(`REFRESH MATERIALIZED VIEW CONCURRENTLY ic_unique_articles`);
+    } catch { /* ok */ }
+    const lateMatches = await runAllMatchingPhases();
+    stats.matched += lateMatches;
+    logger.info({ lateMatches, totalMatched: stats.matched }, "Final matching done");
+    await job.updateProgress(100);
+  }
+
+  if (mode === "aliases-only") {
+    stats.aliasesCreated = await autoCreateBrandAliases();
+  }
+
+  if (mode === "match-only") {
+    logger.info("Running matching phases...");
+    try {
+      await prisma.$executeRawUnsafe(`REFRESH MATERIALIZED VIEW CONCURRENTLY ic_unique_articles`);
+    } catch { /* ok */ }
     stats.matched = await runAllMatchingPhases();
-    logger.info({ matched: stats.matched }, "Matching complete");
     await job.updateProgress(100);
   }
 
@@ -240,6 +229,94 @@ async function buildBrandPrefixMap(): Promise<Record<string, { prefix: string; h
   }
 
   return map;
+}
+
+/**
+ * Learn IC index format for brands we DON'T have in the prefix map yet,
+ * by doing SKU lookups on products we already matched (have ic_sku set).
+ * For each brand without a prefix, pick a matched product → call IC API by SKU →
+ * get the `index` field → derive the prefix.
+ *
+ * This fills the prefix map for brands that weren't in the original CSV import.
+ */
+async function learnPrefixFromMatches(
+  job: Job,
+  prefixMap: Record<string, { prefix: string; hasSpaces: boolean; sample: string }>,
+  parallelism: number
+): Promise<number> {
+  // Find brands that have matched products but no prefix map entry
+  const brandsToLearn = await prisma.$queryRawUnsafe<Array<{
+    brand_name: string;
+    ic_sku: string;
+    article_no: string;
+  }>>(
+    `SELECT DISTINCT ON (UPPER(b.name))
+      b.name AS brand_name,
+      pm.ic_sku,
+      pm.article_no
+    FROM product_maps pm
+    JOIN brands b ON b.id = pm.brand_id
+    WHERE pm.ic_sku IS NOT NULL AND pm.status = 'active'
+    ORDER BY UPPER(b.name), pm.id
+    LIMIT 500`
+  );
+
+  let learned = 0;
+  const BATCH = Math.min(parallelism, 5); // Conservative to avoid rate limits
+
+  for (let i = 0; i < brandsToLearn.length; i += BATCH) {
+    const batch = brandsToLearn.slice(i, i + BATCH);
+    const toLearn = batch.filter(b => !prefixMap[b.brand_name.toUpperCase()]);
+
+    if (toLearn.length === 0) continue;
+
+    const results = await Promise.allSettled(
+      toLearn.map(async (b) => {
+        const tok = await getIcToken();
+        const hdrs = icHeaders(tok);
+        const url = `${IC_API_URL}/catalog/products?sku=${encodeURIComponent(b.ic_sku)}&pageNumber=0&pageSize=1`;
+        const resp = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(10_000) });
+        if (!resp.ok) return null;
+        const data = (await resp.json()) as { products: Array<{ index: string; sku: string; articleNumber?: string; brand: string }> };
+        const product = data.products?.[0];
+        if (!product) return null;
+        return { brandName: b.brand_name, articleNo: b.article_no, icIndex: product.index, icBrand: product.brand };
+      })
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value) {
+        const { brandName, articleNo, icIndex } = result.value;
+        const brand = brandName.toUpperCase();
+        if (prefixMap[brand]) continue; // Already learned
+
+        const normIndex = icIndex.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+        const normArticle = articleNo.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+        const hasSpaces = icIndex.includes(" ");
+
+        if (normIndex.endsWith(normArticle) && normIndex.length > normArticle.length) {
+          const prefix = normIndex.slice(0, normIndex.length - normArticle.length);
+          if (prefix.length <= 5) {
+            prefixMap[brand] = { prefix, hasSpaces, sample: icIndex };
+            learned++;
+          }
+        } else if (normIndex === normArticle) {
+          prefixMap[brand] = { prefix: "", hasSpaces, sample: icIndex };
+          learned++;
+        } else {
+          // IC index doesn't match article at all — store as-is for reference
+          prefixMap[brand] = { prefix: "", hasSpaces, sample: icIndex };
+          learned++;
+        }
+      }
+    }
+
+    // Rate limit: 200ms between batches
+    await new Promise(r => setTimeout(r, 200));
+    try { await job.extendLock(job.token!, 600_000); } catch { /* ok */ }
+  }
+
+  return learned;
 }
 
 /**
@@ -379,8 +456,8 @@ async function directIcLookup(
         }
       }
 
-      // Small pause to avoid API overload
-      await new Promise(r => setTimeout(r, 10));
+      // Pause between chunks to respect IC API rate limits (was 10ms, caused 429s at 50 parallel)
+      await new Promise(r => setTimeout(r, 100));
     }
 
     // Extend lock + log progress
@@ -405,9 +482,16 @@ async function searchIcByIndex(index: string): Promise<IcProduct | null> {
     const tok = await getIcToken();
     const hdrs = icHeaders(tok);
 
-    // Search by index first (fast)
+    // Search by index (the only working search method in IC API)
     const searchUrl = `${IC_API_URL}/catalog/products?index=${encodeURIComponent(index)}&pageNumber=0&pageSize=1`;
     const resp = await fetch(searchUrl, { headers: hdrs, signal: AbortSignal.timeout(10_000) });
+
+    // Handle rate limiting — wait and signal caller to slow down
+    if (resp.status === 429) {
+      logger.warn("IC API rate limited (429) — pausing for 60s");
+      await new Promise(r => setTimeout(r, 60_000));
+      return null;
+    }
     if (!resp.ok) return null;
 
     const data = (await resp.json()) as { totalResults: number; products: IcProduct[] };
@@ -415,14 +499,14 @@ async function searchIcByIndex(index: string): Promise<IcProduct | null> {
 
     const found = data.products[0];
 
-    // If the search result has sku, do a detail lookup for full data
+    // If the search result has sku, do a detail lookup for full data (articleNumber, tecDocProd, EAN)
     if (found.sku && !found.tecDoc && !found.tecDocProd) {
       const detailUrl = `${IC_API_URL}/catalog/products?sku=${encodeURIComponent(found.sku)}&pageNumber=0&pageSize=1`;
       const detailResp = await fetch(detailUrl, { headers: hdrs, signal: AbortSignal.timeout(10_000) });
       if (detailResp.ok) {
         const detailData = (await detailResp.json()) as { products: IcProduct[] };
         if (detailData.products?.[0]) {
-          return detailData.products[0]; // Full details
+          return detailData.products[0];
         }
       }
     }
