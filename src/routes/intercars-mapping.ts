@@ -481,6 +481,96 @@ export async function intercarsRoutes(app: FastifyInstance) {
     };
   });
 
+  // ============ IC API Search Probe ============
+  // Test different IC API search parameters to discover what works
+  app.get("/intercars/probe-api", async (request) => {
+    const { article, brand } = request.query as { article?: string; brand?: string };
+    if (!article) return { error: "Provide ?article=XXX (TecDoc article number)" };
+
+    const IC_TOKEN_URL = process.env.INTERCARS_TOKEN_URL || "https://is.webapi.intercars.eu/oauth2/token";
+    const IC_API_URL = process.env.INTERCARS_API_URL || "https://api.webapi.intercars.eu/ic";
+    const IC_CLIENT_ID = process.env.INTERCARS_CLIENT_ID || "";
+    const IC_CLIENT_SECRET = process.env.INTERCARS_CLIENT_SECRET || "";
+    const IC_CUSTOMER_ID = process.env.INTERCARS_CUSTOMER_ID || "";
+    const IC_PAYER_ID = process.env.INTERCARS_PAYER_ID || "";
+    const IC_BRANCH = process.env.INTERCARS_BRANCH || "";
+
+    if (!IC_CLIENT_ID) return { error: "No INTERCARS_CLIENT_ID configured" };
+
+    // Get token
+    const basicAuth = Buffer.from(`${IC_CLIENT_ID}:${IC_CLIENT_SECRET}`).toString("base64");
+    const tokenResp = await fetch(IC_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: `Basic ${basicAuth}` },
+      body: "grant_type=client_credentials&scope=allinone",
+    });
+    if (!tokenResp.ok) return { error: `Token failed: ${tokenResp.status}` };
+    const tokenData = (await tokenResp.json()) as { access_token: string };
+    const token = tokenData.access_token;
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      "Accept-Language": "en",
+    };
+    if (IC_CUSTOMER_ID) headers["X-Customer-Id"] = IC_CUSTOMER_ID;
+    if (IC_PAYER_ID) headers["X-Payer-Id"] = IC_PAYER_ID;
+    if (IC_BRANCH) headers["X-Branch"] = IC_BRANCH;
+
+    const norm = article.replace(/[^a-zA-Z0-9]/g, "");
+    const results: Record<string, unknown> = {};
+
+    // Try many different search approaches
+    const searches = [
+      { name: "by_index_raw", url: `${IC_API_URL}/catalog/products?index=${encodeURIComponent(article)}&pageSize=3` },
+      { name: "by_index_norm", url: `${IC_API_URL}/catalog/products?index=${encodeURIComponent(norm)}&pageSize=3` },
+      { name: "by_query", url: `${IC_API_URL}/catalog/products?query=${encodeURIComponent(article)}&pageSize=3` },
+      { name: "by_search", url: `${IC_API_URL}/catalog/products?search=${encodeURIComponent(article)}&pageSize=3` },
+      { name: "by_articleNumber", url: `${IC_API_URL}/catalog/products?articleNumber=${encodeURIComponent(article)}&pageSize=3` },
+      { name: "by_tecDoc", url: `${IC_API_URL}/catalog/products?tecDoc=${encodeURIComponent(article)}&pageSize=3` },
+      { name: "by_ean", url: `${IC_API_URL}/catalog/products?ean=${encodeURIComponent(article)}&pageSize=3` },
+      { name: "search_endpoint", url: `${IC_API_URL}/catalog/search?query=${encodeURIComponent(article)}&pageSize=3` },
+      { name: "search_v2", url: `${IC_API_URL}/search/products?query=${encodeURIComponent(article)}&pageSize=3` },
+      { name: "cross_ref", url: `${IC_API_URL}/catalog/crossreference?articleNumber=${encodeURIComponent(article)}&pageSize=3` },
+      { name: "cross_ref2", url: `${IC_API_URL}/crossreference?articleNumber=${encodeURIComponent(article)}` },
+    ];
+
+    if (brand) {
+      searches.push(
+        { name: "by_index_brand", url: `${IC_API_URL}/catalog/products?index=${encodeURIComponent(article)}&brand=${encodeURIComponent(brand)}&pageSize=3` },
+        { name: "by_query_brand", url: `${IC_API_URL}/catalog/products?query=${encodeURIComponent(brand + " " + article)}&pageSize=3` },
+      );
+    }
+
+    // Run all searches in parallel
+    const settled = await Promise.allSettled(
+      searches.map(async (s) => {
+        const resp = await fetch(s.url, { headers, signal: AbortSignal.timeout(10_000) });
+        const body = await resp.text();
+        return {
+          name: s.name,
+          url: s.url,
+          status: resp.status,
+          body: body.slice(0, 500),
+          hasProducts: body.includes('"products"') && !body.includes('"products":[]'),
+        };
+      })
+    );
+
+    for (const r of settled) {
+      if (r.status === "fulfilled") {
+        const v = r.value;
+        results[v.name] = {
+          status: v.status,
+          hasProducts: v.hasProducts,
+          body: v.body,
+        };
+      }
+    }
+
+    return { article, norm, brand, results };
+  });
+
   // ============ Brand Alias Management ============
 
   // List all brand aliases for InterCars
