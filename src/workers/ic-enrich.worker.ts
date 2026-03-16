@@ -521,98 +521,55 @@ async function searchIcByIndex(index: string): Promise<IcProduct | null> {
 
 // ── Auto brand aliases ───────────────────────────────────────────────────
 
-// Comprehensive IC brand → TecDoc brand name mapping
-// IC CSV uses different brand names than TecDoc. This map covers all known differences.
+// Manual IC brand → TecDoc brand name mapping
+// ONLY entries where the IC CSV name is genuinely different from TecDoc brand name.
+// No abbreviation guessing — each entry is a verified name difference.
 const MANUAL_ALIASES_FULL: Record<string, string> = {
-  // Major brands
-  "BLIC": "DIEDERICHS",
-  "KAYABA": "KYB",
-  "HANS PRIES": "HP",
-  "KS": "KOLBENSCHMIDT",
-  "LEMFOERDER": "LEMFÖRDER",
-  "REINZ": "VICTOR REINZ",
-  "VDO": "CONTINENTAL",
-  "CONTI": "CONTINENTAL",
-  "MEAT&DORIA": "MEAT & DORIA",
-  "GOETZE": "GOETZE ENGINE",
-  "LUK1": "LuK",
-  "SWF": "SWF VALEO",
-  "FAE": "FAE",
-  "CEI": "C.E.I",
-  "C.E.I": "C.E.I",
-  "NTK": "NGK",
-  "CTR": "CTR",
-  "OMP": "OMP",
-  "ULO": "ULO",
-  "ICER": "ICER BRAKES",
-  "FTE": "FTE AUTOMOTIVE",
-  "ZF PARTS": "ZF",
-  "ZF": "ZF",
-  "ATE1": "ATE",
-  "DAYCO1": "DAYCO",
-  "INA1": "INA",
-  "SNR": "NTN-SNR",
-  "PIERBURG1": "PIERBURG",
-  "BEHR": "MAHLE",
-  "BEHR HELLA": "HELLA",
-  "TRW AUTOMOTIVE": "TRW",
-  "SAINT-GOBAIN SEKURIT": "SAINT-GOBAIN",
-  "SAINT GOBAIN": "SAINT-GOBAIN",
-  "AUTOFREN SEINSA": "SEINSA",
-  "MEAT & DORIA": "MEAT & DORIA",
-  "HC-CARGO": "HC-CARGO",
-  "JAPAN PARTS": "JAPANPARTS",
-  "S-TR": "S-TR",
-  "PROFIT": "PROFIT",
-  "REINHOCH": "REINHOCH",
-  "LESJOFORS": "LESJÖFORS",
-  "LEMA": "LEMA",
-  "DEPO": "DEPO",
-  "MAHLE ORIGINAL": "MAHLE",
-  "KNECHT": "MAHLE",
-  "HENGST": "HENGST FILTER",
-  "MANN": "MANN-FILTER",
-  "MANN FILTER": "MANN-FILTER",
-  "PURFLUX": "PURFLUX",
-  "CHAMPION": "CHAMPION",
-  "HERTH+BUSS": "HERTH+BUSS ELPARTS",
-  "HERTH BUSS": "HERTH+BUSS ELPARTS",
-  "SACHS1": "SACHS",
-  "GKN": "SPIDAN",
-  "SPIDAN": "GKN",
-  "MAPCO": "MAPCO",
-  "METZGER": "METZGER",
-  "TOPRAN": "TOPRAN",
-  "OPTIMAL": "OPTIMAL",
-  "A.B.S.": "A.B.S.",
-  "DT SPARE PARTS": "DT",
-  "DT": "DT",
-  "PE AUTOMOTIVE": "PE Automotive",
-  "PE": "PE Automotive",
-  "DIESEL TECHNIC": "DT",
-  "FEBI BILSTEIN": "FEBI BILSTEIN",
-  "LAUBER": "LAUBER",
-  "STARDAX": "STARDAX",
-  "ROMIX": "ROMIX",
-  "TOURMAX": "TOURMAX",
-  "PNEUMATICS": "PNEUMATICS",
-  "ORIS": "ORIS",
-  "AUTLOG": "AUTLOG",
-  "CVA": "CVA",
-  "YAMATO": "YAMATO",
-  "STEINHOF": "STEINHOF",
-  "AKUSAN": "AKUSAN",
-  "ATHENA": "ATHENA",
-  "KOREA": "KOREA",
-  "CORTECO": "CORTECO",
-  "ALL BALLS": "ALL BALLS RACING",
-  "MAGNUM TECHNOLOGY": "Magnum Technology",
-  "SKF": "SKF",
-  "NRF": "NRF",
-  "LPR": "LPR",
-  "DELPHI TECHNOLOGIES": "DELPHI",
-  "NGK SPARK PLUG": "NGK",
-  "NGK": "NGK",
+  // Verified different names (IC name → TecDoc name)
+  "BLIC": "DIEDERICHS",                // BLIC is IC house brand for DIEDERICHS parts
+  "KAYABA": "KYB",                     // KYB was formerly Kayaba (company renamed)
+  "HANS PRIES": "HP",                  // Hans Pries is the full name, HP is the TecDoc brand
+  "LEMFOERDER": "LEMFÖRDER",           // Umlaut difference (oe vs ö)
+  "REINZ": "VICTOR REINZ",             // Short vs full name (same company)
+  "MEAT&DORIA": "MEAT & DORIA",        // Punctuation difference
+  "GOETZE": "GOETZE ENGINE",           // Short vs full name
+  "LUK1": "LuK",                       // Typo in IC system (LUK1 vs LuK)
+  "ATE1": "ATE",                       // Typo in IC system
+  "DAYCO1": "DAYCO",                   // Typo in IC system
+  "INA1": "INA",                       // Typo in IC system
+  "SACHS1": "SACHS",                   // Typo in IC system
+  "PIERBURG1": "PIERBURG",             // Typo in IC system
+  "SNR": "NTN-SNR",                    // SNR merged with NTN
+  "BEHR": "MAHLE",                     // BEHR was acquired by MAHLE
+  "BEHR HELLA": "HELLA",               // BEHR HELLA SERVICE → HELLA
+  "MAHLE ORIGINAL": "MAHLE",           // Extended name vs short
+  "KNECHT": "MAHLE",                   // KNECHT is a MAHLE brand
+  "TRW AUTOMOTIVE": "TRW",             // Extended name vs short
+  "SAINT-GOBAIN SEKURIT": "SAINT-GOBAIN", // Extended name
+  "SAINT GOBAIN": "SAINT-GOBAIN",      // Punctuation difference
+  "AUTOFREN SEINSA": "SEINSA",         // Extended name
+  "JAPAN PARTS": "JAPANPARTS",         // Space difference
+  "LESJOFORS": "LESJÖFORS",            // Umlaut difference (o vs ö)
+  "HENGST": "HENGST FILTER",           // Short vs full name
+  "MANN": "MANN-FILTER",               // Short vs full name
+  "MANN FILTER": "MANN-FILTER",         // Punctuation difference
+  "HERTH+BUSS": "HERTH+BUSS ELPARTS",  // Short vs full name
+  "HERTH BUSS": "HERTH+BUSS ELPARTS",  // Punctuation difference
+  "DT SPARE PARTS": "DT",              // Extended name vs short
+  "DIESEL TECHNIC": "DT",              // Different brand name, same company
+  "PE AUTOMOTIVE": "PE Automotive",     // Case difference
+  "ICER": "ICER BRAKES",               // Short vs full name
+  "FTE": "FTE AUTOMOTIVE",             // Short vs full name
+  "ZF PARTS": "ZF",                    // Extended name
+  "ALL BALLS": "ALL BALLS RACING",     // Short vs full name
+  "DELPHI TECHNOLOGIES": "DELPHI",     // Extended name
+  "NGK SPARK PLUG": "NGK",             // Extended name
+  "VDO": "CONTINENTAL",                // VDO is a Continental brand (verified acquisition)
+  "CONTI": "CONTINENTAL",              // Short name for Continental
+  "NTK": "NGK",                        // NTK is NGK's sensor brand (verified)
+  "GKN": "SPIDAN",                     // GKN driveline → SPIDAN (verified same company)
+  "SWF": "SWF VALEO",                  // SWF is part of Valeo group
+  "KS": "KOLBENSCHMIDT",               // KS = Kolbenschmidt (verified abbreviation in IC)
 };
 
 async function autoCreateBrandAliases(): Promise<number> {
@@ -728,26 +685,13 @@ async function autoCreateBrandAliases(): Promise<number> {
     } catch { /* skip */ }
   }
 
-  // Method 3: Containment match — only when one full name contains the other
-  // e.g. "TRW AUTOMOTIVE" contains "TRW", "MAGNETI MARELLI" contains "MARELLI"
-  // Uses stored normalized columns for index-backed joins
-  const containMatches = await prisma.$queryRawUnsafe<Array<{ brand_id: number; manufacturer: string }>>(
-    `SELECT DISTINCT ON (im.norm_mfr)
-      b.id AS brand_id, im.manufacturer
-    FROM (SELECT DISTINCT manufacturer, normalized_manufacturer AS norm_mfr FROM intercars_mappings) im
-    JOIN brands b ON (
-      COALESCE(b.normalized_name, UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))) LIKE im.norm_mfr || '%'
-      OR im.norm_mfr LIKE COALESCE(b.normalized_name, UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))) || '%'
-    )
-    WHERE LENGTH(im.norm_mfr) >= 4
-      AND LENGTH(COALESCE(b.normalized_name, b.name)) >= 4
-      AND NOT EXISTS (
-        SELECT 1 FROM supplier_brand_rules sbr
-        WHERE sbr.supplier_id = $1 AND sbr.brand_id = b.id
-      )
-    ORDER BY im.norm_mfr, LENGTH(b.name) DESC`,
-    supplierId
-  );
+  // Method 3: Containment match — DISABLED
+  // Previously matched brands where one name is a prefix of the other, but this created
+  // many false matches (NRF→NGK, SKF→FEBI, etc.) because short brand names coincidentally
+  // matched longer unrelated brands. The user explicitly asked: "no brand abbreviation".
+  // We rely on Method 1 (tecdoc_id), Method 2 (exact name), Method 4 (manual map),
+  // and Method 5 (data-driven) instead.
+  const containMatches: Array<{ brand_id: number; manufacturer: string }> = [];
 
   for (const m of containMatches) {
     try {
