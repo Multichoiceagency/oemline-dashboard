@@ -476,7 +476,7 @@ async function autoCreateBrandAliases(): Promise<number> {
       b.id AS brand_id,
       im.manufacturer
     FROM (SELECT DISTINCT manufacturer FROM intercars_mappings) im
-    JOIN brands b ON b.normalized_name = UPPER(REGEXP_REPLACE(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+    JOIN brands b ON UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) = UPPER(REGEXP_REPLACE(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
     WHERE NOT EXISTS (
       SELECT 1 FROM supplier_brand_rules sbr
       WHERE sbr.supplier_id = $1
@@ -511,16 +511,16 @@ async function autoCreateBrandAliases(): Promise<number> {
       im.manufacturer
     FROM (SELECT DISTINCT manufacturer FROM intercars_mappings) im
     JOIN brands b ON (
-      b.normalized_name LIKE UPPER(REGEXP_REPLACE(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
-      OR UPPER(REGEXP_REPLACE(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) LIKE b.normalized_name || '%'
+      UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) LIKE UPPER(REGEXP_REPLACE(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+      OR UPPER(REGEXP_REPLACE(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
     )
-    WHERE LENGTH(b.normalized_name) >= 3
+    WHERE LENGTH(UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))) >= 3
       AND NOT EXISTS (
         SELECT 1 FROM supplier_brand_rules sbr
         WHERE sbr.supplier_id = $1
           AND sbr.brand_id = b.id
       )
-    ORDER BY im.manufacturer, LENGTH(b.normalized_name) DESC`,
+    ORDER BY im.manufacturer, LENGTH(UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))) DESC`,
     supplierId
   );
 
@@ -625,9 +625,9 @@ async function runAggressiveMatching(): Promise<number> {
     JOIN intercars_mappings im ON
       im.normalized_article_number = pm.normalized_article_no
       AND (
-        im.normalized_manufacturer = b.normalized_name
-        OR (LENGTH(im.normalized_manufacturer) >= 2 AND b.normalized_name LIKE im.normalized_manufacturer || '%')
-        OR (LENGTH(b.normalized_name) >= 2 AND im.normalized_manufacturer LIKE b.normalized_name || '%')
+        im.normalized_manufacturer = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+        OR (LENGTH(im.normalized_manufacturer) >= 2 AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) LIKE im.normalized_manufacturer || '%')
+        OR (LENGTH(UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))) >= 2 AND im.normalized_manufacturer LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%')
       )
     WHERE pm.status = 'active' AND pm.ic_sku IS NULL
     ORDER BY pm.id`);
@@ -683,7 +683,7 @@ async function runAggressiveMatching(): Promise<number> {
     JOIN intercars_mappings im ON
       LTRIM(im.normalized_article_number, '0') = LTRIM(pm.normalized_article_no, '0')
       AND LENGTH(LTRIM(pm.normalized_article_no, '0')) >= 5
-      AND (im.normalized_manufacturer = b.normalized_name OR im.tecdoc_prod = b.tecdoc_id)
+      AND (im.normalized_manufacturer = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) OR im.tecdoc_prod = b.tecdoc_id)
     WHERE pm.status = 'active' AND pm.ic_sku IS NULL
     ORDER BY pm.id`);
 
@@ -742,10 +742,10 @@ async function runAggressiveMatching(): Promise<number> {
         OR pm.normalized_article_no LIKE '%' || im.normalized_article_number || '%'
       )
       AND (
-        im.normalized_manufacturer = b.normalized_name
+        im.normalized_manufacturer = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
         OR im.tecdoc_prod = b.tecdoc_id
-        OR b.normalized_name LIKE im.normalized_manufacturer || '%'
-        OR im.normalized_manufacturer LIKE b.normalized_name || '%'
+        OR UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) LIKE im.normalized_manufacturer || '%'
+        OR im.normalized_manufacturer LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
       )
     WHERE pm.status = 'active' AND pm.ic_sku IS NULL
     ORDER BY pm.id`, 900_000);
@@ -761,9 +761,9 @@ async function runAggressiveMatching(): Promise<number> {
       im.normalized_article_number = pm.normalized_article_no
       AND LENGTH(pm.normalized_article_no) >= 5
       AND (
-        im.normalized_manufacturer LIKE '%' || b.normalized_name || '%'
-        OR b.normalized_name LIKE '%' || im.normalized_manufacturer || '%'
-        OR SIMILARITY(im.normalized_manufacturer, b.normalized_name) > 0.4
+        im.normalized_manufacturer LIKE '%' || UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+        OR UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) LIKE '%' || im.normalized_manufacturer || '%'
+        OR LEFT(im.normalized_manufacturer, 4) = LEFT(UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')), 4)
       )
     WHERE pm.status = 'active' AND pm.ic_sku IS NULL
     ORDER BY pm.id`, 600_000);
