@@ -16,31 +16,6 @@ interface CsvRow {
 }
 
 export async function intercarsRoutes(app: FastifyInstance) {
-  // Ensure table exists
-  app.addHook("onReady", async () => {
-    try {
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS intercars_mappings (
-          id SERIAL PRIMARY KEY,
-          tow_kod TEXT NOT NULL UNIQUE,
-          ic_index TEXT NOT NULL DEFAULT '',
-          article_number TEXT NOT NULL DEFAULT '',
-          manufacturer TEXT NOT NULL DEFAULT '',
-          tecdoc_prod INTEGER,
-          description TEXT NOT NULL DEFAULT '',
-          ean TEXT,
-          weight DOUBLE PRECISION,
-          blocked_return BOOLEAN NOT NULL DEFAULT false,
-          created_at TIMESTAMP NOT NULL DEFAULT NOW()
-        )
-      `);
-      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS idx_ic_map_mfr_art ON intercars_mappings (manufacturer, article_number)`);
-      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS idx_ic_map_art ON intercars_mappings (article_number)`);
-      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS idx_ic_map_ean ON intercars_mappings (ean)`);
-    } catch (err) {
-      logger.warn({ err }, "Could not ensure intercars_mappings table");
-    }
-  });
 
   // Get mapping stats
   app.get("/intercars/mapping-stats", async () => {
