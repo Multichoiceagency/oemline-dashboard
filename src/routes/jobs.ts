@@ -178,15 +178,6 @@ export async function jobRoutes(app: FastifyInstance) {
     return { jobId: job.id, queue: "ic-enrich", status: "queued" };
   });
 
-  // Get failed jobs for any queue
-  app.get("/jobs/:queue/failed", async (request) => {
-    const { queue: queueName } = request.params as { queue: string };
-    const q = getQueue(queueName);
-    if (!q) return { error: `Unknown queue: ${queueName}` };
-    const failed = await q.getFailed(0, 10);
-    return failed.map((j: any) => formatJob(j));
-  });
-
   // Manually trigger an index rebuild
   app.post("/jobs/index", async (request) => {
     const body = (request.body ?? {}) as { supplierCode?: string };
