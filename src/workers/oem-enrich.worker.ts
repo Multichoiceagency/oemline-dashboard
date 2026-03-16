@@ -29,12 +29,12 @@ interface GetArticlesResponse {
 /**
  * OEM Enrichment Worker
  *
- * Single-request TecDoc API approach: fetches all brands once, then iterates
- * through each brand's articles using getArticles with includeOemNumbers=true.
+ * Single-request TecDoc API approach: fetches all brands via getBrands, then
+ * iterates through each brand's articles using getArticles with includeOemNumbers=true.
  * Updates product_maps.oem_numbers for IC matching Phase 3B/3C.
  *
  * Strategy:
- * 1. Fetch ALL brands from TecDoc in one getBrands call
+ * 1. Fetch ALL brands from TecDoc in one getBrands call (direct fetch, perPage=100)
  * 2. For each brand with unmatched products, paginate getArticles
  * 3. Match returned articles to product_maps by normalized article number
  * 4. Store oem_numbers array for matched products
@@ -50,12 +50,28 @@ export async function processOemEnrichJob(job: Job<OemEnrichJobData>): Promise<v
   logger.info({ maxProducts }, "OEM enrichment starting — fetching all brands from TecDoc");
 
   // ── Step 1: Get ALL brands from TecDoc in one API call ─────────────────
-  const brandsResult = await tecdocRequest("getBrands", {
-    perPage: 500,
-    page: 1,
-  }) as { data?: { array?: Array<{ dataSupplierId?: number; mfrName?: string }> } };
+  // getBrands returns { data: { array: [...] } } — perPage capped at 100 but returns all brands
+  const brandsResponse = await fetch(TECDOC_API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Api-Key": TECDOC_API_KEY },
+    body: JSON.stringify({
+      getBrands: {
+        articleCountry: "NL",
+        providerId: PROVIDER_ID,
+        lang: "nl",
+        perPage: 100,
+        page: 1,
+      },
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
 
-  const tecdocBrands = (brandsResult.data?.array ?? [])
+  if (!brandsResponse.ok) {
+    throw new Error(`TecDoc getBrands failed: ${brandsResponse.status}`);
+  }
+
+  const brandsJson = (await brandsResponse.json()) as { data?: { array?: Array<{ dataSupplierId?: number; mfrName?: string }> } };
+  const tecdocBrands = (brandsJson.data?.array ?? [])
     .filter(b => b.dataSupplierId != null && b.mfrName)
     .map(b => ({ id: b.dataSupplierId!, name: b.mfrName! }));
 
