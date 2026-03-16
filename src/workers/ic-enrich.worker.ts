@@ -796,14 +796,14 @@ async function runAllMatchingPhases(): Promise<number> {
           const batch = matches.slice(i, i + 500);
           const cases = batch.map(m => `WHEN ${m.product_id} THEN '${m.tow_kod.replace(/'/g, "''")}'`).join(" ");
           const eanCases = batch.map(m => `WHEN ${m.product_id} THEN ${m.ic_ean ? `'${m.ic_ean.replace(/'/g, "''")}'` : "NULL"}`).join(" ");
-          const weightCases = batch.map(m => `WHEN ${m.product_id} THEN ${m.ic_weight ?? "NULL"}`).join(" ");
+          const weightCases = batch.map(m => `WHEN ${m.product_id} THEN ${m.ic_weight != null ? `${Number(m.ic_weight)}::double precision` : "NULL::double precision"}`).join(" ");
           const ids = batch.map(m => m.product_id).join(",");
           await prisma.$executeRawUnsafe(
             `UPDATE product_maps SET
               ic_sku = CASE id ${cases} END,
               ic_matched_at = NOW(),
-              ean = CASE WHEN ean IS NULL THEN CASE id ${eanCases} END ELSE ean END,
-              weight = CASE WHEN weight IS NULL THEN CASE id ${weightCases} END ELSE weight END
+              ean = CASE WHEN ean IS NULL THEN (CASE id ${eanCases} END)::text ELSE ean END,
+              weight = CASE WHEN weight IS NULL THEN (CASE id ${weightCases} END)::double precision ELSE weight END
             WHERE id IN (${ids})`
           );
         }
@@ -835,18 +835,14 @@ async function runAllMatchingPhases(): Promise<number> {
       AND UPPER(im.manufacturer) = sbr.supplier_brand
     WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
 
-  // Phase 3: BRAND_ARTICLE — normalized brand name match + article number
-  // Requires min 4 chars for prefix match to avoid false positives (NRF→NGK)
+  // Phase 3: BRAND_ARTICLE — exact normalized brand name match + article number
+  // Uses stored normalized columns for index-backed joins
   total += await runPhase("BRAND_ARTICLE", `
     SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight
     FROM product_maps pm
     JOIN brands b ON b.id = pm.brand_id
     JOIN intercars_mappings im ON im.normalized_article_number = pm.normalized_article_no
-      AND (
-        im.normalized_manufacturer = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
-        OR (LENGTH(im.normalized_manufacturer) >= 4 AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) LIKE im.normalized_manufacturer || '%')
-        OR (LENGTH(UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))) >= 4 AND im.normalized_manufacturer LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%')
-      )
+      AND im.normalized_manufacturer = COALESCE(b.normalized_name, UPPER(b.name))
     WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
 
   // Phase 4: EAN — exact EAN match (very reliable, brand-independent)
