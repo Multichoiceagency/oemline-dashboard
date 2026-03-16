@@ -2,7 +2,7 @@
 set -e
 
 echo "Running Prisma db push (create/update tables)..."
-npx prisma db push --skip-generate --accept-data-loss 2>&1 || echo "Warning: prisma db push failed, tables may already exist"
+timeout 30 npx prisma db push --skip-generate --accept-data-loss 2>&1 || echo "Warning: prisma db push timed out or failed, tables may already exist"
 
 echo "Starting application..."
 if [ -n "$APP_CMD" ]; then
