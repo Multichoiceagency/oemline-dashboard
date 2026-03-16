@@ -18,7 +18,7 @@ const API_BATCH_SIZE = 30;         // IC API max per call
 const PARALLEL_API_CALLS = 25;     // Concurrent API requests per sub-job
 const DB_PAGE_SIZE = 5000;         // Products per cursor page
 const RATE_LIMIT_PAUSE = 20;       // ms between parallel groups
-const SUB_JOB_SIZE = 10_000;       // Products per sub-job
+const SUB_JOB_SIZE = 50_000;       // ID range per sub-job (sparse IDs, actual products << this)
 const DEFAULT_STALE_MINUTES = 45;  // Only re-price products older than this
 
 interface ProductRow { id: number; ic_sku: string }
@@ -56,6 +56,14 @@ export async function processPricingJob(job: Job<PricingJobData>): Promise<void>
   }
 
   const startTime = Date.now();
+
+  // Skip fan-out if sub-jobs are already pending (prevents accumulation)
+  const pending = await pricingQueue.getJobCounts("active", "waiting", "prioritized");
+  const pendingTotal = pending.active + pending.waiting + pending.prioritized;
+  if (pendingTotal > 5) {
+    logger.info({ supplierCode, pendingTotal }, "Pricing: skipping fan-out, sub-jobs still pending");
+    return;
+  }
 
   const range = await prisma.$queryRawUnsafe<[{ min_id: number; max_id: number; cnt: bigint }]>(
     `SELECT MIN(id) AS min_id, MAX(id) AS max_id, COUNT(*) AS cnt

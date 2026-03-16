@@ -17,7 +17,7 @@ const API_BATCH_SIZE = 30;
 const PARALLEL_API_CALLS = 25;
 const DB_PAGE_SIZE = 5000;
 const RATE_LIMIT_PAUSE = 20;
-const SUB_JOB_SIZE = 10_000;
+const SUB_JOB_SIZE = 50_000;       // ID range per sub-job (sparse IDs, actual products << this)
 const DEFAULT_STALE_MINUTES = 20;
 
 interface ProductRow { id: number; ic_sku: string }
@@ -46,6 +46,14 @@ export async function processStockJob(job: Job<StockJobData>): Promise<void> {
   }
 
   const startTime = Date.now();
+
+  // Skip fan-out if sub-jobs are already pending (prevents accumulation)
+  const pending = await stockQueue.getJobCounts("active", "waiting", "prioritized");
+  const pendingTotal = pending.active + pending.waiting + pending.prioritized;
+  if (pendingTotal > 5) {
+    logger.info({ supplierCode, pendingTotal }, "Stock: skipping fan-out, sub-jobs still pending");
+    return;
+  }
 
   const rangeQuery = isIcLinked
     ? `SELECT MIN(id) AS min_id, MAX(id) AS max_id, COUNT(*) AS cnt
