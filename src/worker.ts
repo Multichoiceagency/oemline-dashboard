@@ -203,8 +203,9 @@ if (handles("ic-enrich") || handles("ic-match") || handles("sync")) {
   workers.push(new Worker("ic-enrich", processIcEnrichJob, {
     connection,
     concurrency: 1, // Single job — heavy API + DB usage
-    stalledInterval: 600_000,
-    lockDuration: 3_600_000, // 1 hour lock
+    stalledInterval: 1_800_000,  // 30 min stall check (was 10 min)
+    lockDuration: 7_200_000,     // 2 hour lock (was 1 hour) — 900K lookups take hours
+    maxStalledCount: 0,          // Never auto-fail on stall — this job is long-running
   }));
 }
 

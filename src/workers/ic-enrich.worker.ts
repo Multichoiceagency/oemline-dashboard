@@ -460,8 +460,10 @@ async function directIcLookup(
       await new Promise(r => setTimeout(r, 100));
     }
 
-    // Extend lock + log progress
-    try { await job.extendLock(job.token!, 600_000); } catch { /* ok */ }
+    // Extend lock to prevent stalling (extend by 10 min = 600K ms)
+    try { await job.extendLock(job.token!, 900_000); } catch (err) {
+      logger.warn({ err }, "Failed to extend lock — job may be stalled");
+    }
     const progress = 10 + Math.min(75, Math.floor((totalLooked / Math.max(limit, 1)) * 75));
     await job.updateProgress(progress);
 
