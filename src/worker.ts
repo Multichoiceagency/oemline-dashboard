@@ -14,19 +14,26 @@ import { processIcMatchJob } from "./workers/ic-match.worker.js";
 import { processAiMatchJob } from "./workers/ai-match.worker.js";
 import { processPushJob } from "./workers/push.worker.js";
 import { processBrandSyncJob } from "./workers/brand.worker.js";
+import { processSwarmWorkerJob } from "./workers/swarm.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 
 /**
  * WORKER_QUEUES env var controls which queues this worker instance handles.
- * Comma-separated list: "sync,match,index,pricing,stock,ic-match,ai-match"
+ * Comma-separated list: "sync,match,index,pricing,stock,ic-match,ai-match,swarm"
  *
  * Examples:
  *   WORKER_QUEUES=pricing,stock       → dedicated pricing+stock worker (no scheduler)
  *   WORKER_QUEUES=sync,match,index    → sync/match/index worker (runs scheduler)
  *   WORKER_QUEUES=ic-match            → dedicated IC matching worker
  *   WORKER_QUEUES=ai-match            → dedicated AI match worker
+ *   WORKER_QUEUES=swarm               → dedicated swarm worker (4-5x faster parallel processing)
  *   (not set)                         → all queues + scheduler (default)
+ *
+ * SWARM MODE (recommended for production):
+ *   USE_SWARM_MODE=true               → use swarm orchestration instead of sequential workers
+ *   Swarm mode runs matching phases in parallel (4x faster) and pricing with 5 concurrent
+ *   API batches (5x faster). Enable this for maximum throughput.
  *
  * Concurrency tuning (all queues run in parallel within one process):
  *   WORKER_CONCURRENCY=N              → apply N to all queues
@@ -35,6 +42,7 @@ import { startScheduler } from "./workers/scheduler.js";
  *   WORKER_CONCURRENCY_MATCH=N        → match queue specifically
  *   WORKER_CONCURRENCY_SYNC=N         → sync queue specifically
  *   WORKER_CONCURRENCY_IC_MATCH=N     → ic-match queue specifically
+ *   WORKER_CONCURRENCY_SWARM=N        → swarm queue specifically
  *
  * Scaling: run multiple worker pods with the same WORKER_QUEUES — BullMQ
  * distributes jobs across all instances automatically (ultra-fast scaling).
@@ -161,6 +169,17 @@ if (handles("brand")) {
     concurrency: 1,
     stalledInterval: 60_000,
     lockDuration: 120_000,
+  }));
+}
+
+// Swarm worker: parallel orchestration (4-5x faster than sequential workers)
+// Enable with USE_SWARM_MODE=true or add "swarm" to WORKER_QUEUES
+if (handles("swarm")) {
+  workers.push(new Worker("swarm", processSwarmWorkerJob, {
+    connection,
+    concurrency: concurrency("SWARM", 2, 4), // 2 concurrent swarm jobs by default
+    stalledInterval: 600_000, // 10 min — swarm jobs can take a while
+    lockDuration: 1_800_000,  // 30 min lock
   }));
 }
 

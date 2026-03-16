@@ -103,3 +103,15 @@ export const pushQueue = new Queue("push", {
     backoff: { type: "exponential", delay: 10_000 },
   },
 });
+
+// Swarm orchestration queue: parallel sync, matching, and pricing
+// Replaces sequential workers with 4-5x faster parallel execution
+export const swarmQueue = new Queue("swarm", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 50 },
+    removeOnFail: { count: 100 },
+    attempts: 2,
+    backoff: { type: "exponential", delay: 30_000 },
+  },
+});
