@@ -634,27 +634,128 @@ async function runAllMatchingPhases(): Promise<number> {
     }
   };
 
-  // All phases from intercars.ts syncCatalog
-  total += await runPhase("DIRECT", `SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight FROM product_maps pm JOIN brands b ON b.id = pm.brand_id JOIN intercars_mappings im ON im.tecdoc_prod IS NOT NULL AND b.tecdoc_id IS NOT NULL AND im.tecdoc_prod = b.tecdoc_id AND im.normalized_article_number = pm.normalized_article_no WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
+  // Phase 1: DIRECT — tecdoc_prod matches brand's tecdoc_id + article number match
+  total += await runPhase("DIRECT", `
+    SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight
+    FROM product_maps pm
+    JOIN brands b ON b.id = pm.brand_id
+    JOIN intercars_mappings im ON im.tecdoc_prod IS NOT NULL AND b.tecdoc_id IS NOT NULL
+      AND im.tecdoc_prod = b.tecdoc_id AND im.normalized_article_number = pm.normalized_article_no
+    WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
 
-  total += await runPhase("ALIASES", `SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight FROM product_maps pm JOIN brands b ON b.id = pm.brand_id JOIN supplier_brand_rules sbr ON sbr.brand_id = b.id AND sbr.active = true JOIN intercars_mappings im ON im.normalized_article_number = pm.normalized_article_no AND UPPER(im.manufacturer) = sbr.supplier_brand WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
+  // Phase 2: ALIASES — brand alias rules + article number match
+  total += await runPhase("ALIASES", `
+    SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight
+    FROM product_maps pm
+    JOIN brands b ON b.id = pm.brand_id
+    JOIN supplier_brand_rules sbr ON sbr.brand_id = b.id AND sbr.active = true
+    JOIN intercars_mappings im ON im.normalized_article_number = pm.normalized_article_no
+      AND UPPER(im.manufacturer) = sbr.supplier_brand
+    WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
 
-  total += await runPhase("BRAND_ARTICLE", `SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight FROM product_maps pm JOIN brands b ON b.id = pm.brand_id JOIN intercars_mappings im ON im.normalized_article_number = pm.normalized_article_no AND (im.normalized_manufacturer = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) OR (LENGTH(im.normalized_manufacturer) >= 2 AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) LIKE im.normalized_manufacturer || '%') OR (LENGTH(UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))) >= 2 AND im.normalized_manufacturer LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%')) WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
+  // Phase 3: BRAND_ARTICLE — normalized brand name match + article number
+  // Requires min 4 chars for prefix match to avoid false positives (NRF→NGK)
+  total += await runPhase("BRAND_ARTICLE", `
+    SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight
+    FROM product_maps pm
+    JOIN brands b ON b.id = pm.brand_id
+    JOIN intercars_mappings im ON im.normalized_article_number = pm.normalized_article_no
+      AND (
+        im.normalized_manufacturer = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+        OR (LENGTH(im.normalized_manufacturer) >= 4 AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) LIKE im.normalized_manufacturer || '%')
+        OR (LENGTH(UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))) >= 4 AND im.normalized_manufacturer LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%')
+      )
+    WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
 
-  total += await runPhase("EAN", `SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight FROM product_maps pm JOIN intercars_mappings im ON pm.ean IS NOT NULL AND im.ean IS NOT NULL AND LENGTH(pm.ean) >= 8 AND UPPER(TRIM(pm.ean)) = UPPER(TRIM(im.ean)) WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
+  // Phase 4: EAN — exact EAN match (very reliable, brand-independent)
+  total += await runPhase("EAN", `
+    SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight
+    FROM product_maps pm
+    JOIN intercars_mappings im ON pm.ean IS NOT NULL AND im.ean IS NOT NULL
+      AND LENGTH(pm.ean) >= 8 AND UPPER(TRIM(pm.ean)) = UPPER(TRIM(im.ean))
+    WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
 
-  total += await runPhase("TECDOC_ID", `SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight FROM product_maps pm JOIN intercars_mappings im ON pm.tecdoc_id IS NOT NULL AND im.tecdoc_prod IS NOT NULL AND CAST(pm.tecdoc_id AS TEXT) = CAST(im.tecdoc_prod AS TEXT) WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
+  // Phase 5: TECDOC_ID — match tecdoc_id (data supplier brand ID) + article
+  total += await runPhase("TECDOC_ID", `
+    SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight
+    FROM product_maps pm
+    JOIN intercars_mappings im ON pm.tecdoc_id IS NOT NULL AND im.tecdoc_prod IS NOT NULL
+      AND CAST(pm.tecdoc_id AS TEXT) = CAST(im.tecdoc_prod AS TEXT)
+      AND im.normalized_article_number = pm.normalized_article_no
+    WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
 
-  total += await runPhase("UNIQUE_ARTICLE", `SELECT pm.id AS product_id, ua.tow_kod, ua.ic_ean, ua.ic_weight FROM product_maps pm JOIN ic_unique_articles ua ON ua.norm_article = pm.normalized_article_no WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
+  // Phase 6: UNIQUE_ARTICLE — materialized view of articles unique to one IC mapping
+  total += await runPhase("UNIQUE_ARTICLE", `
+    SELECT pm.id AS product_id, ua.tow_kod, ua.ic_ean, ua.ic_weight
+    FROM product_maps pm
+    JOIN ic_unique_articles ua ON ua.norm_article = pm.normalized_article_no
+    WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
 
-  total += await runPhase("OEM", `SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight FROM product_maps pm JOIN intercars_mappings im ON im.normalized_article_number = UPPER(regexp_replace(pm.oem, '[^a-zA-Z0-9]', '', 'g')) WHERE pm.status = 'active' AND pm.ic_sku IS NULL AND pm.oem IS NOT NULL AND LENGTH(pm.oem) >= 5 ORDER BY pm.id`);
+  // Phase 7: OEM — match product OEM number against IC article numbers
+  total += await runPhase("OEM", `
+    SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight
+    FROM product_maps pm
+    JOIN intercars_mappings im ON im.normalized_article_number = UPPER(regexp_replace(pm.oem, '[^a-zA-Z0-9]', '', 'g'))
+    WHERE pm.status = 'active' AND pm.ic_sku IS NULL AND pm.oem IS NOT NULL AND LENGTH(pm.oem) >= 5
+    ORDER BY pm.id`);
 
-  total += await runPhase("LEADING_ZEROS", `SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight FROM product_maps pm JOIN brands b ON b.id = pm.brand_id JOIN intercars_mappings im ON LTRIM(im.normalized_article_number, '0') = LTRIM(pm.normalized_article_no, '0') AND LENGTH(LTRIM(pm.normalized_article_no, '0')) >= 5 AND (im.normalized_manufacturer = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) OR im.tecdoc_prod = b.tecdoc_id) WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
+  // Phase 8: LEADING_ZEROS — strip leading zeros for comparison
+  total += await runPhase("LEADING_ZEROS", `
+    SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight
+    FROM product_maps pm
+    JOIN brands b ON b.id = pm.brand_id
+    JOIN intercars_mappings im ON LTRIM(im.normalized_article_number, '0') = LTRIM(pm.normalized_article_no, '0')
+      AND LENGTH(LTRIM(pm.normalized_article_no, '0')) >= 5
+      AND (im.normalized_manufacturer = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) OR im.tecdoc_prod = b.tecdoc_id)
+    WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
 
-  total += await runPhase("CROSS_BRAND", `SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight FROM product_maps pm JOIN brands b ON b.id = pm.brand_id JOIN intercars_mappings im ON im.normalized_article_number = pm.normalized_article_no AND im.tecdoc_prod IS NOT NULL AND b.tecdoc_id IS NOT NULL AND im.tecdoc_prod = b.tecdoc_id WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
+  // Phase 9: CROSS_BRAND — tecdoc_prod = tecdoc_id + article (same as DIRECT but re-run after previous phases fill gaps)
+  total += await runPhase("CROSS_BRAND", `
+    SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight
+    FROM product_maps pm
+    JOIN brands b ON b.id = pm.brand_id
+    JOIN intercars_mappings im ON im.normalized_article_number = pm.normalized_article_no
+      AND im.tecdoc_prod IS NOT NULL AND b.tecdoc_id IS NOT NULL AND im.tecdoc_prod = b.tecdoc_id
+    WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
 
-  // Aggressive: article-only for long unique articles
-  total += await runPhase("ARTICLE_ONLY", `SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight FROM product_maps pm JOIN intercars_mappings im ON im.normalized_article_number = pm.normalized_article_no AND LENGTH(pm.normalized_article_no) >= 8 WHERE pm.status = 'active' AND pm.ic_sku IS NULL AND (SELECT COUNT(*) FROM intercars_mappings im2 WHERE im2.normalized_article_number = pm.normalized_article_no) = 1 ORDER BY pm.id`, 600_000);
+  // Phase 10: ARTICLE_ONLY — unique articles with length >= 6 (lowered from 8 for more coverage)
+  total += await runPhase("ARTICLE_ONLY", `
+    SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight
+    FROM product_maps pm
+    JOIN intercars_mappings im ON im.normalized_article_number = pm.normalized_article_no
+      AND LENGTH(pm.normalized_article_no) >= 6
+    WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+      AND (SELECT COUNT(*) FROM intercars_mappings im2 WHERE im2.normalized_article_number = pm.normalized_article_no) = 1
+    ORDER BY pm.id`, 600_000);
+
+  // Phase 11: TECDOC_BRAND_ONLY — match by tecdoc_prod brand ID only (no article, but same brand)
+  // This matches products where article numbers differ between TecDoc and IC formats
+  total += await runPhase("TECDOC_BRAND_FUZZY", `
+    SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight
+    FROM product_maps pm
+    JOIN brands b ON b.id = pm.brand_id
+    JOIN intercars_mappings im ON im.tecdoc_prod IS NOT NULL AND b.tecdoc_id IS NOT NULL
+      AND im.tecdoc_prod = b.tecdoc_id
+      AND LTRIM(im.normalized_article_number, '0') = LTRIM(pm.normalized_article_no, '0')
+      AND LENGTH(LTRIM(pm.normalized_article_no, '0')) >= 4
+    WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
+
+  // Phase 12: SUBSTRING_ARTICLE — IC article contains or is contained in product article
+  // Handles cases where IC index has prefix but article_number column wasn't updated
+  total += await runPhase("SUBSTRING_ARTICLE", `
+    SELECT DISTINCT ON (pm.id) pm.id as product_id, im.tow_kod, im.ean as ic_ean, im.weight as ic_weight
+    FROM product_maps pm
+    JOIN brands b ON b.id = pm.brand_id
+    JOIN intercars_mappings im ON (
+      im.normalized_article_number LIKE '%' || pm.normalized_article_no || '%'
+      OR pm.normalized_article_no LIKE '%' || im.normalized_article_number || '%'
+    )
+    AND LENGTH(pm.normalized_article_no) >= 6
+    AND LENGTH(im.normalized_article_number) >= 6
+    AND (im.normalized_manufacturer = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+      OR im.tecdoc_prod = b.tecdoc_id
+      OR EXISTS (SELECT 1 FROM supplier_brand_rules sbr WHERE sbr.brand_id = b.id AND sbr.active = true AND UPPER(im.manufacturer) = sbr.supplier_brand))
+    WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`, 900_000);
 
   return total;
 }
