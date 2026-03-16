@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue } from "./queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue } from "./queues.js";
 
 /**
  * Sets up repeatable jobs for continuous sync, match, pricing, stock, and index.
@@ -20,7 +20,7 @@ export async function startScheduler(): Promise<void> {
   logger.info("Starting job scheduler...");
 
   // Clean up old repeatable jobs to avoid duplicates
-  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue]) {
+  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue]) {
     const existing = await queue.getRepeatableJobs();
     for (const job of existing) {
       await queue.removeRepeatableByKey(job.key);
@@ -174,6 +174,18 @@ export async function startScheduler(): Promise<void> {
     }
   );
   logger.info("Scheduled OEM enrichment (6h)");
+
+  // IC catalog sync: every 24 hours — crawl all 3M+ products from IC API
+  // Fills intercars_mappings from 565K (CSV) to 3M+ (full API catalog)
+  await icCatalogQueue.add(
+    "ic-catalog-scheduled",
+    { skipDetails: true },
+    {
+      repeat: { every: 24 * 60 * 60 * 1000 },
+      jobId: "ic-catalog-repeat",
+    }
+  );
+  logger.info("Scheduled IC catalog sync (24h)");
 
   // Fire initial jobs immediately for all suppliers
   // Use jobId for deduplication — prevents duplicate jobs accumulating across restarts

@@ -16,6 +16,7 @@ import { processPushJob } from "./workers/push.worker.js";
 import { processBrandSyncJob } from "./workers/brand.worker.js";
 import { processSwarmWorkerJob } from "./workers/swarm.worker.js";
 import { processOemEnrichJob } from "./workers/oem-enrich.worker.js";
+import { processIcCatalogJob } from "./workers/ic-catalog.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 import { sendWorkerNotification } from "./lib/notify.js";
@@ -184,6 +185,17 @@ if (handles("oem-enrich") || handles("sync")) {
   }));
 }
 
+// IC catalog sync: crawl all 3M+ products from IC API into intercars_mappings
+// Runs alongside sync worker or as dedicated "ic-catalog" worker
+if (handles("ic-catalog") || handles("sync")) {
+  workers.push(new Worker("ic-catalog", processIcCatalogJob, {
+    connection,
+    concurrency: 1, // Single job — long-running crawl
+    stalledInterval: 600_000,
+    lockDuration: 7_200_000, // 2 hours — full crawl takes 2-4h
+  }));
+}
+
 // Swarm worker: parallel orchestration (4-5x faster than sequential workers)
 // Enable with USE_SWARM_MODE=true or add "swarm" to WORKER_QUEUES
 if (handles("swarm")) {
@@ -196,7 +208,7 @@ if (handles("swarm")) {
 }
 
 // Queues that send email on completion (parent jobs only, not sub-jobs)
-const NOTIFY_ON_COMPLETE = new Set(["sync", "ic-match", "index", "swarm", "brand"]);
+const NOTIFY_ON_COMPLETE = new Set(["sync", "ic-match", "index", "swarm", "brand", "ic-catalog"]);
 
 for (const worker of workers) {
   worker.on("completed", (job) => {

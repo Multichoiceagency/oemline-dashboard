@@ -115,6 +115,18 @@ export const oemEnrichQueue = new Queue("oem-enrich", {
   },
 });
 
+// IC catalog sync: crawl all 3M+ products from IC API into intercars_mappings
+// Replaces the 565K CSV with full API coverage for maximum IC matching
+export const icCatalogQueue = new Queue("ic-catalog", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 10 },
+    removeOnFail: { count: 20 },
+    attempts: 2,
+    backoff: { type: "exponential", delay: 60_000 },
+  },
+});
+
 // Swarm orchestration queue: parallel sync, matching, and pricing
 // Replaces sequential workers with 4-5x faster parallel execution
 export const swarmQueue = new Queue("swarm", {

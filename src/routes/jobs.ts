@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue, swarmQueue, oemEnrichQueue } from "../workers/queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue, swarmQueue, oemEnrichQueue, icCatalogQueue } from "../workers/queues.js";
 
 export async function jobRoutes(app: FastifyInstance) {
   // Get all job queue status
@@ -16,9 +16,10 @@ export async function jobRoutes(app: FastifyInstance) {
       getQueueCounts(swarmQueue),
     ]);
 
-    const [aiMatchCounts, oemEnrichCounts] = await Promise.all([
+    const [aiMatchCounts, oemEnrichCounts, icCatalogCounts] = await Promise.all([
       getQueueCounts(aiMatchQueue),
       getQueueCounts(oemEnrichQueue),
+      getQueueCounts(icCatalogQueue),
     ]);
     return {
       sync: syncCounts,
@@ -29,6 +30,7 @@ export async function jobRoutes(app: FastifyInstance) {
       icMatch: icMatchCounts,
       aiMatch: aiMatchCounts,
       oemEnrich: oemEnrichCounts,
+      icCatalog: icCatalogCounts,
       push: pushCounts,
       swarm: swarmCounts,
     };
@@ -130,6 +132,27 @@ export async function jobRoutes(app: FastifyInstance) {
       { priority: 1 }
     );
     return { jobId: job.id, queue: "oem-enrich", status: "queued" };
+  });
+
+  // Manually trigger IC catalog sync (crawl all 3M+ IC products)
+  app.post("/jobs/ic-catalog", async (request) => {
+    const body = (request.body ?? {}) as {
+      maxCategories?: number;
+      maxProducts?: number;
+      skipDetails?: boolean;
+      categoryIds?: string[];
+    };
+    const job = await icCatalogQueue.add(
+      "ic-catalog-manual",
+      {
+        maxCategories: body.maxCategories,
+        maxProducts: body.maxProducts,
+        skipDetails: body.skipDetails ?? true,
+        categoryIds: body.categoryIds,
+      },
+      { priority: 1 }
+    );
+    return { jobId: job.id, queue: "ic-catalog", status: "queued" };
   });
 
   // Manually trigger an index rebuild
@@ -1593,6 +1616,7 @@ function getQueue(name: string) {
     case "ai-match": return aiMatchQueue;
     case "push": return pushQueue;
     case "oem-enrich": return oemEnrichQueue;
+    case "ic-catalog": return icCatalogQueue;
     default: return null;
   }
 }
