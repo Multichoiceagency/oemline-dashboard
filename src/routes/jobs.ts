@@ -1628,6 +1628,15 @@ export async function jobRoutes(app: FastifyInstance) {
   });
 }
 
+// Get failed jobs for any queue
+app.get("/jobs/:queue/failed", async (request) => {
+  const { queue: queueName } = request.params as { queue: string };
+  const q = getQueue(queueName);
+  if (!q) return { error: `Unknown queue: ${queueName}` };
+  const failed = await q.getFailed(0, 10);
+  return failed.map(j => formatJob(j));
+});
+
 function getQueue(name: string) {
   switch (name) {
     case "sync": return syncQueue;
