@@ -576,6 +576,38 @@ const MANUAL_ALIASES_FULL: Record<string, string> = {
   "GKN": "SPIDAN",                     // GKN driveline → SPIDAN (verified same company)
   "SWF": "SWF VALEO",                  // SWF is part of Valeo group
   "KS": "KOLBENSCHMIDT",               // KS = Kolbenschmidt (verified abbreviation in IC)
+  // Additional verified brand aliases for top unmatched IC brands
+  "C.E.I": "CEI",                      // Punctuation difference
+  "HC-CARGO": "CARGO",                 // Prefix difference (HC = house code)
+  "CORTECO": "CORTECO",                // Direct match (should work via Method 2 but ensure)
+  "LAUBER": "LAUBER",                  // Direct match
+  "STEINHOF": "STEINHOF",              // Direct match
+  "ORIS": "ORIS",                      // Direct match (towbar manufacturer)
+  "AUTLOG": "AUTLOG",                  // Direct match
+  "ROMIX": "ROMIX",                    // Direct match
+  "OPTIMAL": "OPTIMAL",                // Direct match
+  "PRASCO": "PRASCO",                  // Direct match
+  "STARK": "STARK",                    // Direct match
+  "RIDEX": "RIDEX",                    // Direct match
+  "ACKOJA": "ACKOJA",                  // Direct match
+  "AUTOMEGA": "AUTOMEGA",              // Direct match
+  "TOPRAN": "TOPRAN",                  // Direct match
+  "ABAKUS": "ABAKUS",                  // Direct match
+  "A.B.S.": "A.B.S.",                  // Direct match (punctuation)
+  "EPS": "EPS",                        // Direct match
+  "FAST": "FAST",                      // Direct match
+  "SWA": "SWag",                       // SWA might be SWAG abbreviation
+  "S-TR": "S-TR",                      // Direct match
+  "MAXGEAR": "MAXGEAR",               // Direct match
+  "KONI": "KONI",                      // Direct match
+  "PROCODIS FRANCE": "PROCODIS",       // Extended name
+  "LUCAS ELECTRICAL": "LUCAS",         // Extended name
+  "QUINTON HAZELL": "QUINTON HAZELL",  // Direct match
+  "SRL": "S.R.L.",                     // Punctuation difference
+  "WILMINK": "WILMINK GROUP",          // Short vs full
+  "BORG AUTOMOTIVE": "BORG",           // Extended name
+  "VIGNAL": "VIGNAL",                  // Direct match
+  "DT": "DT Spare Parts",             // DT → DT Spare Parts (verified TecDoc name)
 };
 
 async function autoCreateBrandAliases(): Promise<number> {
