@@ -17,6 +17,31 @@ interface CsvRow {
 
 export async function intercarsRoutes(app: FastifyInstance) {
 
+  // Quick IC SKU assignment stats (lightweight)
+  app.get("/intercars/ic-sku-stats", async () => {
+    const [matched, unmatched, totalMappings] = await Promise.all([
+      prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+        `SELECT COUNT(*) as count FROM product_maps WHERE ic_sku IS NOT NULL AND status = 'active'`
+      ),
+      prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+        `SELECT COUNT(*) as count FROM product_maps WHERE ic_sku IS NULL AND status = 'active'`
+      ),
+      prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+        `SELECT COUNT(*) as count FROM intercars_mappings`
+      ),
+    ]);
+    const m = Number(matched[0]?.count ?? 0);
+    const u = Number(unmatched[0]?.count ?? 0);
+    const total = m + u;
+    return {
+      icMappings: Number(totalMappings[0]?.count ?? 0),
+      matched: m,
+      unmatched: u,
+      total,
+      matchRate: total > 0 ? `${((m / total) * 100).toFixed(1)}%` : "0%",
+    };
+  });
+
   // Get mapping stats
   app.get("/intercars/mapping-stats", async () => {
     try {
