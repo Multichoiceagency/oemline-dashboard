@@ -519,6 +519,100 @@ async function searchIcByIndex(index: string): Promise<IcProduct | null> {
 
 // ── Auto brand aliases ───────────────────────────────────────────────────
 
+// Comprehensive IC brand → TecDoc brand name mapping
+// IC CSV uses different brand names than TecDoc. This map covers all known differences.
+const MANUAL_ALIASES_FULL: Record<string, string> = {
+  // Major brands
+  "BLIC": "DIEDERICHS",
+  "KAYABA": "KYB",
+  "HANS PRIES": "HP",
+  "KS": "KOLBENSCHMIDT",
+  "LEMFOERDER": "LEMFÖRDER",
+  "REINZ": "VICTOR REINZ",
+  "VDO": "CONTINENTAL",
+  "CONTI": "CONTINENTAL",
+  "MEAT&DORIA": "MEAT & DORIA",
+  "GOETZE": "GOETZE ENGINE",
+  "LUK1": "LuK",
+  "SWF": "SWF VALEO",
+  "FAE": "FAE",
+  "CEI": "C.E.I",
+  "C.E.I": "C.E.I",
+  "NTK": "NGK",
+  "CTR": "CTR",
+  "OMP": "OMP",
+  "ULO": "ULO",
+  "ICER": "ICER BRAKES",
+  "FTE": "FTE AUTOMOTIVE",
+  "ZF PARTS": "ZF",
+  "ZF": "ZF",
+  "ATE1": "ATE",
+  "DAYCO1": "DAYCO",
+  "INA1": "INA",
+  "SNR": "NTN-SNR",
+  "PIERBURG1": "PIERBURG",
+  "BEHR": "MAHLE",
+  "BEHR HELLA": "HELLA",
+  "TRW AUTOMOTIVE": "TRW",
+  "SAINT-GOBAIN SEKURIT": "SAINT-GOBAIN",
+  "SAINT GOBAIN": "SAINT-GOBAIN",
+  "AUTOFREN SEINSA": "SEINSA",
+  "MEAT & DORIA": "MEAT & DORIA",
+  "HC-CARGO": "HC-CARGO",
+  "JAPAN PARTS": "JAPANPARTS",
+  "S-TR": "S-TR",
+  "PROFIT": "PROFIT",
+  "REINHOCH": "REINHOCH",
+  "LESJOFORS": "LESJÖFORS",
+  "LEMA": "LEMA",
+  "DEPO": "DEPO",
+  "MAHLE ORIGINAL": "MAHLE",
+  "KNECHT": "MAHLE",
+  "HENGST": "HENGST FILTER",
+  "MANN": "MANN-FILTER",
+  "MANN FILTER": "MANN-FILTER",
+  "PURFLUX": "PURFLUX",
+  "CHAMPION": "CHAMPION",
+  "HERTH+BUSS": "HERTH+BUSS ELPARTS",
+  "HERTH BUSS": "HERTH+BUSS ELPARTS",
+  "SACHS1": "SACHS",
+  "GKN": "SPIDAN",
+  "SPIDAN": "GKN",
+  "MAPCO": "MAPCO",
+  "METZGER": "METZGER",
+  "TOPRAN": "TOPRAN",
+  "OPTIMAL": "OPTIMAL",
+  "A.B.S.": "A.B.S.",
+  "DT SPARE PARTS": "DT",
+  "DT": "DT",
+  "PE AUTOMOTIVE": "PE Automotive",
+  "PE": "PE Automotive",
+  "DIESEL TECHNIC": "DT",
+  "FEBI BILSTEIN": "FEBI BILSTEIN",
+  "LAUBER": "LAUBER",
+  "STARDAX": "STARDAX",
+  "ROMIX": "ROMIX",
+  "TOURMAX": "TOURMAX",
+  "PNEUMATICS": "PNEUMATICS",
+  "ORIS": "ORIS",
+  "AUTLOG": "AUTLOG",
+  "CVA": "CVA",
+  "YAMATO": "YAMATO",
+  "STEINHOF": "STEINHOF",
+  "AKUSAN": "AKUSAN",
+  "ATHENA": "ATHENA",
+  "KOREA": "KOREA",
+  "CORTECO": "CORTECO",
+  "ALL BALLS": "ALL BALLS RACING",
+  "MAGNUM TECHNOLOGY": "Magnum Technology",
+  "SKF": "SKF",
+  "NRF": "NRF",
+  "LPR": "LPR",
+  "DELPHI TECHNOLOGIES": "DELPHI",
+  "NGK SPARK PLUG": "NGK",
+  "NGK": "NGK",
+};
+
 async function autoCreateBrandAliases(): Promise<number> {
   const supplier = await prisma.$queryRawUnsafe<Array<{ id: number }>>(
     `SELECT id FROM suppliers WHERE code = 'intercars' LIMIT 1`
@@ -527,24 +621,42 @@ async function autoCreateBrandAliases(): Promise<number> {
   const supplierId = supplier[0].id;
   let created = 0;
 
-  // Step 0: Delete wrong aliases where IC brand and TecDoc brand names don't match
-  // The old prefix-match method created many wrong aliases (ELRING→FEBI, NRF→NGK, etc.)
-  const deleted = await prisma.$executeRawUnsafe(
+  // Step 0: Delete ALL aliases that are not in our known-good list.
+  // Previously, prefix/containment matching created wrong aliases (NRF→NGK, SKF→FEBI, etc.)
+  // We now use a whitelist approach: only keep aliases from manual map, exact match, or validated containment.
+  // First, delete specific known-bad aliases
+  const KNOWN_BAD_ALIASES: Array<[string, string]> = [
+    ["NRF", "NGK"], ["NGK", "AUGER"], ["LPR", "NGK"], ["SKF", "FEBI BILSTEIN"],
+    ["CTR", "MONROE"], ["ULO", "LEMFÖRDER"], ["NTK", "MAPCO"], ["FAE", "FEBI BILSTEIN"],
+    ["SWF", "AUGER"], ["OMP", "FEBI BILSTEIN"], ["CEI", "AUGER"], ["C.E.I", "AUGER"],
+  ];
+  let deleted = 0;
+  for (const [icBrand, tdBrand] of KNOWN_BAD_ALIASES) {
+    const d = await prisma.$executeRawUnsafe(
+      `DELETE FROM supplier_brand_rules
+       WHERE supplier_id = $1
+         AND UPPER(regexp_replace(supplier_brand, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace($2, '[^a-zA-Z0-9]', '', 'g'))
+         AND brand_id = (SELECT id FROM brands WHERE UPPER(regexp_replace(name, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace($3, '[^a-zA-Z0-9]', '', 'g')) LIMIT 1)`,
+      supplierId, icBrand, tdBrand
+    );
+    deleted += d;
+  }
+  // Also delete aliases where normalized names share less than 50% of characters
+  const d2 = await prisma.$executeRawUnsafe(
     `DELETE FROM supplier_brand_rules
      WHERE supplier_id = $1
        AND UPPER(regexp_replace(supplier_brand, '[^a-zA-Z0-9]', '', 'g'))
            != UPPER(regexp_replace((SELECT name FROM brands WHERE id = brand_id), '[^a-zA-Z0-9]', '', 'g'))
        AND NOT (
-         -- Keep valid aliases where one name contains the other (TRW AUTOMOTIVE ↔ TRW)
          UPPER(regexp_replace(supplier_brand, '[^a-zA-Z0-9]', '', 'g'))
-           LIKE UPPER(regexp_replace((SELECT name FROM brands WHERE id = brand_id), '[^a-zA-Z0-9]', '', 'g')) || '%'
+           LIKE '%' || UPPER(regexp_replace((SELECT name FROM brands WHERE id = brand_id), '[^a-zA-Z0-9]', '', 'g')) || '%'
          OR UPPER(regexp_replace((SELECT name FROM brands WHERE id = brand_id), '[^a-zA-Z0-9]', '', 'g'))
-           LIKE UPPER(regexp_replace(supplier_brand, '[^a-zA-Z0-9]', '', 'g')) || '%'
+           LIKE '%' || UPPER(regexp_replace(supplier_brand, '[^a-zA-Z0-9]', '', 'g')) || '%'
        )
-       -- Only delete if supplier_brand length >= 4 (short brands like "KS" might be legit prefix matches)
-       AND LENGTH(regexp_replace(supplier_brand, '[^a-zA-Z0-9]', '', 'g')) >= 4`,
+       AND supplier_brand NOT IN (${Object.keys(MANUAL_ALIASES_FULL).map(k => `'${k}'`).join(",")})`,
     supplierId
   );
+  deleted += d2;
   if (deleted > 0) {
     logger.info({ deleted }, "Deleted wrong brand aliases");
   }
@@ -642,22 +754,8 @@ async function autoCreateBrandAliases(): Promise<number> {
     } catch { /* skip */ }
   }
 
-  // Method 4: Known manual aliases for common IC ↔ TecDoc brand differences
-  const MANUAL_ALIASES: Record<string, string> = {
-    "BLIC": "DIEDERICHS",          // BLIC = IC house brand for DIEDERICHS parts
-    "KAYABA": "KYB",               // KYB was formerly Kayaba
-    "HANS PRIES": "HP",            // Hans Pries = HP brand
-    "MAHLE": "KNECHT",             // MAHLE owns KNECHT (same company)
-    "KNECHT": "MAHLE",             // Reverse
-    "LUK1": "LUK",                // LUK1 = typo variant
-    "MEAT&DORIA": "MEAT & DORIA", // Formatting
-    "KS": "KOLBENSCHMIDT",        // KS = Kolbenschmidt
-    "GOETZE": "GOETZE ENGINE",    // Goetze = Goetze Engine
-    "VDO": "CONTINENTAL",          // VDO is Continental brand
-    "CONTI": "CONTINENTAL",        // Conti = Continental
-  };
-
-  for (const [icBrand, tecdocName] of Object.entries(MANUAL_ALIASES)) {
+  // Method 4: Use comprehensive manual aliases map defined above
+  for (const [icBrand, tecdocName] of Object.entries(MANUAL_ALIASES_FULL)) {
     try {
       const brand = await prisma.$queryRawUnsafe<Array<{ id: number }>>(
         `SELECT id FROM brands WHERE UPPER(regexp_replace(name, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace($1, '[^a-zA-Z0-9]', '', 'g')) LIMIT 1`,
@@ -674,7 +772,46 @@ async function autoCreateBrandAliases(): Promise<number> {
     } catch { /* skip */ }
   }
 
-  logger.info({ tecdoc: tecdocMatches.length, name: nameMatches.length, contain: containMatches.length, manual: Object.keys(MANUAL_ALIASES).length }, "Brand alias methods");
+  // Method 5: Data-driven alias discovery — find TecDoc brands that share article numbers
+  // with unmatched IC brands. If IC has article "123456" under brand "AKUSAN" and TecDoc has
+  // the same article "123456" under brand "Akusan", they must be the same brand.
+  const dataMatches = await prisma.$queryRawUnsafe<Array<{ brand_id: number; manufacturer: string; brand_name: string; matches: bigint }>>(
+    `SELECT
+      pm.brand_id, im.manufacturer, b.name AS brand_name, COUNT(*) AS matches
+    FROM intercars_mappings im
+    JOIN product_maps pm ON UPPER(regexp_replace(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+                          = UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
+    JOIN brands b ON b.id = pm.brand_id
+    WHERE NOT EXISTS (
+      SELECT 1 FROM supplier_brand_rules sbr
+      WHERE sbr.supplier_id = $1
+        AND UPPER(sbr.supplier_brand) = UPPER(im.manufacturer)
+    )
+    AND im.manufacturer NOT IN (SELECT UPPER(b2.name) FROM brands b2)
+    GROUP BY pm.brand_id, im.manufacturer, b.name
+    HAVING COUNT(*) >= 3
+    ORDER BY COUNT(*) DESC
+    LIMIT 200`,
+    supplierId
+  );
+
+  const seenMfr = new Set<string>();
+  for (const m of dataMatches) {
+    const mfrKey = m.manufacturer.toUpperCase();
+    if (seenMfr.has(mfrKey)) continue;
+    seenMfr.add(mfrKey);
+    try {
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO supplier_brand_rules (supplier_id, brand_id, supplier_brand, active, created_at)
+         VALUES ($1, $2, $3, true, NOW()) ON CONFLICT DO NOTHING`,
+        supplierId, m.brand_id, m.manufacturer.toUpperCase()
+      );
+      created++;
+      logger.info({ ic: m.manufacturer, tecdoc: m.brand_name, matches: Number(m.matches) }, "Data-driven alias found");
+    } catch { /* skip */ }
+  }
+
+  logger.info({ tecdoc: tecdocMatches.length, name: nameMatches.length, contain: containMatches.length, manual: Object.keys(MANUAL_ALIASES_FULL).length, data: dataMatches.length }, "Brand alias methods");
   return created;
 }
 
