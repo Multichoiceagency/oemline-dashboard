@@ -526,6 +526,91 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       totalNewMatches += phaseResults.uniqueArticle;
       yield [];
 
+      // ── Phase 2A: OEM number → IC article matching ─────────────────────────
+      // TecDoc products store OEM part numbers (e.g. VW '06A115561B').
+      // IC articles may match these OEM numbers directly.
+      logger.info({ supplier: this.code }, "Phase 2A: Matching by OEM number → IC article...");
+      phaseResults.oem = await runPhase("Phase2A-oem",
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        JOIN intercars_mappings im ON
+          im.normalized_article_number = UPPER(regexp_replace(pm.oem, '[^a-zA-Z0-9]', '', 'g'))
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+          AND pm.oem IS NOT NULL AND LENGTH(pm.oem) >= 5
+        ORDER BY pm.id`, 300_000);
+      totalNewMatches += phaseResults.oem;
+      yield [];
+
+      // ── Phase 2B: OEM numbers JSON array → IC article matching ─────────────
+      // product_maps.oem_numbers is a JSON array of OEM numbers per product
+      logger.info({ supplier: this.code }, "Phase 2B: Matching by OEM numbers array → IC article...");
+      phaseResults.oemArray = await runPhase("Phase2B-oemArray",
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        CROSS JOIN LATERAL jsonb_array_elements_text(pm.oem_numbers::jsonb) AS oem_val
+        JOIN intercars_mappings im ON
+          im.normalized_article_number = UPPER(regexp_replace(oem_val, '[^a-zA-Z0-9]', '', 'g'))
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+          AND pm.oem_numbers IS NOT NULL AND pm.oem_numbers::text != '[]'
+        ORDER BY pm.id`, 600_000);
+      totalNewMatches += phaseResults.oemArray;
+      yield [];
+
+      // ── Phase 2C: Relaxed article (strip leading zeros) ────────────────────
+      // Some TecDoc articles have leading zeros that IC strips, or vice versa
+      logger.info({ supplier: this.code }, "Phase 2C: Matching by article with leading zeros stripped...");
+      phaseResults.relaxedZeros = await runPhase("Phase2C-relaxedZeros",
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        JOIN brands b ON b.id = pm.brand_id
+        JOIN intercars_mappings im ON
+          LTRIM(im.normalized_article_number, '0') = LTRIM(pm.normalized_article_no, '0')
+          AND LENGTH(LTRIM(pm.normalized_article_no, '0')) >= 5
+          AND (
+            im.normalized_manufacturer = b.normalized_name
+            OR im.tecdoc_prod = b.tecdoc_id
+          )
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+        ORDER BY pm.id`, 300_000);
+      totalNewMatches += phaseResults.relaxedZeros;
+      yield [];
+
+      // ── Phase 2D: Cross-brand article (multi-brand IC articles, pick best) ─
+      // Phase 1D only matches unique articles (1 IC brand). This phase handles
+      // articles that appear under multiple IC brands — safe when product's brand
+      // has a known alias or tecdoc_prod match.
+      logger.info({ supplier: this.code }, "Phase 2D: Cross-brand article matching...");
+      phaseResults.crossBrand = await runPhase("Phase2D-crossBrand",
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        JOIN brands b ON b.id = pm.brand_id
+        JOIN intercars_mappings im ON
+          im.normalized_article_number = pm.normalized_article_no
+          AND (
+            im.tecdoc_prod IS NOT NULL AND b.tecdoc_id IS NOT NULL
+            AND im.tecdoc_prod = b.tecdoc_id
+          )
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+        ORDER BY pm.id`, 300_000);
+      totalNewMatches += phaseResults.crossBrand;
+      yield [];
+
       logger.info(
         { supplier: this.code, totalNewMatches, byPhase: phaseResults },
         "IC matching complete — pricing/stock handled by dedicated workers"

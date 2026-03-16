@@ -89,6 +89,11 @@ export async function ensureNormalizedIndexes(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_im_tecdoc_prod_article ON intercars_mappings (tecdoc_prod, normalized_article_number) WHERE tecdoc_prod IS NOT NULL`,
     // brands — tecdoc_id for Phase DIRECT join
     `CREATE INDEX IF NOT EXISTS idx_brands_tecdoc_id ON brands (tecdoc_id) WHERE tecdoc_id IS NOT NULL`,
+    // Phase 2A: OEM → IC article matching
+    `CREATE INDEX IF NOT EXISTS idx_pm_oem_norm_unmatched ON product_maps (UPPER(regexp_replace(oem, '[^a-zA-Z0-9]', '', 'g'))) WHERE oem IS NOT NULL AND ic_sku IS NULL AND status = 'active'`,
+    // Phase 2C: leading-zero-stripped article matching
+    `CREATE INDEX IF NOT EXISTS idx_im_norm_article_ltrim ON intercars_mappings (LTRIM(normalized_article_number, '0'))`,
+    `CREATE INDEX IF NOT EXISTS idx_pm_norm_article_ltrim ON product_maps (LTRIM(normalized_article_no, '0')) WHERE ic_sku IS NULL AND status = 'active'`,
     // Legacy functional indexes kept as fallback while generated columns backfill
     `CREATE INDEX IF NOT EXISTS idx_im_article_norm ON intercars_mappings (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')))`,
     `CREATE INDEX IF NOT EXISTS idx_pm_article_no_norm ON product_maps (UPPER(regexp_replace(article_no, '[^a-zA-Z0-9]', '', 'g')))`,
