@@ -345,13 +345,12 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         "InterCars pricing enrichment starting"
       );
 
-      // Test OAuth2 token first
+      // Test OAuth2 token (non-fatal — matching phases don't need API, only pricing/stock do)
       try {
         const testHeaders = await this.authHeaders();
         logger.info({ supplier: this.code, hasToken: !!testHeaders.Authorization }, "InterCars OAuth2 token acquired");
       } catch (authErr) {
-        logger.error({ err: authErr, supplier: this.code }, "InterCars OAuth2 token FAILED - cannot proceed");
-        return;
+        logger.warn({ err: authErr, supplier: this.code }, "InterCars OAuth2 token failed — matching phases will still run (no API needed)");
       }
 
       let totalNewMatches = 0;
