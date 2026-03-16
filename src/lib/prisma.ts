@@ -44,10 +44,22 @@ export async function ensureNormalizedIndexes(): Promise<void> {
          GENERATED ALWAYS AS (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g'))) STORED`,
     ],
     [
+      "intercars_mappings (normalized_manufacturer)",
+      `ALTER TABLE intercars_mappings
+         ADD COLUMN IF NOT EXISTS normalized_manufacturer TEXT
+         GENERATED ALWAYS AS (UPPER(regexp_replace(manufacturer, '[^a-zA-Z0-9]', '', 'g'))) STORED`,
+    ],
+    [
       "product_maps",
       `ALTER TABLE product_maps
          ADD COLUMN IF NOT EXISTS normalized_article_no TEXT
          GENERATED ALWAYS AS (UPPER(regexp_replace(article_no, '[^a-zA-Z0-9]', '', 'g'))) STORED`,
+    ],
+    [
+      "brands (normalized_name)",
+      `ALTER TABLE brands
+         ADD COLUMN IF NOT EXISTS normalized_name TEXT
+         GENERATED ALWAYS AS (UPPER(regexp_replace(name, '[^a-zA-Z0-9]', '', 'g'))) STORED`,
     ],
   ];
 
@@ -61,17 +73,18 @@ export async function ensureNormalizedIndexes(): Promise<void> {
 
   // ── Indexes ───────────────────────────────────────────────────────────────────
   const indexes = [
-    // IC mappings — stored article column + manufacturer functional
+    // IC mappings — stored columns for fast joins
     `CREATE INDEX IF NOT EXISTS idx_im_norm_article_stored ON intercars_mappings (normalized_article_number)`,
-    `CREATE INDEX IF NOT EXISTS idx_im_manufacturer_norm ON intercars_mappings (UPPER(regexp_replace(manufacturer, '[^a-zA-Z0-9]', '', 'g')))`,
+    `CREATE INDEX IF NOT EXISTS idx_im_norm_manufacturer_stored ON intercars_mappings (normalized_manufacturer)`,
+    `CREATE INDEX IF NOT EXISTS idx_im_norm_article_mfr ON intercars_mappings (normalized_article_number, normalized_manufacturer)`,
     // product_maps — stored article column, full + partial (unmatched only)
     `CREATE INDEX IF NOT EXISTS idx_pm_norm_article_stored ON product_maps (normalized_article_no)`,
     `CREATE INDEX IF NOT EXISTS idx_pm_norm_article_unmatched ON product_maps (normalized_article_no) WHERE ic_sku IS NULL AND status = 'active'`,
     // product_maps — other normalized lookups
     `CREATE INDEX IF NOT EXISTS idx_pm_oem_norm ON product_maps (UPPER(regexp_replace(oem, '[^a-zA-Z0-9]', '', 'g'))) WHERE oem IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_pm_ean_norm ON product_maps (regexp_replace(ean, '[^0-9]', '', 'g')) WHERE ean IS NOT NULL`,
-    // brands
-    `CREATE INDEX IF NOT EXISTS idx_brands_name_norm ON brands (UPPER(regexp_replace(name, '[^a-zA-Z0-9]', '', 'g')))`,
+    // brands — stored normalized name for fast IC matching joins
+    `CREATE INDEX IF NOT EXISTS idx_brands_norm_name_stored ON brands (normalized_name)`,
     // Legacy functional indexes kept as fallback while generated columns backfill
     `CREATE INDEX IF NOT EXISTS idx_im_article_norm ON intercars_mappings (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')))`,
     `CREATE INDEX IF NOT EXISTS idx_pm_article_no_norm ON product_maps (UPPER(regexp_replace(article_no, '[^a-zA-Z0-9]', '', 'g')))`,

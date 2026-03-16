@@ -730,6 +730,80 @@ export async function intercarsRoutes(app: FastifyInstance) {
     };
   });
 
+  // Auto-create brand aliases for IC brands that match TecDoc brands by normalized name
+  app.post("/intercars/brand-aliases/auto", async () => {
+    const icSupplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });
+    if (!icSupplier) return { error: "InterCars supplier not found" };
+
+    const icBrands = await prisma.$queryRawUnsafe<Array<{ manufacturer: string; count: bigint }>>(
+      `SELECT manufacturer, COUNT(*) as count FROM intercars_mappings GROUP BY manufacturer ORDER BY count DESC`
+    );
+    const tecdocBrands = await prisma.brand.findMany({ select: { id: true, name: true } });
+    const existingAliases = await prisma.supplierBrandRule.findMany({
+      where: { supplierId: icSupplier.id },
+      select: { supplierBrand: true },
+    });
+    const existingSet = new Set(existingAliases.map((a) => a.supplierBrand.toUpperCase()));
+
+    const normalize = (s: string) => s.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+    const tecdocByNorm = new Map<string, { id: number; name: string }>();
+    for (const b of tecdocBrands) {
+      tecdocByNorm.set(normalize(b.name), b);
+    }
+
+    let created = 0;
+    let skipped = 0;
+    const newAliases: Array<{ icBrand: string; tecdocBrand: string; count: number }> = [];
+
+    for (const ic of icBrands) {
+      const icUpper = ic.manufacturer.toUpperCase();
+      if (existingSet.has(icUpper)) { skipped++; continue; }
+
+      const icNorm = normalize(ic.manufacturer);
+      let match: { id: number; name: string } | undefined;
+
+      // Exact normalized match
+      if (tecdocByNorm.has(icNorm)) {
+        match = tecdocByNorm.get(icNorm);
+      } else {
+        // Prefix match (IC starts with TecDoc or vice versa, min 3 chars)
+        for (const [tn, tb] of tecdocByNorm) {
+          if (icNorm.length >= 3 && tn.length >= 3) {
+            if (tn.startsWith(icNorm) || icNorm.startsWith(tn)) {
+              match = tb;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!match) { skipped++; continue; }
+
+      try {
+        await prisma.supplierBrandRule.create({
+          data: {
+            supplierId: icSupplier.id,
+            brandId: match.id,
+            supplierBrand: icUpper,
+            active: true,
+          },
+        });
+        created++;
+        newAliases.push({ icBrand: ic.manufacturer, tecdocBrand: match.name, count: Number(ic.count) });
+        existingSet.add(icUpper);
+      } catch {
+        skipped++;
+      }
+    }
+
+    return {
+      created,
+      skipped,
+      totalIcMappingsCovered: newAliases.reduce((s, a) => s + a.count, 0),
+      newAliases,
+    };
+  });
+
   // Clean up old IC duplicate product_maps (products with IC supplier_id that duplicate TecDoc products)
   app.delete("/intercars/cleanup-duplicates", async () => {
     const icSupplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });

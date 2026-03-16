@@ -438,16 +438,14 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         JOIN intercars_mappings im ON
           im.normalized_article_number = pm.normalized_article_no
           AND (
-            UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+            im.normalized_manufacturer = b.normalized_name
             OR (
-              LENGTH(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) >= 2
-              AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
-                LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+              LENGTH(im.normalized_manufacturer) >= 2
+              AND b.normalized_name LIKE im.normalized_manufacturer || '%'
             )
             OR (
-              LENGTH(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) >= 2
-              AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
-                LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+              LENGTH(b.normalized_name) >= 2
+              AND im.normalized_manufacturer LIKE b.normalized_name || '%'
             )
           )
         WHERE pm.status = 'active' AND pm.ic_sku IS NULL
