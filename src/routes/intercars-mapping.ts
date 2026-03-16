@@ -870,10 +870,40 @@ export async function intercarsRoutes(app: FastifyInstance) {
     const fileStream = fs.createReadStream(csvPath);
     const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
 
+    const esc = (s: string) => s.replace(/'/g, "''");
+
     let header: string[] = [];
     let lineNum = 0;
     let imported = 0;
+    let errors = 0;
     let batch: Array<{ towKod: string; icIndex: string; articleNumber: string; tecdocProd: number | null }> = [];
+
+    const flushBatch = async () => {
+      if (batch.length === 0) return;
+      const valuesStr = batch.map((r) =>
+        `('${esc(r.towKod)}', '${esc(r.icIndex)}', '${esc(r.articleNumber)}', '', ${r.tecdocProd ?? "NULL"}, '', NULL, NULL, false, NOW())`
+      ).join(",\n");
+
+      try {
+        await prisma.$executeRawUnsafe(`
+          INSERT INTO intercars_mappings (
+            tow_kod, ic_index, article_number, manufacturer,
+            tecdoc_prod, description, ean, weight,
+            blocked_return, created_at
+          )
+          VALUES ${valuesStr}
+          ON CONFLICT (tow_kod) DO UPDATE SET
+            ic_index = CASE WHEN EXCLUDED.ic_index != '' THEN EXCLUDED.ic_index ELSE intercars_mappings.ic_index END,
+            article_number = CASE WHEN EXCLUDED.article_number != '' AND intercars_mappings.article_number = '' THEN EXCLUDED.article_number ELSE intercars_mappings.article_number END,
+            tecdoc_prod = COALESCE(EXCLUDED.tecdoc_prod, intercars_mappings.tecdoc_prod)
+        `);
+        imported += batch.length;
+      } catch (err) {
+        errors++;
+        logger.warn({ err, lineNum, batchSize: batch.length }, "Stock CSV file import batch failed");
+      }
+      batch = [];
+    };
 
     for await (const line of rl) {
       lineNum++;
@@ -898,56 +928,14 @@ export async function intercarsRoutes(app: FastifyInstance) {
       });
 
       if (batch.length >= 1000) {
-        const values = batch.map((r) =>
-          Prisma.sql`(${r.towKod}, ${r.icIndex}, ${r.articleNumber}, '', ${r.tecdocProd}, '', NULL, NULL, false, NOW())`
-        );
-        try {
-          await prisma.$executeRaw`
-            INSERT INTO intercars_mappings (
-              tow_kod, ic_index, article_number, manufacturer,
-              tecdoc_prod, description, ean, weight,
-              blocked_return, created_at
-            )
-            VALUES ${Prisma.join(values)}
-            ON CONFLICT (tow_kod) DO UPDATE SET
-              ic_index = CASE WHEN EXCLUDED.ic_index != '' THEN EXCLUDED.ic_index ELSE intercars_mappings.ic_index END,
-              article_number = CASE WHEN EXCLUDED.article_number != '' AND intercars_mappings.article_number = '' THEN EXCLUDED.article_number ELSE intercars_mappings.article_number END,
-              tecdoc_prod = COALESCE(EXCLUDED.tecdoc_prod, intercars_mappings.tecdoc_prod)
-          `;
-          imported += batch.length;
-        } catch (err) {
-          logger.warn({ err, lineNum }, "Stock CSV file import batch failed");
-        }
-        batch = [];
+        await flushBatch();
       }
     }
 
-    // Flush remaining
-    if (batch.length > 0) {
-      const values = batch.map((r) =>
-        Prisma.sql`(${r.towKod}, ${r.icIndex}, ${r.articleNumber}, '', ${r.tecdocProd}, '', NULL, NULL, false, NOW())`
-      );
-      try {
-        await prisma.$executeRaw`
-          INSERT INTO intercars_mappings (
-            tow_kod, ic_index, article_number, manufacturer,
-            tecdoc_prod, description, ean, weight,
-            blocked_return, created_at
-          )
-          VALUES ${Prisma.join(values)}
-          ON CONFLICT (tow_kod) DO UPDATE SET
-            ic_index = CASE WHEN EXCLUDED.ic_index != '' THEN EXCLUDED.ic_index ELSE intercars_mappings.ic_index END,
-            article_number = CASE WHEN EXCLUDED.article_number != '' AND intercars_mappings.article_number = '' THEN EXCLUDED.article_number ELSE intercars_mappings.article_number END,
-            tecdoc_prod = COALESCE(EXCLUDED.tecdoc_prod, intercars_mappings.tecdoc_prod)
-        `;
-        imported += batch.length;
-      } catch (err) {
-        logger.warn({ err }, "Stock CSV file import final batch failed");
-      }
-    }
+    await flushBatch();
 
-    logger.info({ imported, totalLines: lineNum - 1 }, "Stock CSV file import complete");
-    return { imported, totalLines: lineNum - 1 };
+    logger.info({ imported, errors, totalLines: lineNum - 1 }, "Stock CSV file import complete");
+    return { imported, errors, totalLines: lineNum - 1 };
   });
 
   // Clean up old IC duplicate product_maps (products with IC supplier_id that duplicate TecDoc products)
