@@ -978,6 +978,68 @@ export async function intercarsRoutes(app: FastifyInstance) {
     return { imported, errors, totalLines: lineNum - 1 };
   });
 
+  // Diagnostic: understand why fuzzy phases find 0 matches
+  app.get("/intercars/fuzzy-diagnostic", async () => {
+    const queries: Record<string, string> = {
+      // How many unmatched products have OEM data?
+      unmatchedWithOem: `SELECT COUNT(*) as count FROM product_maps WHERE ic_sku IS NULL AND status = 'active' AND oem IS NOT NULL AND LENGTH(oem) >= 5`,
+      // How many have oem_numbers JSON array?
+      unmatchedWithOemNumbers: `SELECT COUNT(*) as count FROM product_maps WHERE ic_sku IS NULL AND status = 'active' AND oem_numbers IS NOT NULL AND oem_numbers::text != '[]' AND oem_numbers::text != 'null'`,
+      // Phase 2A potential: OEM → IC article
+      phase2aPotential: `SELECT COUNT(DISTINCT pm.id) as count
+        FROM product_maps pm
+        JOIN intercars_mappings im ON
+          im.normalized_article_number = UPPER(regexp_replace(pm.oem, '[^a-zA-Z0-9]', '', 'g'))
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+          AND pm.oem IS NOT NULL AND LENGTH(pm.oem) >= 5`,
+      // Phase 2B potential: oem_numbers array → IC article
+      phase2bPotential: `SELECT COUNT(DISTINCT pm.id) as count
+        FROM product_maps pm
+        CROSS JOIN LATERAL jsonb_array_elements_text(pm.oem_numbers::jsonb) AS oem_val
+        JOIN intercars_mappings im ON
+          im.normalized_article_number = UPPER(regexp_replace(oem_val, '[^a-zA-Z0-9]', '', 'g'))
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+          AND pm.oem_numbers IS NOT NULL AND pm.oem_numbers::text != '[]'`,
+      // Phase 2C potential: leading-zero strip
+      phase2cPotential: `SELECT COUNT(DISTINCT pm.id) as count
+        FROM product_maps pm
+        JOIN brands b ON b.id = pm.brand_id
+        JOIN intercars_mappings im ON
+          LTRIM(im.normalized_article_number, '0') = LTRIM(pm.normalized_article_no, '0')
+          AND LENGTH(LTRIM(pm.normalized_article_no, '0')) >= 5
+          AND (im.normalized_manufacturer = b.normalized_name OR im.tecdoc_prod = b.tecdoc_id)
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL`,
+      // Sample unmatched products: what do they look like?
+      sampleUnmatched: `SELECT pm.id, pm.article_no, pm.oem, pm.oem_numbers::text as oem_numbers, pm.ean, b.name as brand, b.tecdoc_id
+        FROM product_maps pm JOIN brands b ON b.id = pm.brand_id
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+        ORDER BY RANDOM() LIMIT 10`,
+      // How many IC mappings have normalized_article_number populated?
+      icWithNormArticle: `SELECT COUNT(*) as count FROM intercars_mappings WHERE normalized_article_number IS NOT NULL AND normalized_article_number != ''`,
+      // How many product_maps have normalized_article_no populated?
+      pmWithNormArticle: `SELECT COUNT(*) as count FROM product_maps WHERE normalized_article_no IS NOT NULL AND normalized_article_no != '' AND status = 'active'`,
+      // Check if normalized columns exist
+      icSampleNormalized: `SELECT article_number, normalized_article_number, manufacturer, normalized_manufacturer, tecdoc_prod FROM intercars_mappings LIMIT 5`,
+      pmSampleNormalized: `SELECT article_no, normalized_article_no, oem, brand_id FROM product_maps WHERE status = 'active' LIMIT 5`,
+    };
+
+    const results: Record<string, unknown> = {};
+    for (const [key, sql] of Object.entries(queries)) {
+      try {
+        const rows = await prisma.$queryRawUnsafe<unknown[]>(sql);
+        if (rows.length === 1 && typeof rows[0] === "object" && rows[0] !== null && "count" in rows[0]) {
+          results[key] = Number((rows[0] as { count: bigint }).count);
+        } else {
+          results[key] = rows;
+        }
+      } catch (err) {
+        results[key] = { error: String(err).slice(0, 300) };
+      }
+    }
+
+    return results;
+  });
+
   // Clean up old IC duplicate product_maps (products with IC supplier_id that duplicate TecDoc products)
   app.delete("/intercars/cleanup-duplicates", async () => {
     const icSupplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });
