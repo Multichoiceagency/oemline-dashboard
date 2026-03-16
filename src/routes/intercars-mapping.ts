@@ -58,7 +58,7 @@ export async function intercarsRoutes(app: FastifyInstance) {
         `SELECT manufacturer, COUNT(*) as count FROM intercars_mappings GROUP BY manufacturer ORDER BY count DESC LIMIT 20`
       );
 
-      // Phase DIRECT diagnostic: how many products could be matched by tecdoc_prod + article?
+      // Phase DIRECT diagnostic: how many UNMATCHED products could be matched?
       const directMatchPotential = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
         `SELECT COUNT(DISTINCT pm.id) as count
          FROM product_maps pm
@@ -68,7 +68,17 @@ export async function intercarsRoutes(app: FastifyInstance) {
            AND b.tecdoc_id IS NOT NULL
            AND im.tecdoc_prod = b.tecdoc_id
            AND im.normalized_article_number = pm.normalized_article_no
-         WHERE pm.status = 'active'`
+         WHERE pm.status = 'active' AND pm.ic_sku IS NULL`
+      );
+
+      // Total matched (for comparison)
+      const alreadyMatched = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+        `SELECT COUNT(*) as count FROM product_maps WHERE ic_sku IS NOT NULL AND status = 'active'`
+      );
+
+      // How many active unmatched products total?
+      const totalUnmatched = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
+        `SELECT COUNT(*) as count FROM product_maps WHERE ic_sku IS NULL AND status = 'active'`
       );
 
       const brandsWithTecdocId = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
@@ -79,7 +89,9 @@ export async function intercarsRoutes(app: FastifyInstance) {
         totalMappings: total,
         withTecdocProd: Number(withTecdocProd[0]?.count ?? 0),
         brandsWithTecdocId: Number(brandsWithTecdocId[0]?.count ?? 0),
-        directMatchPotential: Number(directMatchPotential[0]?.count ?? 0),
+        directMatchNewPotential: Number(directMatchPotential[0]?.count ?? 0),
+        alreadyMatched: Number(alreadyMatched[0]?.count ?? 0),
+        totalUnmatched: Number(totalUnmatched[0]?.count ?? 0),
         topBrands: topBrands.map((b) => ({ brand: b.manufacturer, count: Number(b.count) })),
       };
     } catch {
