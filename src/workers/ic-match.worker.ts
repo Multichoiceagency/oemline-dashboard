@@ -29,13 +29,19 @@ export async function processIcMatchJob(job: Job<IcMatchJobData>): Promise<void>
   let batchCount = 0;
   let matchedCount = 0;
 
-  // syncCatalog now only runs Phase 0-1D (fast matching, no pricing API calls)
-  for await (const products of adapter.syncCatalog("")) {
-    batchCount++;
-    matchedCount += products.length;
-    // Extend lock — Phase 1D (unique article CTE) can run >10 min on large datasets
-    try { await job.extendLock(job.token!, 600_000); } catch { /* ok */ }
-    await job.updateProgress(batchCount);
+  try {
+    // syncCatalog now only runs Phase 0-1D (fast matching, no pricing API calls)
+    for await (const products of adapter.syncCatalog("")) {
+      batchCount++;
+      matchedCount += products.length;
+      // Extend lock — phases can take >10 min on 1M+ datasets
+      try { await job.extendLock(job.token!, 1_200_000); } catch { /* ok */ }
+      await job.updateProgress(batchCount);
+    }
+  } catch (err) {
+    // Re-throw so BullMQ marks the job as failed with proper reason and can retry
+    logger.error({ err, supplierCode, batchCount, matchedCount }, "IC match job failed");
+    throw err;
   }
 
   logger.info({ supplierCode, batchCount, matchedCount }, "IC match job completed");

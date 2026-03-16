@@ -3,8 +3,8 @@ import { config } from "../config.js";
 import { logger } from "./logger.js";
 
 const url = new URL(config.DATABASE_URL);
-url.searchParams.set("connection_limit", "20");
-url.searchParams.set("pool_timeout", "10");
+url.searchParams.set("connection_limit", "50");
+url.searchParams.set("pool_timeout", "15");
 
 export const prisma = new PrismaClient({
   datasourceUrl: url.toString(),
@@ -75,6 +75,9 @@ export async function ensureNormalizedIndexes(): Promise<void> {
     // Legacy functional indexes kept as fallback while generated columns backfill
     `CREATE INDEX IF NOT EXISTS idx_im_article_norm ON intercars_mappings (UPPER(regexp_replace(article_number, '[^a-zA-Z0-9]', '', 'g')))`,
     `CREATE INDEX IF NOT EXISTS idx_pm_article_no_norm ON product_maps (UPPER(regexp_replace(article_no, '[^a-zA-Z0-9]', '', 'g')))`,
+    // Pricing/stock worker: cursor + staleness queries on 1M+ rows
+    `CREATE INDEX IF NOT EXISTS idx_pm_active_ic_sku ON product_maps (id) WHERE ic_sku IS NOT NULL AND status = 'active'`,
+    `CREATE INDEX IF NOT EXISTS idx_pm_stale_pricing ON product_maps (id, updated_at) WHERE ic_sku IS NOT NULL AND status = 'active'`,
   ];
 
   for (const sql of indexes) {

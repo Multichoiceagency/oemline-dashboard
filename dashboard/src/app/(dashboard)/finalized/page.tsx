@@ -72,10 +72,12 @@ import {
   Clock,
   Zap,
   Send,
+  ChevronDown,
 } from "lucide-react";
 
 export default function FinalizedPage() {
   const { t } = useTranslation();
+  const [fieldDistOpen, setFieldDistOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
@@ -451,39 +453,50 @@ export default function FinalizedPage() {
         </Card>
       )}
 
-      {/* Index field distribution */}
+      {/* Index field distribution (collapsible) */}
       {stats?.indexStats && Object.keys(stats.indexStats.fieldDistribution).length > 0 && (
         <Card>
-          <CardHeader>
+          <CardHeader
+            className="cursor-pointer select-none"
+            onClick={() => setFieldDistOpen((v) => !v)}
+          >
             <CardTitle className="text-base flex items-center gap-2">
               <Search className="h-4 w-4" />
               Meilisearch Index — Velden Verdeling
+              <span className="text-xs font-normal text-muted-foreground ml-1">
+                ({Object.keys(stats.indexStats.fieldDistribution).length} velden)
+              </span>
+              <ChevronDown
+                className={`h-4 w-4 ml-auto transition-transform ${fieldDistOpen ? "rotate-180" : ""}`}
+              />
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-              {Object.entries(stats.indexStats.fieldDistribution)
-                .sort(([, a], [, b]) => b - a)
-                .map(([field, count]) => {
-                  const pct = stats.indexStats!.numberOfDocuments > 0
-                    ? Math.round((count / stats.indexStats!.numberOfDocuments) * 100)
-                    : 0;
-                  return (
-                    <div key={field} className="rounded-lg border p-3">
-                      <p className="text-xs font-mono text-muted-foreground truncate">{field}</p>
-                      <p className="text-lg font-bold">{formatNumber(count)}</p>
-                      <div className="mt-1 h-1.5 rounded-full bg-muted overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${pct === 100 ? "bg-emerald-500" : pct > 50 ? "bg-blue-500" : "bg-amber-500"}`}
-                          style={{ width: `${pct}%` }}
-                        />
+          {fieldDistOpen && (
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                {Object.entries(stats.indexStats.fieldDistribution)
+                  .sort(([, a], [, b]) => b - a)
+                  .map(([field, count]) => {
+                    const pct = stats.indexStats!.numberOfDocuments > 0
+                      ? Math.round((count / stats.indexStats!.numberOfDocuments) * 100)
+                      : 0;
+                    return (
+                      <div key={field} className="rounded-lg border p-3">
+                        <p className="text-xs font-mono text-muted-foreground truncate">{field}</p>
+                        <p className="text-lg font-bold">{formatNumber(count)}</p>
+                        <div className="mt-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${pct === 100 ? "bg-emerald-500" : pct > 50 ? "bg-blue-500" : "bg-amber-500"}`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">{pct}%</p>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-1">{pct}%</p>
-                    </div>
-                  );
-                })}
-            </div>
-          </CardContent>
+                    );
+                  })}
+              </div>
+            </CardContent>
+          )}
         </Card>
       )}
 

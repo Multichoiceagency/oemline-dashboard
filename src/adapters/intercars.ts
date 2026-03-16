@@ -354,25 +354,60 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         return;
       }
 
-      let totalUpdated = 0;
       let totalNewMatches = 0;
-      let totalApiErrors = 0;
+      const phaseResults: Record<string, number> = {};
 
       // =========== PHASE 1: Match unlinked products (no icSku yet) ===========
 
       // Refresh the materialized view so Phase 1D uses current IC data.
-      // CONCURRENTLY: view stays readable, no lock on intercars_mappings.
       await refreshIcUniqueArticles();
 
-      // Strategy 0: Brand aliases from supplier_brand_rules table
-      // This catches known mismatches like KAYABA→KYB, DT→DT Spare Parts, BLIC→DIEDERICHS
+      // Helper: run a matching phase with statement timeout + error isolation
+      // Each phase gets its own transaction with work_mem + statement_timeout
+      // so one slow/failing phase doesn't kill the entire job.
+      type MatchRow = { product_id: number; tow_kod: string; ic_ean: string | null; ic_weight: number | null };
+
+      const runPhase = async (name: string, sql: string, timeoutMs = 300_000): Promise<number> => {
+        const phaseStart = Date.now();
+        try {
+          const matches = await prisma.$transaction(async (tx) => {
+            await tx.$executeRawUnsafe(`SET LOCAL work_mem = '256MB'`);
+            await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '${timeoutMs}'`);
+            return tx.$queryRawUnsafe<MatchRow[]>(sql);
+          }, { timeout: timeoutMs + 30_000 }); // Prisma timeout slightly longer than PG timeout
+
+          if (matches.length > 0) {
+            logger.info({ supplier: this.code, phase: name, count: matches.length }, "Matches found, storing icSku");
+            for (let i = 0; i < matches.length; i += 500) {
+              const batch = matches.slice(i, i + 500);
+              const cases = batch.map((m) => `WHEN ${m.product_id} THEN '${m.tow_kod.replace(/'/g, "''")}'`).join(" ");
+              const eanCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_ean ? `'${m.ic_ean.replace(/'/g, "''")}'` : "NULL"}`).join(" ");
+              const weightCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_weight ?? "NULL"}`).join(" ");
+              const ids = batch.map((m) => m.product_id).join(",");
+              await prisma.$executeRawUnsafe(
+                `UPDATE product_maps SET
+                  ic_sku = CASE id ${cases} END,
+                  ic_matched_at = NOW(),
+                  ean = CASE id ${eanCases} ELSE ean END,
+                  weight = CASE id ${weightCases} ELSE weight END
+                WHERE id IN (${ids})`
+              );
+            }
+          }
+
+          const durationSec = ((Date.now() - phaseStart) / 1000).toFixed(1);
+          logger.info({ supplier: this.code, phase: name, matches: matches.length, durationSec }, "Phase completed");
+          return matches.length;
+        } catch (err) {
+          const durationSec = ((Date.now() - phaseStart) / 1000).toFixed(1);
+          logger.warn({ supplier: this.code, phase: name, err, durationSec }, "Phase failed (non-fatal, continuing)");
+          return 0;
+        }
+      };
+
+      // ── Phase 0: Brand aliases ──────────────────────────────────────────────
       logger.info({ supplier: this.code }, "Phase 0: Matching via brand aliases...");
-      const aliasMatches = await prisma.$queryRawUnsafe<Array<{
-        product_id: number;
-        tow_kod: string;
-        ic_ean: string | null;
-        ic_weight: number | null;
-      }>>(
+      phaseResults.aliases = await runPhase("Phase0-aliases",
         `SELECT DISTINCT ON (pm.id)
           pm.id as product_id,
           im.tow_kod,
@@ -385,40 +420,14 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
           im.normalized_article_number = pm.normalized_article_no
           AND UPPER(im.manufacturer) = sbr.supplier_brand
         WHERE pm.status = 'active' AND pm.ic_sku IS NULL
-        ORDER BY pm.id`
-      );
-
-      if (aliasMatches.length > 0) {
-        logger.info({ supplier: this.code, count: aliasMatches.length }, "Brand alias matches found, storing icSku");
-        for (let i = 0; i < aliasMatches.length; i += 500) {
-          const batch = aliasMatches.slice(i, i + 500);
-          const cases = batch.map((m) => `WHEN ${m.product_id} THEN '${m.tow_kod.replace(/'/g, "''")}'`).join(" ");
-          const eanCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_ean ? `'${m.ic_ean.replace(/'/g, "''")}'` : "NULL"}`).join(" ");
-          const weightCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_weight ?? "NULL"}`).join(" ");
-          const ids = batch.map((m) => m.product_id).join(",");
-          await prisma.$executeRawUnsafe(
-            `UPDATE product_maps SET
-              ic_sku = CASE id ${cases} END,
-              ic_matched_at = NOW(),
-              ean = CASE id ${eanCases} ELSE ean END,
-              weight = CASE id ${weightCases} ELSE weight END
-            WHERE id IN (${ids})`
-          );
-        }
-        totalNewMatches += aliasMatches.length;
-      }
-
-      // Yield heartbeat so BullMQ can extend the job lock during long-running phases
+        ORDER BY pm.id`, 120_000);
+      totalNewMatches += phaseResults.aliases;
       yield [];
 
-      // Strategy A: Brand + article_number (flexible brand matching with lowered prefix threshold)
+      // ── Phase 1A: Brand + article number ────────────────────────────────────
+      // Uses stored normalized columns for fast index join (no runtime regexp)
       logger.info({ supplier: this.code }, "Phase 1A: Matching by brand + article number...");
-      const brandMatches = await prisma.$queryRawUnsafe<Array<{
-        product_id: number;
-        tow_kod: string;
-        ic_ean: string | null;
-        ic_weight: number | null;
-      }>>(
+      phaseResults.brandArticle = await runPhase("Phase1A-brand+article",
         `SELECT DISTINCT ON (pm.id)
           pm.id as product_id,
           im.tow_kod,
@@ -442,39 +451,13 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
             )
           )
         WHERE pm.status = 'active' AND pm.ic_sku IS NULL
-        ORDER BY pm.id`
-      );
+        ORDER BY pm.id`, 300_000);
+      totalNewMatches += phaseResults.brandArticle;
+      yield [];
 
-      if (brandMatches.length > 0) {
-        logger.info({ supplier: this.code, count: brandMatches.length }, "Brand+article matches found, storing icSku");
-        for (let i = 0; i < brandMatches.length; i += 500) {
-          const batch = brandMatches.slice(i, i + 500);
-          const cases = batch.map((m) => `WHEN ${m.product_id} THEN '${m.tow_kod.replace(/'/g, "''")}'`).join(" ");
-          const eanCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_ean ? `'${m.ic_ean.replace(/'/g, "''")}'` : "NULL"}`).join(" ");
-          const weightCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_weight ?? "NULL"}`).join(" ");
-          const ids = batch.map((m) => m.product_id).join(",");
-          await prisma.$executeRawUnsafe(
-            `UPDATE product_maps SET
-              ic_sku = CASE id ${cases} END,
-              ic_matched_at = NOW(),
-              ean = CASE id ${eanCases} ELSE ean END,
-              weight = CASE id ${weightCases} ELSE weight END
-            WHERE id IN (${ids})`
-          );
-        }
-        totalNewMatches += brandMatches.length;
-      }
-
-      yield []; // Heartbeat for BullMQ lock extension
-
-      // Strategy B: EAN match (products without icSku that have an EAN matching IC CSV)
+      // ── Phase 1B: EAN match ─────────────────────────────────────────────────
       logger.info({ supplier: this.code }, "Phase 1B: Matching by EAN...");
-      const eanMatches = await prisma.$queryRawUnsafe<Array<{
-        product_id: number;
-        tow_kod: string;
-        ic_ean: string | null;
-        ic_weight: number | null;
-      }>>(
+      phaseResults.ean = await runPhase("Phase1B-ean",
         `SELECT DISTINCT ON (pm.id)
           pm.id as product_id,
           im.tow_kod,
@@ -487,87 +470,31 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
           AND LENGTH(pm.ean) >= 8
           AND UPPER(TRIM(pm.ean)) = UPPER(TRIM(im.ean))
         WHERE pm.status = 'active' AND pm.ic_sku IS NULL
-        ORDER BY pm.id`
-      );
+        ORDER BY pm.id`, 300_000);
+      totalNewMatches += phaseResults.ean;
+      yield [];
 
-      if (eanMatches.length > 0) {
-        logger.info({ supplier: this.code, count: eanMatches.length }, "EAN matches found, storing icSku");
-        for (let i = 0; i < eanMatches.length; i += 500) {
-          const batch = eanMatches.slice(i, i + 500);
-          const cases = batch.map((m) => `WHEN ${m.product_id} THEN '${m.tow_kod.replace(/'/g, "''")}'`).join(" ");
-          const weightCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_weight ?? "NULL"}`).join(" ");
-          const ids = batch.map((m) => m.product_id).join(",");
-          await prisma.$executeRawUnsafe(
-            `UPDATE product_maps SET
-              ic_sku = CASE id ${cases} END,
-              ic_matched_at = NOW(),
-              weight = CASE id ${weightCases} ELSE weight END
-            WHERE id IN (${ids})`
-          );
-        }
-        totalNewMatches += eanMatches.length;
-      }
-
-      yield []; // Heartbeat for BullMQ lock extension
-
-      // Strategy C: TecDoc product ID match
-      // Wrapped in transaction with high work_mem to avoid pgsql_tmp spill
+      // ── Phase 1C: TecDoc product ID match ───────────────────────────────────
       logger.info({ supplier: this.code }, "Phase 1C: Matching by TecDoc product ID...");
-      const tecdocMatches = await prisma.$transaction(async (tx) => {
-        await tx.$executeRawUnsafe(`SET LOCAL work_mem = '256MB'`);
-        return tx.$queryRawUnsafe<Array<{
-          product_id: number;
-          tow_kod: string;
-          ic_ean: string | null;
-          ic_weight: number | null;
-        }>>(
-          `SELECT DISTINCT ON (pm.id)
-            pm.id as product_id,
-            im.tow_kod,
-            im.ean as ic_ean,
-            im.weight as ic_weight
-          FROM product_maps pm
-          JOIN intercars_mappings im ON
-            pm.tecdoc_id IS NOT NULL
-            AND im.tecdoc_prod IS NOT NULL
-            AND CAST(pm.tecdoc_id AS TEXT) = CAST(im.tecdoc_prod AS TEXT)
-          WHERE pm.status = 'active' AND pm.ic_sku IS NULL
-          ORDER BY pm.id`
-        );
-      }, { timeout: 120_000 });
+      phaseResults.tecdocId = await runPhase("Phase1C-tecdocId",
+        `SELECT DISTINCT ON (pm.id)
+          pm.id as product_id,
+          im.tow_kod,
+          im.ean as ic_ean,
+          im.weight as ic_weight
+        FROM product_maps pm
+        JOIN intercars_mappings im ON
+          pm.tecdoc_id IS NOT NULL
+          AND im.tecdoc_prod IS NOT NULL
+          AND CAST(pm.tecdoc_id AS TEXT) = CAST(im.tecdoc_prod AS TEXT)
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+        ORDER BY pm.id`, 300_000);
+      totalNewMatches += phaseResults.tecdocId;
+      yield [];
 
-      if (tecdocMatches.length > 0) {
-        logger.info({ supplier: this.code, count: tecdocMatches.length }, "TecDoc ID matches found, storing icSku");
-        for (let i = 0; i < tecdocMatches.length; i += 500) {
-          const batch = tecdocMatches.slice(i, i + 500);
-          const cases = batch.map((m) => `WHEN ${m.product_id} THEN '${m.tow_kod.replace(/'/g, "''")}'`).join(" ");
-          const eanCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_ean ? `'${m.ic_ean.replace(/'/g, "''")}'` : "NULL"}`).join(" ");
-          const weightCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_weight ?? "NULL"}`).join(" ");
-          const ids = batch.map((m) => m.product_id).join(",");
-          await prisma.$executeRawUnsafe(
-            `UPDATE product_maps SET
-              ic_sku = CASE id ${cases} END,
-              ic_matched_at = NOW(),
-              ean = CASE id ${eanCases} ELSE ean END,
-              weight = CASE id ${weightCases} ELSE weight END
-            WHERE id IN (${ids})`
-          );
-        }
-        totalNewMatches += tecdocMatches.length;
-      }
-
-      yield []; // Heartbeat for BullMQ lock extension
-
-      // Strategy D: Article number only (no brand check, only when article is unique in IC)
-      // Uses the ic_unique_articles materialized view (pre-aggregated at run start) instead
-      // of a live GROUP BY/HAVING — turns a 5-min hash agg into a millisecond index join.
+      // ── Phase 1D: Unique article number (materialized view) ─────────────────
       logger.info({ supplier: this.code }, "Phase 1D: Matching by unique article number (mat-view)...");
-      const articleOnlyMatches = await prisma.$queryRawUnsafe<Array<{
-        product_id: number;
-        tow_kod: string;
-        ic_ean: string | null;
-        ic_weight: number | null;
-      }>>(
+      phaseResults.uniqueArticle = await runPhase("Phase1D-uniqueArticle",
         `SELECT
           pm.id AS product_id,
           ua.tow_kod,
@@ -576,47 +503,17 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         FROM product_maps pm
         JOIN ic_unique_articles ua ON ua.norm_article = pm.normalized_article_no
         WHERE pm.status = 'active' AND pm.ic_sku IS NULL
-        ORDER BY pm.id`
-      );
-
-      if (articleOnlyMatches.length > 0) {
-        logger.info({ supplier: this.code, count: articleOnlyMatches.length }, "Unique article matches found, storing icSku");
-        for (let i = 0; i < articleOnlyMatches.length; i += 500) {
-          const batch = articleOnlyMatches.slice(i, i + 500);
-          const cases = batch.map((m) => `WHEN ${m.product_id} THEN '${m.tow_kod.replace(/'/g, "''")}'`).join(" ");
-          const eanCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_ean ? `'${m.ic_ean.replace(/'/g, "''")}'` : "NULL"}`).join(" ");
-          const weightCases = batch.map((m) => `WHEN ${m.product_id} THEN ${m.ic_weight ?? "NULL"}`).join(" ");
-          const ids = batch.map((m) => m.product_id).join(",");
-          await prisma.$executeRawUnsafe(
-            `UPDATE product_maps SET
-              ic_sku = CASE id ${cases} END,
-              ic_matched_at = NOW(),
-              ean = CASE id ${eanCases} ELSE ean END,
-              weight = CASE id ${weightCases} ELSE weight END
-            WHERE id IN (${ids})`
-          );
-        }
-        totalNewMatches += articleOnlyMatches.length;
-      }
-
-      yield []; // Final heartbeat
+        ORDER BY pm.id`, 120_000);
+      totalNewMatches += phaseResults.uniqueArticle;
+      yield [];
 
       logger.info(
-        {
-          supplier: this.code,
-          totalNewMatches,
-          byPhase: {
-            aliases: aliasMatches.length,
-            brandArticle: brandMatches.length,
-            ean: eanMatches.length,
-            tecdocId: tecdocMatches.length,
-            uniqueArticle: articleOnlyMatches.length,
-          },
-        },
+        { supplier: this.code, totalNewMatches, byPhase: phaseResults },
         "IC matching complete — pricing/stock handled by dedicated workers"
       );
     } catch (err) {
       logger.error({ err, supplier: this.code }, "IC matching failed");
+      throw err; // Re-throw so BullMQ can mark as failed and retry
     }
   }
 

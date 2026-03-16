@@ -46,7 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Validate the stored token against the API
+    // Validate the stored token against the API (silent — no console errors)
     fetch(`${API_BASE}/api/auth/session`, {
       headers: { Authorization: `Bearer ${stored}` },
     })
@@ -55,16 +55,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setToken(stored);
           setEmail(storedEmail);
         } else {
-          // Token invalid/expired — clean up
+          // Token invalid/expired — clean up silently
           localStorage.removeItem(TOKEN_KEY);
           localStorage.removeItem(EMAIL_KEY);
+          setToken(null);
+          setEmail(null);
         }
       })
       .catch(() => {
-        // Network error — keep token for offline resilience
-        // but still allow access since we can't verify
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(EMAIL_KEY);
+        // Network error — still set token for offline resilience
+        setToken(stored);
+        setEmail(storedEmail);
       })
       .finally(() => setIsLoading(false));
   }, []);

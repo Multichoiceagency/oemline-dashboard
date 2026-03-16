@@ -33,6 +33,9 @@ const envSchema = z.object({
   SMTP_PASSWORD: z.string().default(""),
   EMAIL_FROM: z.string().default("info@oemline.eu"),
 
+  // Notification recipients (comma-separated emails for worker status alerts)
+  NOTIFY_EMAILS: z.string().default("info@oemline.eu,info@multichoiceagency.nl"),
+
   // Auth
   AUTH_ALLOWED_EMAILS: z.string().default(""),
   AUTH_CODE_TTL: z.coerce.number().default(300),

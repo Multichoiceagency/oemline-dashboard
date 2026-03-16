@@ -17,6 +17,7 @@ import { processBrandSyncJob } from "./workers/brand.worker.js";
 import { processSwarmWorkerJob } from "./workers/swarm.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
+import { sendWorkerNotification } from "./lib/notify.js";
 
 /**
  * WORKER_QUEUES env var controls which queues this worker instance handles.
@@ -183,9 +184,23 @@ if (handles("swarm")) {
   }));
 }
 
+// Queues that send email on completion (parent jobs only, not sub-jobs)
+const NOTIFY_ON_COMPLETE = new Set(["sync", "ic-match", "index", "swarm", "brand"]);
+
 for (const worker of workers) {
   worker.on("completed", (job) => {
     logger.info({ queue: worker.name, jobId: job.id }, "Job completed");
+
+    // Send completion notification for important jobs (not sub-jobs)
+    if (NOTIFY_ON_COMPLETE.has(worker.name) && !job.data?.isSubJob) {
+      const durationMs = job.finishedOn && job.processedOn ? job.finishedOn - job.processedOn : undefined;
+      sendWorkerNotification({
+        worker: worker.name.charAt(0).toUpperCase() + worker.name.slice(1),
+        status: "completed",
+        supplierCode: job.data?.supplierCode,
+        durationMs,
+      }).catch(() => {}); // fire-and-forget
+    }
   });
 
   worker.on("failed", (job, err) => {
@@ -193,6 +208,16 @@ for (const worker of workers) {
       { queue: worker.name, jobId: job?.id, err: err.message },
       "Job failed"
     );
+
+    // Send failure notification for all non-sub-job failures
+    if (job && !job.data?.isSubJob) {
+      sendWorkerNotification({
+        worker: worker.name.charAt(0).toUpperCase() + worker.name.slice(1),
+        status: "failed",
+        supplierCode: job.data?.supplierCode,
+        errorMessage: err.message,
+      }).catch(() => {}); // fire-and-forget
+    }
   });
 
   worker.on("error", (err) => {
