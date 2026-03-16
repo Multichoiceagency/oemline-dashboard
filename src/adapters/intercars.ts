@@ -370,7 +370,7 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         const phaseStart = Date.now();
         try {
           const matches = await prisma.$transaction(async (tx) => {
-            await tx.$executeRawUnsafe(`SET LOCAL work_mem = '16MB'`);
+            await tx.$executeRawUnsafe(`SET LOCAL work_mem = '64MB'`);
             await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '${timeoutMs}'`);
             return tx.$queryRawUnsafe<MatchRow[]>(sql);
           }, { timeout: timeoutMs + 30_000 }); // Prisma timeout slightly longer than PG timeout
