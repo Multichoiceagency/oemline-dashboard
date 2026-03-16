@@ -1000,15 +1000,27 @@ export async function intercarsRoutes(app: FastifyInstance) {
           im.normalized_article_number = UPPER(regexp_replace(oem_val, '[^a-zA-Z0-9]', '', 'g'))
         WHERE pm.status = 'active' AND pm.ic_sku IS NULL
           AND pm.oem_numbers IS NOT NULL AND pm.oem_numbers::text != '[]'`,
-      // Phase 2C potential: leading-zero strip
+      // Phase 2C potential: leading-zero strip (use tecdoc_prod only, normalized_name may not exist)
       phase2cPotential: `SELECT COUNT(DISTINCT pm.id) as count
         FROM product_maps pm
         JOIN brands b ON b.id = pm.brand_id
         JOIN intercars_mappings im ON
           LTRIM(im.normalized_article_number, '0') = LTRIM(pm.normalized_article_no, '0')
           AND LENGTH(LTRIM(pm.normalized_article_no, '0')) >= 5
-          AND (im.normalized_manufacturer = b.normalized_name OR im.tecdoc_prod = b.tecdoc_id)
+          AND im.tecdoc_prod IS NOT NULL AND b.tecdoc_id IS NOT NULL AND im.tecdoc_prod = b.tecdoc_id
         WHERE pm.status = 'active' AND pm.ic_sku IS NULL`,
+      // Phase 2A sample: show actual matches to verify correctness
+      phase2aSample: `SELECT pm.id as product_id, pm.article_no, pm.oem, b.name as brand,
+          im.tow_kod, im.article_number as ic_article, im.manufacturer as ic_brand
+        FROM product_maps pm
+        JOIN brands b ON b.id = pm.brand_id
+        JOIN intercars_mappings im ON
+          im.normalized_article_number = UPPER(regexp_replace(pm.oem, '[^a-zA-Z0-9]', '', 'g'))
+        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+          AND pm.oem IS NOT NULL AND LENGTH(pm.oem) >= 5
+        LIMIT 15`,
+      // Check if brands.normalized_name column exists
+      brandsHasNormalizedName: `SELECT column_name FROM information_schema.columns WHERE table_name = 'brands' AND column_name = 'normalized_name'`,
       // Sample unmatched products: what do they look like?
       sampleUnmatched: `SELECT pm.id, pm.article_no, pm.oem, pm.oem_numbers::text as oem_numbers, pm.ean, b.name as brand, b.tecdoc_id
         FROM product_maps pm JOIN brands b ON b.id = pm.brand_id
