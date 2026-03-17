@@ -801,8 +801,8 @@ async function autoCreateBrandAliases(): Promise<number> {
       );
       if (brand[0]) {
         await prisma.$executeRawUnsafe(
-          `INSERT INTO supplier_brand_rules (supplier_id, brand_id, supplier_brand, active, created_at)
-           VALUES ($1, $2, $3, true, NOW()) ON CONFLICT DO NOTHING`,
+          `INSERT INTO supplier_brand_rules (supplier_id, brand_id, supplier_brand, active, created_at, updated_at)
+           VALUES ($1, $2, $3, true, NOW(), NOW()) ON CONFLICT DO NOTHING`,
           supplierId, brand[0].id, icBrand.toUpperCase()
         );
         created++;
