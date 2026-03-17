@@ -608,6 +608,56 @@ const MANUAL_ALIASES_FULL: Record<string, string> = {
   "BORG AUTOMOTIVE": "BORG",           // Extended name
   "VIGNAL": "VIGNAL",                  // Direct match
   "DT": "DT Spare Parts",             // DT → DT Spare Parts (verified TecDoc name)
+  // BOSCH sub-brands in InterCars
+  "BOSCH Brakes": "BOSCH",            // IC sub-brand
+  "BOSCH Filers": "BOSCH",            // IC sub-brand (typo in IC system)
+  "BOSCH DIESEL": "BOSCH",            // IC sub-brand
+  "BOSCH Belts": "BOSCH",             // IC sub-brand
+  "BOSCH Wipers": "BOSCH",            // IC sub-brand
+  "BOSCH Injection": "BOSCH",         // IC sub-brand
+  "BOSCH Electrics": "BOSCH",         // IC sub-brand
+  "BOSCH Bateries": "BOSCH",          // IC sub-brand (typo in IC system)
+  "BOSCH-ELEKTRONARZĘDZ": "BOSCH",    // IC sub-brand (Polish: power tools)
+  "KIOSK SBC": "BOSCH",               // IC alias for Bosch
+  // VALEO sub-brands
+  "VALEO1": "VALEO",                  // IC system variant
+  "VALEO WYCIERACZKI": "VALEO",       // IC sub-brand (Polish: wipers)
+  // DELPHI sub-brands
+  "DELPHI DIESEL": "DELPHI",          // IC sub-brand
+  "DELPHI WTRYSK": "DELPHI",          // IC sub-brand (Polish: injection)
+  // DENSO sub-brands
+  "DENSO WTRYSK": "DENSO",            // IC sub-brand (Polish: injection)
+  "DENSO DIESEL": "DENSO",            // IC sub-brand
+  // GATES sub-brand
+  "GATES OFF HIGHWAY": "GATES",       // IC sub-brand (off-highway division)
+  // DONALDSON sub-brand
+  "DONALDSON OFF": "DONALDSON",        // IC sub-brand (off-highway)
+  // TRW sub-brand
+  "TRW ENGINE COMPONENT": "TRW",      // IC sub-brand
+  // ABE sub-brand
+  "ABE PERFORMANCE": "ABE",           // IC sub-brand
+  // Continental sub-brand
+  "CONTI Industry": "CONTINENTAL CTAM", // IC sub-brand
+  // Numbered IC variants
+  "MAGNUM TECHNOLOGY1": "Magnum Technology", // IC system variant
+  "TYC1": "TYC",                      // IC system variant
+  "BILSTEIN1": "BILSTEIN",            // IC system variant
+  "BREMBO-TU": "BREMBO",              // IC variant
+  // XXL pack variants
+  "CASTROL XXL": "CASTROL",           // IC bulk pack
+  "CASTROL MOTO": "CASTROL",          // IC motorcycle line
+  "CASTROL MOTO XXL": "CASTROL",      // IC motorcycle bulk
+  "SHELL XXL": "SHELL",               // IC bulk pack
+  "MOBIL XXL": "MOBIL",               // IC bulk pack
+  "LIQUI MOLY XXL": "LIQUI MOLY",     // IC bulk pack
+  "LIQUI MOLY MOTO": "LIQUI MOLY",    // IC motorcycle line
+  "FEBI BILSTEIN XXL": "FEBI BILSTEIN", // IC bulk pack
+  // Other
+  "HANKOOK AKUMULATORY": "Hankook",   // IC sub-brand (Polish: batteries)
+  "BMTS": "MAHLE",                     // BMTS turbochargers (MAHLE group)
+  "FAG Industry": "Schaeffler FAG",    // IC sub-brand
+  "TARNÓW": "ZF",                      // IC regional alias for ZF
+  "4MAX BLACHY": "BLIC",              // IC sub-brand (body panels)
 };
 
 async function autoCreateBrandAliases(): Promise<number> {

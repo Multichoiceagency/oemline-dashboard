@@ -726,6 +726,56 @@ export async function intercarsRoutes(app: FastifyInstance) {
       { icBrand: "SWF VALEO", tecdocName: "SWF" },
       { icBrand: "MARELLI", tecdocName: "MAGNETI MARELLI" },
       { icBrand: "PASCAL (CIT)", tecdocName: "PASCAL" },
+      // BOSCH sub-brands in InterCars
+      { icBrand: "BOSCH Brakes", tecdocName: "BOSCH" },
+      { icBrand: "BOSCH Filers", tecdocName: "BOSCH" },
+      { icBrand: "BOSCH DIESEL", tecdocName: "BOSCH" },
+      { icBrand: "BOSCH Belts", tecdocName: "BOSCH" },
+      { icBrand: "BOSCH Wipers", tecdocName: "BOSCH" },
+      { icBrand: "BOSCH Injection", tecdocName: "BOSCH" },
+      { icBrand: "BOSCH Electrics", tecdocName: "BOSCH" },
+      { icBrand: "BOSCH Bateries", tecdocName: "BOSCH" },
+      { icBrand: "BOSCH-ELEKTRONARZĘDZ", tecdocName: "BOSCH" },
+      { icBrand: "KIOSK SBC", tecdocName: "BOSCH" },
+      // VALEO sub-brands
+      { icBrand: "VALEO1", tecdocName: "VALEO" },
+      { icBrand: "VALEO WYCIERACZKI", tecdocName: "VALEO" },
+      // DELPHI sub-brands
+      { icBrand: "DELPHI DIESEL", tecdocName: "DELPHI" },
+      { icBrand: "DELPHI WTRYSK", tecdocName: "DELPHI" },
+      // DENSO sub-brands
+      { icBrand: "DENSO WTRYSK", tecdocName: "DENSO" },
+      { icBrand: "DENSO DIESEL", tecdocName: "DENSO" },
+      // Other sub-brands
+      { icBrand: "GATES OFF HIGHWAY", tecdocName: "GATES" },
+      { icBrand: "DONALDSON OFF", tecdocName: "DONALDSON" },
+      { icBrand: "TRW ENGINE COMPONENT", tecdocName: "TRW" },
+      { icBrand: "ABE PERFORMANCE", tecdocName: "ABE" },
+      { icBrand: "CONTI Industry", tecdocName: "CONTINENTAL CTAM" },
+      // Numbered IC variants
+      { icBrand: "MAGNUM TECHNOLOGY1", tecdocName: "Magnum Technology" },
+      { icBrand: "TYC1", tecdocName: "TYC" },
+      { icBrand: "BILSTEIN1", tecdocName: "BILSTEIN" },
+      { icBrand: "BREMBO-TU", tecdocName: "BREMBO" },
+      // XXL / bulk pack variants
+      { icBrand: "CASTROL XXL", tecdocName: "CASTROL" },
+      { icBrand: "CASTROL MOTO", tecdocName: "CASTROL" },
+      { icBrand: "CASTROL MOTO XXL", tecdocName: "CASTROL" },
+      { icBrand: "SHELL XXL", tecdocName: "SHELL" },
+      { icBrand: "MOBIL XXL", tecdocName: "MOBIL" },
+      { icBrand: "LIQUI MOLY XXL", tecdocName: "LIQUI MOLY" },
+      { icBrand: "LIQUI MOLY MOTO", tecdocName: "LIQUI MOLY" },
+      { icBrand: "FEBI BILSTEIN XXL", tecdocName: "FEBI BILSTEIN" },
+      // Other aliases
+      { icBrand: "HANKOOK AKUMULATORY", tecdocName: "Hankook" },
+      { icBrand: "BMTS", tecdocName: "MAHLE" },
+      { icBrand: "FAG Industry", tecdocName: "Schaeffler FAG" },
+      { icBrand: "TARNÓW", tecdocName: "ZF" },
+      { icBrand: "4MAX BLACHY", tecdocName: "BLIC" },
+      // Missing from worker: ensure parity
+      { icBrand: "HANS PRIES", tecdocName: "TOPRAN" },
+      { icBrand: "HENGST", tecdocName: "HENGST FILTER" },
+      { icBrand: "SACHS1", tecdocName: "SACHS" },
     ];
 
     let created = 0;
