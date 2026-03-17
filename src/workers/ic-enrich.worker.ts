@@ -717,9 +717,9 @@ async function autoCreateBrandAliases(): Promise<number> {
       FROM (SELECT DISTINCT manufacturer, normalized_manufacturer, tecdoc_prod FROM intercars_mappings WHERE tecdoc_prod IS NOT NULL) im
       JOIN brands b ON b.tecdoc_id = im.tecdoc_prod
       WHERE (
-        COALESCE(b.normalized_name, UPPER(b.name)) = im.normalized_manufacturer
-        OR COALESCE(b.normalized_name, UPPER(b.name)) LIKE im.normalized_manufacturer || '%'
-        OR im.normalized_manufacturer LIKE COALESCE(b.normalized_name, UPPER(b.name)) || '%'
+        UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) = im.normalized_manufacturer
+        OR UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) LIKE im.normalized_manufacturer || '%'
+        OR im.normalized_manufacturer LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
       )
       AND NOT EXISTS (
         SELECT 1 FROM supplier_brand_rules sbr
@@ -735,8 +735,8 @@ async function autoCreateBrandAliases(): Promise<number> {
   for (const m of tecdocMatches) {
     try {
       await prisma.$executeRawUnsafe(
-        `INSERT INTO supplier_brand_rules (supplier_id, brand_id, supplier_brand, active, created_at)
-         VALUES ($1, $2, $3, true, NOW()) ON CONFLICT DO NOTHING`,
+        `INSERT INTO supplier_brand_rules (supplier_id, brand_id, supplier_brand, active, created_at, updated_at)
+         VALUES ($1, $2, $3, true, NOW(), NOW()) ON CONFLICT DO NOTHING`,
         supplierId, m.brand_id, m.manufacturer.toUpperCase()
       );
       created++;
@@ -750,7 +750,7 @@ async function autoCreateBrandAliases(): Promise<number> {
       `SELECT DISTINCT ON (im.norm_mfr)
         b.id AS brand_id, im.manufacturer
       FROM (SELECT DISTINCT manufacturer, normalized_manufacturer AS norm_mfr FROM intercars_mappings) im
-      JOIN brands b ON COALESCE(b.normalized_name, UPPER(b.name)) = im.norm_mfr
+      JOIN brands b ON UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) = im.norm_mfr
       WHERE NOT EXISTS (
         SELECT 1 FROM supplier_brand_rules sbr
         WHERE sbr.supplier_id = $1 AND sbr.brand_id = b.id
@@ -765,8 +765,8 @@ async function autoCreateBrandAliases(): Promise<number> {
   for (const m of nameMatches) {
     try {
       await prisma.$executeRawUnsafe(
-        `INSERT INTO supplier_brand_rules (supplier_id, brand_id, supplier_brand, active, created_at)
-         VALUES ($1, $2, $3, true, NOW()) ON CONFLICT DO NOTHING`,
+        `INSERT INTO supplier_brand_rules (supplier_id, brand_id, supplier_brand, active, created_at, updated_at)
+         VALUES ($1, $2, $3, true, NOW(), NOW()) ON CONFLICT DO NOTHING`,
         supplierId, m.brand_id, m.manufacturer.toUpperCase()
       );
       created++;
@@ -784,8 +784,8 @@ async function autoCreateBrandAliases(): Promise<number> {
   for (const m of containMatches) {
     try {
       await prisma.$executeRawUnsafe(
-        `INSERT INTO supplier_brand_rules (supplier_id, brand_id, supplier_brand, active, created_at)
-         VALUES ($1, $2, $3, true, NOW()) ON CONFLICT DO NOTHING`,
+        `INSERT INTO supplier_brand_rules (supplier_id, brand_id, supplier_brand, active, created_at, updated_at)
+         VALUES ($1, $2, $3, true, NOW(), NOW()) ON CONFLICT DO NOTHING`,
         supplierId, m.brand_id, m.manufacturer.toUpperCase()
       );
       created++;
@@ -823,7 +823,7 @@ async function autoCreateBrandAliases(): Promise<number> {
           SELECT 1 FROM supplier_brand_rules sbr
           WHERE sbr.supplier_id = $1 AND UPPER(sbr.supplier_brand) = UPPER(im.manufacturer)
         )
-        AND UPPER(im.manufacturer) NOT IN (SELECT COALESCE(normalized_name, UPPER(name)) FROM brands)
+        AND UPPER(im.manufacturer) NOT IN (SELECT UPPER(regexp_replace(name, '[^a-zA-Z0-9]', '', 'g')) FROM brands)
         GROUP BY manufacturer
         ORDER BY cnt DESC
         LIMIT 50
@@ -851,8 +851,8 @@ async function autoCreateBrandAliases(): Promise<number> {
     seenMfr.add(mfrKey);
     try {
       await prisma.$executeRawUnsafe(
-        `INSERT INTO supplier_brand_rules (supplier_id, brand_id, supplier_brand, active, created_at)
-         VALUES ($1, $2, $3, true, NOW()) ON CONFLICT DO NOTHING`,
+        `INSERT INTO supplier_brand_rules (supplier_id, brand_id, supplier_brand, active, created_at, updated_at)
+         VALUES ($1, $2, $3, true, NOW(), NOW()) ON CONFLICT DO NOTHING`,
         supplierId, m.brand_id, m.manufacturer.toUpperCase()
       );
       created++;
@@ -930,7 +930,7 @@ async function runAllMatchingPhases(): Promise<number> {
     FROM product_maps pm
     JOIN brands b ON b.id = pm.brand_id
     JOIN intercars_mappings im ON im.normalized_article_number = pm.normalized_article_no
-      AND im.normalized_manufacturer = COALESCE(b.normalized_name, UPPER(b.name))
+      AND im.normalized_manufacturer = UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
     WHERE pm.status = 'active' AND pm.ic_sku IS NULL ORDER BY pm.id`);
 
   // Phase 4: EAN — exact EAN match (very reliable, brand-independent)
