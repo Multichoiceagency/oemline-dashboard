@@ -30,7 +30,9 @@ export async function brandRoutes(app: FastifyInstance) {
     const { page, limit, q } = query;
     const skip = (page - 1) * limit;
 
-    const where: Record<string, unknown> = {};
+    const where: Record<string, unknown> = {
+      productMaps: { some: {} }, // hide brands with 0 products
+    };
     if (q) {
       where.OR = [
         { name: { contains: q, mode: "insensitive" } },
