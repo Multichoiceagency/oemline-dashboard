@@ -1,6 +1,7 @@
 import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { waitForIcRateLimit } from "../lib/ic-rate-limiter.js";
 
 /**
  * IC Direct Lookup & Enrichment Worker → 100% Match Rate
@@ -281,6 +282,7 @@ async function learnPrefixFromMatches(
         const tok = await getIcToken();
         const hdrs = icHeaders(tok);
         const url = `${IC_API_URL}/catalog/products?sku=${encodeURIComponent(b.ic_sku)}&pageNumber=0&pageSize=1`;
+        await waitForIcRateLimit();
         const resp = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(10_000) });
         if (!resp.ok) return null;
         const data = (await resp.json()) as { products: Array<{ index: string; sku: string; articleNumber?: string; brand: string }> };
@@ -492,12 +494,11 @@ async function searchIcByIndex(index: string): Promise<IcProduct | null> {
 
     // Search by index (the only working search method in IC API)
     const searchUrl = `${IC_API_URL}/catalog/products?index=${encodeURIComponent(index)}&pageNumber=0&pageSize=1`;
+    await waitForIcRateLimit();
     const resp = await fetch(searchUrl, { headers: hdrs, signal: AbortSignal.timeout(10_000) });
 
-    // Handle rate limiting — wait and signal caller to slow down
     if (resp.status === 429) {
-      logger.warn("IC API rate limited (429) — pausing for 60s");
-      await new Promise(r => setTimeout(r, 60_000));
+      logger.warn("IC 429 on searchByIndex — shared rate limiter should prevent this");
       return null;
     }
     if (!resp.ok) return null;
@@ -510,6 +511,7 @@ async function searchIcByIndex(index: string): Promise<IcProduct | null> {
     // If the search result has sku, do a detail lookup for full data (articleNumber, tecDocProd, EAN)
     if (found.sku && !found.tecDoc && !found.tecDocProd) {
       const detailUrl = `${IC_API_URL}/catalog/products?sku=${encodeURIComponent(found.sku)}&pageNumber=0&pageSize=1`;
+      await waitForIcRateLimit();
       const detailResp = await fetch(detailUrl, { headers: hdrs, signal: AbortSignal.timeout(10_000) });
       if (detailResp.ok) {
         const detailData = (await detailResp.json()) as { products: IcProduct[] };

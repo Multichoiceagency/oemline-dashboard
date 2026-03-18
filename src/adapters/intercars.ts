@@ -5,6 +5,7 @@ import type {
   SupplierCatalogItem,
 } from "../types/index.js";
 import { logger } from "../lib/logger.js";
+import { waitForIcRateLimit } from "../lib/ic-rate-limiter.js";
 
 interface InterCarsCredentials {
   clientId: string;
@@ -156,6 +157,9 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
    * Direct fetch with long timeout for sync operations.
    */
   private async syncFetch(url: string, headers: Record<string, string>, opts?: { method?: string; body?: string }): Promise<Response> {
+    // Shared rate limiter: 480 req/min across all IC API calls
+    await waitForIcRateLimit();
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 60_000);
 

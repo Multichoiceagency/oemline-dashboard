@@ -1,6 +1,7 @@
 import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { waitForIcRateLimit } from "../lib/ic-rate-limiter.js";
 
 /**
  * IC Catalog Sync Worker
@@ -65,20 +66,6 @@ interface IcDetailResponse {
   products: IcDetailProduct[];
 }
 
-// ── Rate limiter (shared across all IC API calls) ───────────────────────
-// IC API limit: 600 req/min = 10 req/sec. We target 8 req/sec for safety.
-const MIN_REQUEST_INTERVAL_MS = 125; // 8 req/sec
-let lastRequestTime = 0;
-
-async function rateLimitedWait(): Promise<void> {
-  const now = Date.now();
-  const elapsed = now - lastRequestTime;
-  if (elapsed < MIN_REQUEST_INTERVAL_MS) {
-    await new Promise(r => setTimeout(r, MIN_REQUEST_INTERVAL_MS - elapsed));
-  }
-  lastRequestTime = Date.now();
-}
-
 // ── OAuth2 token management ──────────────────────────────────────────────
 
 let accessToken: string | null = null;
@@ -135,7 +122,7 @@ function icHeaders(token: string): Record<string, string> {
 
 async function icFetch(url: string, maxRetries = 5): Promise<Response | null> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    await rateLimitedWait();
+    await waitForIcRateLimit();
     const tok = await getIcToken();
     const resp = await fetch(url, {
       headers: icHeaders(tok),
