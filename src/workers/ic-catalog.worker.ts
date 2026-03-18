@@ -171,6 +171,9 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
     let categoryProducts = 0;
     let categoryTotal = 0;
 
+    let retries429 = 0;
+    const MAX_429_RETRIES = 5;
+
     while (true) {
       if (maxProducts && totalProcessed >= maxProducts) break;
 
@@ -182,10 +185,24 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
         const url = `${IC_API_URL}/catalog/products?categoryId=${encodeURIComponent(cat.categoryId)}&pageNumber=${page}&pageSize=100`;
         const resp = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(30_000) });
 
+        if (resp.status === 429) {
+          retries429++;
+          if (retries429 > MAX_429_RETRIES) {
+            logger.warn({ category: cat.label, page, retries429 }, "IC catalog: too many 429s, skipping category");
+            break;
+          }
+          const backoffMs = Math.min(retries429 * 30_000, 120_000); // 30s, 60s, 90s, 120s
+          logger.info({ category: cat.label, page, retries429, backoffMs }, "IC catalog: 429 rate-limited, backing off");
+          await new Promise(r => setTimeout(r, backoffMs));
+          continue; // retry same page
+        }
+
         if (!resp.ok) {
           logger.warn({ status: resp.status, category: cat.label, page }, "IC catalog page failed");
           break;
         }
+
+        retries429 = 0; // reset on success
 
         const data = (await resp.json()) as IcCatalogResponse;
         if (page === 0) categoryTotal = data.totalResults;
@@ -204,8 +221,8 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
         if (!data.hasNextPage) break;
         page++;
 
-        // Rate limit: 50ms between pages
-        await new Promise(r => setTimeout(r, 50));
+        // Rate limit: 200ms between pages (was 50ms — too aggressive)
+        await new Promise(r => setTimeout(r, 200));
       } catch (err) {
         logger.warn({ err, category: cat.label, page }, "IC catalog page error");
         break;
@@ -236,6 +253,9 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
     // Extend job lock
     try { await job.extendLock(job.token!, 600_000); } catch { /* ok */ }
     await job.updateProgress(totalProcessed);
+
+    // Pause between categories to avoid rate-limiting
+    await new Promise(r => setTimeout(r, 2_000));
   }
 
   logger.info({
