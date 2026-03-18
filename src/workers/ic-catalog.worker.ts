@@ -137,17 +137,33 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
   const token = await getIcToken();
   const headers = icHeaders(token);
 
-  // ── Step 1: Fetch categories ────────────────────────────────────────────
-  const catResponse = await fetch(`${IC_API_URL}/catalog/category`, {
-    headers,
-    signal: AbortSignal.timeout(15_000),
-  });
+  // ── Step 1: Fetch categories (with 429 retry) ──────────────────────────
+  let categories: IcCategory[] = [];
+  for (let catRetry = 0; catRetry < 5; catRetry++) {
+    const tok = await getIcToken();
+    const catResponse = await fetch(`${IC_API_URL}/catalog/category`, {
+      headers: icHeaders(tok),
+      signal: AbortSignal.timeout(15_000),
+    });
 
-  if (!catResponse.ok) {
-    throw new Error(`IC catalog/category failed: ${catResponse.status}`);
+    if (catResponse.status === 429) {
+      const backoff = (catRetry + 1) * 30_000;
+      logger.info({ retry: catRetry + 1, backoffMs: backoff }, "IC catalog/category 429, backing off");
+      await new Promise(r => setTimeout(r, backoff));
+      continue;
+    }
+
+    if (!catResponse.ok) {
+      throw new Error(`IC catalog/category failed: ${catResponse.status}`);
+    }
+
+    categories = (await catResponse.json()) as IcCategory[];
+    break;
   }
 
-  let categories = (await catResponse.json()) as IcCategory[];
+  if (categories.length === 0) {
+    throw new Error("IC catalog/category: no categories after retries");
+  }
 
   if (categoryIds?.length) {
     const allowed = new Set(categoryIds);
