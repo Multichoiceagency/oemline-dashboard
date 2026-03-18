@@ -6,28 +6,23 @@ import { logger } from "../lib/logger.js";
  * IC Catalog Sync Worker
  *
  * Crawls all InterCars catalog categories via the API and upserts products
- * into intercars_mappings. The CSV import only has 565K products; the API
- * has 3M+. This worker fills the gap so IC matching covers the full catalog.
+ * into intercars_mappings. The IC API has 3M+ products across 45 categories.
  *
  * Strategy:
  * 1. Authenticate via OAuth2 client_credentials
- * 2. Fetch all 45 categories from /catalog/category
- * 3. For each category, paginate /catalog/products (100/page)
+ * 2. Fetch top-level categories, then recursively drill into subcategories
+ *    (IC API caps pagination at 10K products per category query)
+ * 3. For each leaf category, paginate /catalog/products (100/page)
  * 4. Upsert into intercars_mappings (tow_kod as unique key)
- * 5. Batch detail lookups (by sku) to get tecDoc + tecDocProd fields
  *
- * Rate limiting: 50ms pause between pages, 100ms between detail batches.
- * Full crawl takes ~2-4 hours for 3M+ products.
+ * Rate limiting: IC API allows 600 req/min. We use 8 req/sec max with
+ * exponential backoff on 429 responses.
  */
 
 interface IcCatalogJobData {
-  /** Limit categories to crawl (null = all) */
   maxCategories?: number;
-  /** Limit total products (null = unlimited) */
   maxProducts?: number;
-  /** Skip detail lookup for tecDoc/tecDocProd (faster but less data) */
   skipDetails?: boolean;
-  /** Only process specific categories by ID */
   categoryIds?: string[];
 }
 
@@ -45,6 +40,12 @@ interface IcCatalogProduct {
   blockedReturn?: boolean;
 }
 
+interface IcCatalogResponse {
+  totalResults: number;
+  hasNextPage: boolean;
+  products: IcCatalogProduct[];
+}
+
 interface IcDetailProduct {
   sku: string;
   index: string;
@@ -59,15 +60,23 @@ interface IcDetailProduct {
   blockedReturn?: boolean;
 }
 
-interface IcCatalogResponse {
-  totalResults: number;
-  hasNextPage: boolean;
-  products: IcCatalogProduct[];
-}
-
 interface IcDetailResponse {
   totalResults: number;
   products: IcDetailProduct[];
+}
+
+// ── Rate limiter (shared across all IC API calls) ───────────────────────
+// IC API limit: 600 req/min = 10 req/sec. We target 8 req/sec for safety.
+const MIN_REQUEST_INTERVAL_MS = 125; // 8 req/sec
+let lastRequestTime = 0;
+
+async function rateLimitedWait(): Promise<void> {
+  const now = Date.now();
+  const elapsed = now - lastRequestTime;
+  if (elapsed < MIN_REQUEST_INTERVAL_MS) {
+    await new Promise(r => setTimeout(r, MIN_REQUEST_INTERVAL_MS - elapsed));
+  }
+  lastRequestTime = Date.now();
 }
 
 // ── OAuth2 token management ──────────────────────────────────────────────
@@ -122,6 +131,76 @@ function icHeaders(token: string): Record<string, string> {
   return h;
 }
 
+// ── Rate-limited fetch with 429 retry ───────────────────────────────────
+
+async function icFetch(url: string, maxRetries = 5): Promise<Response | null> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    await rateLimitedWait();
+    const tok = await getIcToken();
+    const resp = await fetch(url, {
+      headers: icHeaders(tok),
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (resp.status === 429) {
+      const backoffMs = Math.min((attempt + 1) * 30_000, 120_000);
+      logger.info({ url: url.substring(0, 80), attempt: attempt + 1, backoffMs }, "IC 429 — backing off");
+      await new Promise(r => setTimeout(r, backoffMs));
+      continue;
+    }
+
+    return resp;
+  }
+  return null; // all retries exhausted
+}
+
+// ── Subcategory tree resolver ───────────────────────────────────────────
+// IC API caps pagination at 10K products per category.
+// For categories >10K, we drill into subcategories recursively.
+
+const MAX_PRODUCTS_PER_CATEGORY = 9_900; // stay under 10K pagination cap
+
+async function getLeafCategories(categoryId: string, label: string, depth = 0): Promise<IcCategory[]> {
+  if (depth > 6) return [{ categoryId, label }]; // safety: max depth
+
+  // First check how many products this category has
+  const countResp = await icFetch(
+    `${IC_API_URL}/catalog/products?categoryId=${encodeURIComponent(categoryId)}&pageNumber=0&pageSize=1`
+  );
+
+  if (!countResp || !countResp.ok) return [{ categoryId, label }];
+
+  const countData = (await countResp.json()) as IcCatalogResponse;
+
+  if (countData.totalResults <= MAX_PRODUCTS_PER_CATEGORY) {
+    // This category fits within the pagination limit — use it directly
+    return [{ categoryId, label }];
+  }
+
+  // Too many products — try to get subcategories
+  const subResp = await icFetch(
+    `${IC_API_URL}/catalog/category?categoryId=${encodeURIComponent(categoryId)}`
+  );
+
+  if (!subResp || !subResp.ok) return [{ categoryId, label }];
+
+  const subcats = (await subResp.json()) as IcCategory[];
+
+  if (!subcats || subcats.length === 0) {
+    // No subcategories available — just crawl up to 10K from this category
+    return [{ categoryId, label }];
+  }
+
+  // Recursively resolve subcategories
+  const leaves: IcCategory[] = [];
+  for (const sub of subcats) {
+    const subLeaves = await getLeafCategories(sub.categoryId, `${label} > ${sub.label}`, depth + 1);
+    leaves.push(...subLeaves);
+  }
+
+  return leaves;
+}
+
 // ── Main worker ──────────────────────────────────────────────────────────
 
 export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<void> {
@@ -134,83 +213,57 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
 
   logger.info({ maxCategories, maxProducts, skipDetails }, "IC catalog sync starting");
 
-  const token = await getIcToken();
-  const headers = icHeaders(token);
-
-  // ── Step 1: Fetch categories (with 429 retry) ──────────────────────────
-  let categories: IcCategory[] = [];
-  for (let catRetry = 0; catRetry < 5; catRetry++) {
-    const tok = await getIcToken();
-    const catResponse = await fetch(`${IC_API_URL}/catalog/category`, {
-      headers: icHeaders(tok),
-      signal: AbortSignal.timeout(15_000),
-    });
-
-    if (catResponse.status === 429) {
-      const backoff = (catRetry + 1) * 30_000;
-      logger.info({ retry: catRetry + 1, backoffMs: backoff }, "IC catalog/category 429, backing off");
-      await new Promise(r => setTimeout(r, backoff));
-      continue;
-    }
-
-    if (!catResponse.ok) {
-      throw new Error(`IC catalog/category failed: ${catResponse.status}`);
-    }
-
-    categories = (await catResponse.json()) as IcCategory[];
-    break;
+  // ── Step 1: Fetch top-level categories ────────────────────────────────
+  const catResp = await icFetch(`${IC_API_URL}/catalog/category`);
+  if (!catResp || !catResp.ok) {
+    throw new Error(`IC catalog/category failed: ${catResp?.status ?? "no response"}`);
   }
 
-  if (categories.length === 0) {
-    throw new Error("IC catalog/category: no categories after retries");
-  }
+  let topCategories = (await catResp.json()) as IcCategory[];
 
   if (categoryIds?.length) {
     const allowed = new Set(categoryIds);
-    categories = categories.filter(c => allowed.has(c.categoryId));
+    topCategories = topCategories.filter(c => allowed.has(c.categoryId));
   }
 
   if (maxCategories) {
-    categories = categories.slice(0, maxCategories);
+    topCategories = topCategories.slice(0, maxCategories);
   }
 
-  logger.info({ categoryCount: categories.length }, "IC categories fetched");
+  logger.info({ topCategories: topCategories.length }, "IC top-level categories fetched");
+
+  // ── Step 2: Resolve subcategories for large categories ────────────────
+  const allLeafCategories: IcCategory[] = [];
+  for (const cat of topCategories) {
+    const leaves = await getLeafCategories(cat.categoryId, cat.label);
+    allLeafCategories.push(...leaves);
+    logger.info({ category: cat.label, leaves: leaves.length }, "Resolved subcategories");
+  }
+
+  logger.info({ totalLeafCategories: allLeafCategories.length }, "All leaf categories resolved");
 
   let totalInserted = 0;
   let totalUpdated = 0;
   let totalProcessed = 0;
   let totalSkipped = 0;
 
-  // ── Step 2: Crawl each category ─────────────────────────────────────────
-  for (const cat of categories) {
+  // ── Step 3: Crawl each leaf category ──────────────────────────────────
+  for (const cat of allLeafCategories) {
     let page = 0;
     let categoryProducts = 0;
     let categoryTotal = 0;
-
-    let retries429 = 0;
-    const MAX_429_RETRIES = 5;
 
     while (true) {
       if (maxProducts && totalProcessed >= maxProducts) break;
 
       try {
-        // Refresh token if needed
-        const tok = await getIcToken();
-        const hdrs = icHeaders(tok);
+        const resp = await icFetch(
+          `${IC_API_URL}/catalog/products?categoryId=${encodeURIComponent(cat.categoryId)}&pageNumber=${page}&pageSize=100`
+        );
 
-        const url = `${IC_API_URL}/catalog/products?categoryId=${encodeURIComponent(cat.categoryId)}&pageNumber=${page}&pageSize=100`;
-        const resp = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(30_000) });
-
-        if (resp.status === 429) {
-          retries429++;
-          if (retries429 > MAX_429_RETRIES) {
-            logger.warn({ category: cat.label, page, retries429 }, "IC catalog: too many 429s, skipping category");
-            break;
-          }
-          const backoffMs = Math.min(retries429 * 30_000, 120_000); // 30s, 60s, 90s, 120s
-          logger.info({ category: cat.label, page, retries429, backoffMs }, "IC catalog: 429 rate-limited, backing off");
-          await new Promise(r => setTimeout(r, backoffMs));
-          continue; // retry same page
+        if (!resp) {
+          logger.warn({ category: cat.label, page }, "IC catalog: all retries exhausted, skipping");
+          break;
         }
 
         if (!resp.ok) {
@@ -218,15 +271,12 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
           break;
         }
 
-        retries429 = 0; // reset on success
-
         const data = (await resp.json()) as IcCatalogResponse;
         if (page === 0) categoryTotal = data.totalResults;
 
         const products = data.products;
         if (!products || products.length === 0) break;
 
-        // ── Batch upsert into intercars_mappings ────────────────────────
         const { inserted, updated, skipped } = await batchUpsertMappings(products);
         totalInserted += inserted;
         totalUpdated += updated;
@@ -236,42 +286,36 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
 
         if (!data.hasNextPage) break;
         page++;
-
-        // Rate limit: 500ms between pages to respect IC API limits
-        await new Promise(r => setTimeout(r, 500));
       } catch (err) {
         logger.warn({ err, category: cat.label, page }, "IC catalog page error");
         break;
       }
     }
 
-    // ── Optional: batch detail lookups for tecdoc_prod ──────────────────
-    if (!skipDetails && categoryProducts > 0) {
-      try {
-        const enriched = await enrichDetailsForCategory(cat.categoryId, categoryProducts);
-        if (enriched > 0) {
-          logger.info({ category: cat.label, enriched }, "IC detail enrichment done");
-        }
-      } catch (err) {
-        logger.warn({ err, category: cat.label }, "IC detail enrichment failed (non-critical)");
-      }
+    if (categoryProducts > 0) {
+      logger.info({
+        category: cat.label,
+        categoryProducts,
+        categoryTotal,
+        totalProcessed,
+      }, "IC leaf category done");
     }
 
-    logger.info({
-      category: cat.label,
-      categoryProducts,
-      categoryTotal,
-      totalProcessed,
-      totalInserted,
-      totalUpdated,
-    }, "IC category sync done");
-
-    // Extend job lock
+    // Extend job lock (long-running job)
     try { await job.extendLock(job.token!, 600_000); } catch { /* ok */ }
     await job.updateProgress(totalProcessed);
+  }
 
-    // Pause between categories to avoid rate-limiting
-    await new Promise(r => setTimeout(r, 5_000));
+  // ── Optional: detail enrichment ───────────────────────────────────────
+  if (!skipDetails) {
+    try {
+      const enriched = await enrichMissingDetails();
+      if (enriched > 0) {
+        logger.info({ enriched }, "IC detail enrichment done");
+      }
+    } catch (err) {
+      logger.warn({ err }, "IC detail enrichment failed (non-critical)");
+    }
   }
 
   logger.info({
@@ -279,7 +323,7 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
     totalInserted,
     totalUpdated,
     totalSkipped,
-    categories: categories.length,
+    leafCategories: allLeafCategories.length,
   }, "IC catalog sync completed");
 }
 
@@ -292,7 +336,6 @@ async function batchUpsertMappings(
   let updated = 0;
   let skipped = 0;
 
-  // Build VALUES for upsert (batch of up to 100)
   const values: string[] = [];
   const params: unknown[] = [];
   let idx = 1;
@@ -303,19 +346,14 @@ async function batchUpsertMappings(
       continue;
     }
 
-    // Extract article_number from index:
-    // IC index format varies: "EL242608" (brand prefix + number), "1 987 473 597" (spaced)
-    // article_number is the full index as-is (matching uses normalized comparison)
-    const articleNumber = p.index;
-
     values.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4}, $${idx + 5}, NOW())`);
     params.push(
-      p.sku,                          // tow_kod
-      p.index,                        // ic_index
-      articleNumber,                   // article_number
-      p.brand,                        // manufacturer
-      p.shortDescription || p.description || "",  // description
-      p.blockedReturn ?? false,       // blocked_return
+      p.sku,
+      p.index,
+      p.index, // article_number = index
+      p.brand,
+      p.shortDescription || p.description || "",
+      p.blockedReturn ?? false,
     );
     idx += 6;
   }
@@ -323,9 +361,6 @@ async function batchUpsertMappings(
   if (values.length === 0) return { inserted, updated, skipped };
 
   try {
-    // IMPORTANT: On conflict, do NOT overwrite article_number if it already has a
-    // value from CSV import (which has the correct clean article number).
-    // Only update ic_index, manufacturer, description (metadata refresh).
     const result = await prisma.$executeRawUnsafe(
       `INSERT INTO intercars_mappings (tow_kod, ic_index, article_number, manufacturer, description, blocked_return, created_at)
        VALUES ${values.join(", ")}
@@ -361,75 +396,51 @@ async function batchUpsertMappings(
   return { inserted, updated, skipped };
 }
 
-// ── Detail enrichment ────────────────────────────────────────────────────
+// ── Detail enrichment (batch, post-crawl) ────────────────────────────────
 
-/**
- * For products that were just upserted from a category listing (which lacks
- * tecDoc/tecDocProd), do batch SKU lookups to fill tecdoc_prod and ean.
- * We query intercars_mappings for rows missing tecdoc_prod in the batch.
- */
-async function enrichDetailsForCategory(categoryId: string, productCount: number): Promise<number> {
-  // Find recently inserted rows without tecdoc_prod
+async function enrichMissingDetails(): Promise<number> {
   const missing = await prisma.$queryRawUnsafe<Array<{ tow_kod: string }>>(
     `SELECT tow_kod FROM intercars_mappings
      WHERE tecdoc_prod IS NULL
      ORDER BY id DESC
-     LIMIT $1`,
-    Math.min(productCount, 500)  // Limit detail lookups to 500 per category
+     LIMIT 2000`
   );
 
   if (missing.length === 0) return 0;
 
   let enriched = 0;
-  const BATCH = 10; // 10 SKU lookups at a time
 
-  for (let i = 0; i < missing.length; i += BATCH) {
-    const batch = missing.slice(i, i + BATCH);
+  for (let i = 0; i < missing.length; i++) {
+    const sku = missing[i].tow_kod;
 
-    // Parallel SKU lookups
-    const results = await Promise.allSettled(
-      batch.map(m => fetchProductDetail(m.tow_kod))
-    );
+    try {
+      const resp = await icFetch(
+        `${IC_API_URL}/catalog/products?sku=${encodeURIComponent(sku)}&pageNumber=0&pageSize=1`
+      );
 
-    for (const result of results) {
-      if (result.status === "fulfilled" && result.value) {
-        const p = result.value;
-        const tecdocProd = p.tecDocProd ? Number(p.tecDocProd) : null;
-        const ean = p.eans?.[0] ?? null;
-        const weight = p.packageWeight ? parseFloat(p.packageWeight.replace(",", ".")) : null;
+      if (!resp || !resp.ok) continue;
 
-        if (tecdocProd || ean) {
-          try {
-            await prisma.$executeRawUnsafe(
-              `UPDATE intercars_mappings SET
-                tecdoc_prod = COALESCE($1, tecdoc_prod),
-                ean = COALESCE($2, ean),
-                weight = COALESCE($3, weight)
-              WHERE tow_kod = $4`,
-              tecdocProd, ean, weight, p.sku
-            );
-            enriched++;
-          } catch { /* skip */ }
-        }
+      const data = (await resp.json()) as IcDetailResponse;
+      const p = data.products?.[0];
+      if (!p) continue;
+
+      const tecdocProd = p.tecDocProd ? Number(p.tecDocProd) : null;
+      const ean = p.eans?.[0] ?? null;
+      const weight = p.packageWeight ? parseFloat(p.packageWeight.replace(",", ".")) : null;
+
+      if (tecdocProd || ean) {
+        await prisma.$executeRawUnsafe(
+          `UPDATE intercars_mappings SET
+            tecdoc_prod = COALESCE($1, tecdoc_prod),
+            ean = COALESCE($2, ean),
+            weight = COALESCE($3, weight)
+          WHERE tow_kod = $4`,
+          tecdocProd, ean, weight, sku
+        );
+        enriched++;
       }
-    }
-
-    // Rate limit: 100ms between detail batches
-    await new Promise(r => setTimeout(r, 100));
+    } catch { /* skip */ }
   }
 
   return enriched;
-}
-
-async function fetchProductDetail(sku: string): Promise<IcDetailProduct | null> {
-  const tok = await getIcToken();
-  const hdrs = icHeaders(tok);
-
-  const url = `${IC_API_URL}/catalog/products?sku=${encodeURIComponent(sku)}&pageNumber=0&pageSize=1`;
-  const resp = await fetch(url, { headers: hdrs, signal: AbortSignal.timeout(15_000) });
-
-  if (!resp.ok) return null;
-
-  const data = (await resp.json()) as IcDetailResponse;
-  return data.products?.[0] ?? null;
 }

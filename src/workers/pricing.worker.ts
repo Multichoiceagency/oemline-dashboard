@@ -15,9 +15,9 @@ interface PricingJobData {
 
 // ── Tuning knobs (aggressive for 1M+ products) ─────────────────────────────
 const API_BATCH_SIZE = 30;         // IC API max per call
-const PARALLEL_API_CALLS = 25;     // Concurrent API requests per sub-job
+const PARALLEL_API_CALLS = 5;      // Concurrent API requests (was 25 — caused 429 floods)
 const DB_PAGE_SIZE = 5000;         // Products per cursor page
-const RATE_LIMIT_PAUSE = 20;       // ms between parallel groups
+const RATE_LIMIT_PAUSE = 150;      // ms between parallel groups (was 20ms — too aggressive)
 const SUB_JOB_SIZE = 50_000;       // ID range per sub-job (sparse IDs, actual products << this)
 const DEFAULT_STALE_MINUTES = 45;  // Only re-price products older than this
 
