@@ -237,8 +237,8 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
         if (!data.hasNextPage) break;
         page++;
 
-        // Rate limit: 200ms between pages (was 50ms — too aggressive)
-        await new Promise(r => setTimeout(r, 200));
+        // Rate limit: 500ms between pages to respect IC API limits
+        await new Promise(r => setTimeout(r, 500));
       } catch (err) {
         logger.warn({ err, category: cat.label, page }, "IC catalog page error");
         break;
@@ -271,7 +271,7 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
     await job.updateProgress(totalProcessed);
 
     // Pause between categories to avoid rate-limiting
-    await new Promise(r => setTimeout(r, 2_000));
+    await new Promise(r => setTimeout(r, 5_000));
   }
 
   logger.info({
@@ -308,7 +308,7 @@ async function batchUpsertMappings(
     // article_number is the full index as-is (matching uses normalized comparison)
     const articleNumber = p.index;
 
-    values.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4}, $${idx + 5})`);
+    values.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4}, $${idx + 5}, NOW())`);
     params.push(
       p.sku,                          // tow_kod
       p.index,                        // ic_index
