@@ -3,73 +3,54 @@ import { logger } from "./logger.js";
 /**
  * Shared IC API Rate Limiter
  *
- * IC API actual limit: ~60 requests per minute (empirically tested).
- * NOT 600/min as some docs suggest — our account is capped at ~10 req/10s.
- * All IC API calls across all workers MUST go through this limiter.
+ * IC API actual limit (empirically tested 2026-03-19):
+ * - ~10 requests per 10-second window, then ~20-30s cooldown
+ * - Sustained rate: ~20-30 req/min
+ * - NOT 600/min as some docs suggest
  *
- * Target: 45 req/min (0.75 req/sec) — leaves 25% headroom.
+ * Strategy: 8 requests burst, then 15s pause. Gives ~20 req/min sustained.
+ * All IC API calls across all workers MUST go through this limiter.
  */
 
-const MAX_REQUESTS_PER_MINUTE = 45; // 75% of ~60 actual limit
-const WINDOW_MS = 60_000;
-const MIN_INTERVAL_MS = 1_350; // 60000ms / 45 = 1333ms per request
+const BURST_SIZE = 8;              // max requests before pause
+const BURST_PAUSE_MS = 15_000;     // 15s pause after each burst
+const MIN_INTERVAL_MS = 1_000;     // 1s between individual requests within a burst
+const MAX_REQUESTS_PER_MINUTE = 20; // for stats only
 
-const timestamps: number[] = [];
-let waiters = 0;
+let burstCount = 0;
+let lastRequestTime = 0;
 
 /**
  * Wait until we can make an IC API request without exceeding the rate limit.
+ * Uses burst pattern: 8 requests with 1s gaps, then 15s pause.
  * Call this BEFORE every IC API fetch.
  */
 export async function waitForIcRateLimit(): Promise<void> {
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const now = Date.now();
+  const now = Date.now();
 
-    // Remove timestamps older than the window
-    while (timestamps.length > 0 && timestamps[0] < now - WINDOW_MS) {
-      timestamps.shift();
-    }
-
-    // Check if we're under the limit
-    if (timestamps.length < MAX_REQUESTS_PER_MINUTE) {
-      // Also enforce minimum interval between requests
-      const lastTs = timestamps.length > 0 ? timestamps[timestamps.length - 1] : 0;
-      const elapsed = now - lastTs;
-
-      if (elapsed < MIN_INTERVAL_MS) {
-        await new Promise(r => setTimeout(r, MIN_INTERVAL_MS - elapsed));
-      }
-
-      timestamps.push(Date.now());
-      return;
-    }
-
-    // We're at the limit — wait until the oldest request falls out of the window
-    const oldestTs = timestamps[0];
-    const waitMs = oldestTs + WINDOW_MS - now + 100; // +100ms buffer
-    waiters++;
-
-    if (waiters <= 1) {
-      // Only log once to avoid spam
-      logger.info({ waitMs, queuedRequests: timestamps.length }, "IC rate limit: waiting for slot");
-    }
-
-    await new Promise(r => setTimeout(r, Math.max(waitMs, 500)));
-    waiters--;
+  // Enforce minimum interval between requests
+  const elapsed = now - lastRequestTime;
+  if (elapsed < MIN_INTERVAL_MS) {
+    await new Promise(r => setTimeout(r, MIN_INTERVAL_MS - elapsed));
   }
+
+  // After BURST_SIZE requests, pause to let IC's window reset
+  if (burstCount >= BURST_SIZE) {
+    logger.info({ burstCount, pauseMs: BURST_PAUSE_MS }, "IC rate limiter: burst pause");
+    await new Promise(r => setTimeout(r, BURST_PAUSE_MS));
+    burstCount = 0;
+  }
+
+  burstCount++;
+  lastRequestTime = Date.now();
 }
 
 /**
  * Get current rate limiter stats (for monitoring/logging).
  */
-export function getIcRateLimiterStats(): { requestsInWindow: number; maxPerMinute: number } {
-  const now = Date.now();
-  while (timestamps.length > 0 && timestamps[0] < now - WINDOW_MS) {
-    timestamps.shift();
-  }
+export function getIcRateLimiterStats(): { burstCount: number; maxPerMinute: number } {
   return {
-    requestsInWindow: timestamps.length,
+    burstCount,
     maxPerMinute: MAX_REQUESTS_PER_MINUTE,
   };
 }
