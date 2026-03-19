@@ -14,9 +14,9 @@ interface StockJobData {
 }
 
 const API_BATCH_SIZE = 30;
-const PARALLEL_API_CALLS = 5;      // Was 25 — caused 429 floods with IC API (600 req/min limit)
+const PARALLEL_API_CALLS = 1;      // Sequential — IC API limit is ~60 req/min, not 600
 const DB_PAGE_SIZE = 5000;
-const RATE_LIMIT_PAUSE = 150;      // Was 20ms — too aggressive for shared IC API rate limit
+const RATE_LIMIT_PAUSE = 0;        // Not needed with PARALLEL=1, shared rate limiter handles timing
 const SUB_JOB_SIZE = 50_000;       // ID range per sub-job (sparse IDs, actual products << this)
 const DEFAULT_STALE_MINUTES = 20;
 

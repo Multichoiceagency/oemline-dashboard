@@ -3,17 +3,16 @@ import { logger } from "./logger.js";
 /**
  * Shared IC API Rate Limiter
  *
- * IC API limit: 600 requests per minute.
- * We use a simple sliding window token bucket in-memory.
- * All IC API calls across all workers in the same process
- * MUST go through this limiter.
+ * IC API actual limit: ~60 requests per minute (empirically tested).
+ * NOT 600/min as some docs suggest — our account is capped at ~10 req/10s.
+ * All IC API calls across all workers MUST go through this limiter.
  *
- * Target: 8 req/sec (480 req/min) — leaves 20% headroom.
+ * Target: 45 req/min (0.75 req/sec) — leaves 25% headroom.
  */
 
-const MAX_REQUESTS_PER_MINUTE = 480; // 80% of 600 limit
+const MAX_REQUESTS_PER_MINUTE = 45; // 75% of ~60 actual limit
 const WINDOW_MS = 60_000;
-const MIN_INTERVAL_MS = 125; // 1000ms / 8 = 125ms per request
+const MIN_INTERVAL_MS = 1_350; // 60000ms / 45 = 1333ms per request
 
 const timestamps: number[] = [];
 let waiters = 0;
