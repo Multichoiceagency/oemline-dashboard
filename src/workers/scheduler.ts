@@ -185,17 +185,18 @@ export async function startScheduler(): Promise<void> {
   );
   logger.info("Scheduled IC catalog sync (24h)");
 
-  // IC enrichment: every 6 hours — fix articles, SKU lookups, brand aliases, aggressive matching
-  // Runs after IC catalog sync to maximize match rate toward 100%
-  await icEnrichQueue.add(
-    "ic-enrich-scheduled",
-    { mode: "full", maxEnrich: 50_000, parallelism: 20 },
-    {
-      repeat: { every: 6 * 60 * 60 * 1000 },
-      jobId: "ic-enrich-repeat",
-    }
-  );
-  logger.info("Scheduled IC enrichment (6h)");
+  // IC enrichment: DISABLED while catalog crawl is in progress.
+  // IC enrich makes parallel API calls that flood the IC rate limit (60 req/min)
+  // and block the catalog crawler. Re-enable after full 3M catalog is crawled.
+  // await icEnrichQueue.add(
+  //   "ic-enrich-scheduled",
+  //   { mode: "full", maxEnrich: 50_000, parallelism: 20 },
+  //   {
+  //     repeat: { every: 6 * 60 * 60 * 1000 },
+  //     jobId: "ic-enrich-repeat",
+  //   }
+  // );
+  logger.info("IC enrichment DISABLED (catalog crawl in progress)");
 
   // Fire initial jobs immediately for all suppliers
   // Use jobId for deduplication — prevents duplicate jobs accumulating across restarts
