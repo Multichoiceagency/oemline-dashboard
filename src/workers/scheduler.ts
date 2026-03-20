@@ -110,9 +110,10 @@ export async function startScheduler(): Promise<void> {
       }
     }
 
-    // Stock: every 30 minutes (all suppliers with fetchQuoteBatch support)
-    // In swarm mode, this is handled by the swarm job, but we keep a fallback
-    if (!useSwarmMode || isDirect) {
+    // Stock: only for direct suppliers (DIEDERICHS, VAN WEZEL, etc.)
+    // For IC-linked suppliers, the pricing worker already updates stock via /inventory/quote
+    // Running a separate stock worker wastes IC API quota (same endpoint, same data)
+    if (isDirect) {
       await stockQueue.add(
         `stock-${supplier.code}`,
         { supplierCode: supplier.code },
@@ -121,9 +122,6 @@ export async function startScheduler(): Promise<void> {
           jobId: `stock-repeat-${supplier.code}`,
         }
       );
-    }
-
-    if (isDirect) {
       logger.info({ supplier: supplier.code }, "Scheduled stock(30m) [direct supplier]");
     }
   }
@@ -241,7 +239,8 @@ export async function startScheduler(): Promise<void> {
       }
     }
 
-    if (!useSwarmMode || isDirectSupplier) {
+    // Stock initial only for direct suppliers (IC stock comes via pricing worker)
+    if (isDirectSupplier) {
       await stockQueue.add(
         `stock-initial-${supplier.code}`,
         { supplierCode: supplier.code },
