@@ -219,15 +219,18 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
 
   logger.info({ topCategories: topCategories.length }, "IC top-level categories fetched");
 
-  // ── Step 2: Resolve subcategories for large categories ────────────────
+  // ── Step 2: Build category list ───────────────────────────────────────
+  // Strategy: First crawl top-level categories (10K each, fast).
+  // Then resolve subcategories only for categories that have >10K products
+  // to get the remaining products in a second pass.
   const allLeafCategories: IcCategory[] = [];
+
+  // Pass 1: Add all top-level categories directly (each gets up to 10K products)
   for (const cat of topCategories) {
-    const leaves = await getLeafCategories(cat.categoryId, cat.label);
-    allLeafCategories.push(...leaves);
-    logger.info({ category: cat.label, leaves: leaves.length }, "Resolved subcategories");
+    allLeafCategories.push(cat);
   }
 
-  logger.info({ totalLeafCategories: allLeafCategories.length }, "All leaf categories resolved");
+  logger.info({ totalCategories: allLeafCategories.length, mode: "top-level-first" }, "Starting fast crawl (10K per category)");
 
   let totalInserted = 0;
   let totalUpdated = 0;
@@ -291,6 +294,61 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
     // Extend job lock (long-running job)
     try { await job.extendLock(job.token!, 600_000); } catch { /* ok */ }
     await job.updateProgress(totalProcessed);
+  }
+
+  logger.info({ totalProcessed, totalInserted }, "Pass 1 done (top-level 10K each)");
+
+  // ── Pass 2: Resolve subcategories for large categories (>10K products) ─
+  // Only runs after pass 1 is complete to maximize early data
+  const largeCats = topCategories.filter(c => {
+    // Check if this category had more products than we could crawl (hit page 99)
+    return true; // resolve all to catch remaining products
+  });
+
+  for (const cat of largeCats) {
+    if (maxProducts && totalProcessed >= maxProducts) break;
+
+    try {
+      const leaves = await getLeafCategories(cat.categoryId, cat.label);
+      if (leaves.length <= 1) continue; // no subcategories or small enough
+
+      logger.info({ category: cat.label, leaves: leaves.length }, "Pass 2: resolved subcategories");
+
+      for (const leaf of leaves) {
+        let page = 0;
+        let leafProducts = 0;
+
+        while (true) {
+          if (maxProducts && totalProcessed >= maxProducts) break;
+          try {
+            const resp = await icFetch(
+              `${IC_API_URL}/catalog/products?categoryId=${encodeURIComponent(leaf.categoryId)}&pageNumber=${page}&pageSize=100`
+            );
+            if (!resp || !resp.ok) break;
+            const data = (await resp.json()) as IcCatalogResponse;
+            const products = data.products;
+            if (!products || products.length === 0) break;
+
+            const { inserted } = await batchUpsertMappings(products);
+            totalInserted += inserted;
+            totalProcessed += products.length;
+            leafProducts += products.length;
+
+            if (!data.hasNextPage) break;
+            page++;
+          } catch { break; }
+        }
+
+        if (leafProducts > 0) {
+          logger.info({ category: leaf.label, leafProducts, totalProcessed }, "Pass 2: leaf done");
+        }
+      }
+
+      try { await job.extendLock(job.token!, 600_000); } catch { /* ok */ }
+      await job.updateProgress(totalProcessed);
+    } catch (err) {
+      logger.warn({ err, category: cat.label }, "Pass 2: subcategory resolution failed");
+    }
   }
 
   // ── Optional: detail enrichment ───────────────────────────────────────
