@@ -1402,7 +1402,6 @@ export async function intercarsRoutes(app: FastifyInstance) {
          WHERE NOT EXISTS (
            SELECT 1 FROM product_maps pm
            WHERE pm.normalized_article_no = im.normalized_article_number
-             AND pm.ic_sku IS NOT NULL
          )
          AND im.normalized_article_number IS NOT NULL
          AND im.normalized_article_number != ''
