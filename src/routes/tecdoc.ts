@@ -54,10 +54,13 @@ export async function tecdocRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  // Get vehicle linkages for an article
+  // Get vehicle linkages for an article (by articleNumber or articleId)
   app.get("/tecdoc/linkages", async (request, reply) => {
     const schema = z.object({
-      articleId: z.coerce.number().int().min(1),
+      articleId: z.coerce.number().int().min(1).optional(),
+      articleNumber: z.string().min(1).optional(),
+    }).refine((d) => d.articleId || d.articleNumber, {
+      message: "Either articleId or articleNumber is required",
     });
 
     const parsed = schema.safeParse(request.query);
@@ -68,14 +71,47 @@ export async function tecdocRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    const { articleId } = parsed.data;
+    const { articleId, articleNumber } = parsed.data;
     const tecdoc = getTecDocService();
 
     try {
-      const linkages = await tecdoc.getArticleLinkages(articleId);
+      const linkages = articleNumber
+        ? await tecdoc.getArticleLinkagesByNumber(articleNumber)
+        : await tecdoc.getArticleLinkages(articleId!);
       return reply.send({ linkages, total: linkages.length });
     } catch (err) {
       request.log.error({ err }, "TecDoc linkages error");
+      return reply.code(502).send({
+        error: "TecDoc API error",
+        message: err instanceof Error ? err.message : "Unknown error",
+      });
+    }
+  });
+
+  // Get full article details (description, text, OEM numbers)
+  app.get("/tecdoc/details", async (request, reply) => {
+    const schema = z.object({
+      articleNumber: z.string().min(1),
+    });
+
+    const parsed = schema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "Bad Request",
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    const tecdoc = getTecDocService();
+
+    try {
+      const details = await tecdoc.getArticleDetails(parsed.data.articleNumber);
+      if (!details) {
+        return reply.code(404).send({ error: "Article not found in TecDoc" });
+      }
+      return reply.send(details);
+    } catch (err) {
+      request.log.error({ err }, "TecDoc details error");
       return reply.code(502).send({
         error: "TecDoc API error",
         message: err instanceof Error ? err.message : "Unknown error",

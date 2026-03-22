@@ -44,6 +44,30 @@ interface GetArticlesResponse {
 }
 
 /**
+ * Response from getArticles with includeAll (full details)
+ */
+interface FullArticleResponse {
+  articles?: Array<{
+    dataSupplierId?: number;
+    articleNumber?: string;
+    mfrName?: string;
+    mfrId?: number;
+    totalLinkages?: number;
+    genericArticles?: Array<{
+      genericArticleId?: number;
+      genericArticleDescription?: string;
+      assemblyGroupName?: string;
+      legacyArticleId?: number;
+    }>;
+    articleText?: Array<{ text?: string; textType?: string }>;
+    eanNumbers?: Array<{ eanNumber?: string }>;
+    oemNumbers?: Array<{ oemNumber?: string; mfrName?: string }>;
+    linkages?: Array<Record<string, unknown>>;
+  }>;
+  status?: number;
+}
+
+/**
  * Response from getArticleLinkedAllLinkingTarget4
  */
 interface LinkagesResponse {
@@ -245,7 +269,8 @@ export class TecDocService {
   }
 
   /**
-   * Get vehicle linkages for an article (which vehicles is this part for)
+   * Get vehicle linkages for an article (which vehicles is this part for).
+   * Accepts either a TecDoc articleId directly, or articleNumber to look up first.
    */
   async getArticleLinkages(articleId: number): Promise<VehicleLinkage[]> {
     const cached = await cacheGet<VehicleLinkage[]>("tecdoc", ["linkages", String(articleId)]);
@@ -256,7 +281,8 @@ export class TecDocService {
         "getArticleLinkedAllLinkingTarget4",
         {
           articleId,
-          linkingTargetType: "V", // Vehicles
+          linkingTargetType: "V",
+          country: ARTICLE_COUNTRY,
           perPage: 100,
           page: 1,
         }
@@ -268,6 +294,107 @@ export class TecDocService {
     } catch (err) {
       logger.error({ err, articleId }, "TecDoc getArticleLinkages failed");
       return [];
+    }
+  }
+
+  /**
+   * Get vehicle linkages by article number (looks up the real TecDoc articleId first).
+   */
+  async getArticleLinkagesByNumber(articleNumber: string): Promise<VehicleLinkage[]> {
+    const cacheKey = `linkages-by-number-${articleNumber}`;
+    const cached = await cacheGet<VehicleLinkage[]>("tecdoc", [cacheKey]);
+    if (cached) return cached;
+
+    try {
+      // Step 1: Look up the real TecDoc articleId via direct search
+      const searchResult = (await this.request(
+        "getArticleDirectSearchAllNumbersWithState",
+        {
+          articleNumber: articleNumber.replace(/\s+/g, ""),
+          numberType: 0,
+          searchExact: true,
+          perPage: 5,
+          page: 1,
+        }
+      )) as DirectSearchResponse;
+
+      const articles = searchResult.data?.array ?? [];
+      if (articles.length === 0) {
+        logger.debug({ articleNumber }, "No TecDoc article found for linkage lookup");
+        return [];
+      }
+
+      const realArticleId = articles[0].articleId;
+      if (!realArticleId) return [];
+
+      // Step 2: Get linkages with the real articleId
+      const linkages = await this.getArticleLinkages(realArticleId);
+      await cacheSet("tecdoc", [cacheKey], linkages);
+      return linkages;
+    } catch (err) {
+      logger.error({ err, articleNumber }, "TecDoc getArticleLinkagesByNumber failed");
+      return [];
+    }
+  }
+
+  /**
+   * Get full article details including description and generic article info.
+   */
+  async getArticleDetails(articleNumber: string): Promise<{
+    description: string;
+    genericArticle: string;
+    articleText: string[];
+    oemNumbers: string[];
+    totalLinkages: number;
+  } | null> {
+    const cached = await cacheGet<ReturnType<typeof this.getArticleDetails>>("tecdoc", ["details", articleNumber]);
+    if (cached) return cached;
+
+    try {
+      // First get the real article via direct search
+      const searchResult = (await this.request(
+        "getArticleDirectSearchAllNumbersWithState",
+        {
+          articleNumber: articleNumber.replace(/\s+/g, ""),
+          numberType: 0,
+          searchExact: true,
+          perPage: 1,
+          page: 1,
+        }
+      )) as DirectSearchResponse;
+
+      const found = searchResult.data?.array?.[0];
+      if (!found?.articleId) return null;
+
+      // Then get full details using getArticles with the articleId
+      const result = (await this.request("getArticles", {
+        articleId: found.articleId,
+        includeAll: true,
+        includeArticleText: true,
+        perPage: 1,
+        page: 1,
+      })) as FullArticleResponse;
+
+      const art = result.articles?.[0];
+      if (!art) return null;
+
+      const ga = art.genericArticles?.[0];
+      const texts = (art.articleText ?? []).map((t) => t.text).filter(Boolean) as string[];
+      const oems = (art.oemNumbers ?? []).map((o) => o.oemNumber).filter(Boolean) as string[];
+
+      const details = {
+        description: found.articleName ?? ga?.genericArticleDescription ?? "",
+        genericArticle: ga?.genericArticleDescription ?? "",
+        articleText: texts,
+        oemNumbers: oems,
+        totalLinkages: art.totalLinkages ?? 0,
+      };
+
+      await cacheSet("tecdoc", ["details", articleNumber], details);
+      return details;
+    } catch (err) {
+      logger.error({ err, articleNumber }, "TecDoc getArticleDetails failed");
+      return null;
     }
   }
 
