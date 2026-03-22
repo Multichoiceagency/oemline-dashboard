@@ -1618,6 +1618,118 @@ export async function jobRoutes(app: FastifyInstance) {
   });
 
   /**
+   * POST /jobs/enrich-descriptions
+   *
+   * Bulk-updates empty product descriptions from 3 sources:
+   * 1. IC CSV descriptions (intercars_mappings.description)
+   * 2. Category name (categories.name) as fallback
+   * 3. Generic article description (product_maps.generic_article)
+   */
+  app.post("/jobs/enrich-descriptions", async () => {
+    const { prisma: db } = await import("../lib/prisma.js");
+    const { logger: log } = await import("../lib/logger.js");
+
+    const results: Record<string, number> = {};
+
+    // Phase 1: Update from IC CSV descriptions (highest quality)
+    // Join matched products (ic_sku) with intercars_mappings to get descriptions
+    try {
+      const phase1 = await db.$executeRawUnsafe(`
+        UPDATE product_maps pm
+        SET description = im.description,
+            updated_at = NOW()
+        FROM intercars_mappings im
+        WHERE pm.ic_sku = im.tow_kod
+          AND im.description IS NOT NULL
+          AND im.description != ''
+          AND (pm.description IS NULL OR pm.description = '')
+      `);
+      results.icCsvDescriptions = phase1;
+      log.info({ count: phase1 }, "Phase 1: Updated descriptions from IC CSV");
+    } catch (err) {
+      log.warn({ err }, "Phase 1 failed");
+      results.icCsvDescriptions = 0;
+    }
+
+    // Phase 2: Update from IC CSV via normalized article number (for non-matched products)
+    try {
+      const phase2 = await db.$executeRawUnsafe(`
+        UPDATE product_maps pm
+        SET description = sub.ic_desc,
+            updated_at = NOW()
+        FROM (
+          SELECT DISTINCT ON (pm2.id) pm2.id, im.description AS ic_desc
+          FROM product_maps pm2
+          JOIN intercars_mappings im ON
+            im.normalized_article_number = pm2.normalized_article_no
+            AND im.description IS NOT NULL
+            AND im.description != ''
+          WHERE (pm2.description IS NULL OR pm2.description = '')
+            AND pm2.status = 'active'
+          ORDER BY pm2.id
+        ) sub
+        WHERE pm.id = sub.id
+      `);
+      results.icCsvByArticle = phase2;
+      log.info({ count: phase2 }, "Phase 2: Updated descriptions from IC CSV by article number");
+    } catch (err) {
+      log.warn({ err }, "Phase 2 failed");
+      results.icCsvByArticle = 0;
+    }
+
+    // Phase 3: Fallback to generic_article field
+    try {
+      const phase3 = await db.$executeRawUnsafe(`
+        UPDATE product_maps
+        SET description = generic_article,
+            updated_at = NOW()
+        WHERE (description IS NULL OR description = '')
+          AND generic_article IS NOT NULL
+          AND generic_article != ''
+          AND status = 'active'
+      `);
+      results.genericArticle = phase3;
+      log.info({ count: phase3 }, "Phase 3: Updated descriptions from generic_article");
+    } catch (err) {
+      log.warn({ err }, "Phase 3 failed");
+      results.genericArticle = 0;
+    }
+
+    // Phase 4: Fallback to category name
+    try {
+      const phase4 = await db.$executeRawUnsafe(`
+        UPDATE product_maps pm
+        SET description = c.name,
+            updated_at = NOW()
+        FROM categories c
+        WHERE pm.category_id = c.id
+          AND (pm.description IS NULL OR pm.description = '')
+          AND c.name IS NOT NULL
+          AND c.name != ''
+          AND pm.status = 'active'
+      `);
+      results.categoryName = phase4;
+      log.info({ count: phase4 }, "Phase 4: Updated descriptions from category name");
+    } catch (err) {
+      log.warn({ err }, "Phase 4 failed");
+      results.categoryName = 0;
+    }
+
+    // Count remaining empty descriptions
+    const remaining = await db.$queryRawUnsafe<Array<{ count: bigint }>>(
+      `SELECT COUNT(*) as count FROM product_maps WHERE (description IS NULL OR description = '') AND status = 'active'`
+    );
+
+    const total = results.icCsvDescriptions + results.icCsvByArticle + results.genericArticle + results.categoryName;
+
+    return {
+      totalUpdated: total,
+      byPhase: results,
+      remainingEmpty: Number(remaining[0]?.count ?? 0),
+    };
+  });
+
+  /**
    * Get current TecDoc brand filter.
    */
   app.get("/jobs/brand-filter", async () => {
