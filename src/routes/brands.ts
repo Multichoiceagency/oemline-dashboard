@@ -21,6 +21,7 @@ const updateSchema = z.object({
   name: z.string().min(1).optional(),
   logoUrl: z.string().nullable().optional(),
   tecdocId: z.number().int().nullable().optional(),
+  showOnStorefront: z.boolean().optional(),
 });
 
 export async function brandRoutes(app: FastifyInstance) {
@@ -360,6 +361,41 @@ export async function brandRoutes(app: FastifyInstance) {
       deletedProducts,
       brands: toDelete.map((b) => ({ id: b.id, name: b.name, tecdocId: b.tecdocId, products: b._count.productMaps })),
     };
+  });
+
+  // Bulk set showOnStorefront flag by brand names
+  app.post("/brands/set-storefront", async (request) => {
+    const { names } = request.body as { names: string[] };
+    if (!Array.isArray(names) || names.length === 0) {
+      return { error: "names array required" };
+    }
+
+    // Reset all brands to not show
+    await prisma.brand.updateMany({
+      data: { showOnStorefront: false },
+    });
+
+    // Set the selected brands
+    let matched = 0;
+    const notFound: string[] = [];
+    for (const name of names) {
+      const result = await prisma.brand.updateMany({
+        where: {
+          OR: [
+            { name: { equals: name, mode: "insensitive" } },
+            { name: { equals: name } },
+          ],
+        },
+        data: { showOnStorefront: true },
+      });
+      if (result.count > 0) {
+        matched += result.count;
+      } else {
+        notFound.push(name);
+      }
+    }
+
+    return { requested: names.length, matched, notFound };
   });
 
   // Update brand

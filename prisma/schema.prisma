@@ -8,16 +8,16 @@ datasource db {
 }
 
 model Supplier {
-  id            Int      @id @default(autoincrement())
-  name          String   @unique
-  code          String   @unique
-  adapterType   String   @map("adapter_type")
-  baseUrl       String   @map("base_url")
-  credentials   String   @default("{}")
-  priority      Int      @default(100)
-  active        Boolean  @default(true)
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  code        String   @unique
+  adapterType String   @map("adapter_type")
+  baseUrl     String   @map("base_url")
+  credentials String   @default("{}")
+  priority    Int      @default(100)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   brandRules  SupplierBrandRule[]
   productMaps ProductMap[]
@@ -30,13 +30,14 @@ model Supplier {
 }
 
 model Brand {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  code      String   @unique
-  tecdocId  Int?     @unique @map("tecdoc_id")
-  logoUrl   String?  @map("logo_url")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id               Int      @id @default(autoincrement())
+  name             String   @unique
+  code             String   @unique
+  tecdocId         Int?     @unique @map("tecdoc_id")
+  logoUrl          String?  @map("logo_url")
+  showOnStorefront Boolean  @default(false) @map("show_on_storefront")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
 
   brandRules  SupplierBrandRule[]
   productMaps ProductMap[]
@@ -48,17 +49,17 @@ model Brand {
 }
 
 model Category {
-  id          Int      @id @default(autoincrement())
-  name        String
-  code        String   @unique
-  tecdocId    Int?     @unique @map("tecdoc_id")
-  parentId    Int?     @map("parent_id")
-  level       Int      @default(0)
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id        Int      @id @default(autoincrement())
+  name      String
+  code      String   @unique
+  tecdocId  Int?     @unique @map("tecdoc_id")
+  parentId  Int?     @map("parent_id")
+  level     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
-  children Category[] @relation("CategoryTree")
+  parent   Category?    @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[]   @relation("CategoryTree")
   products ProductMap[]
 
   @@index([parentId])
@@ -88,29 +89,29 @@ model SupplierBrandRule {
 }
 
 model ProductMap {
-  id          Int      @id @default(autoincrement())
-  supplierId  Int      @map("supplier_id")
-  brandId     Int      @map("brand_id")
-  categoryId  Int?     @map("category_id")
-  sku         String
-  articleNo   String   @map("article_no")
-  ean         String?
-  tecdocId    String?  @map("tecdoc_id")
-  oem         String?
-  description String   @default("")
-  imageUrl    String?  @map("image_url")
-  images      Json?    @default("[]")
-  price       Float?
-  currency    String?  @default("EUR")
-  stock       Int?
-  weight      Float?
-  genericArticle String? @map("generic_article")
-  oemNumbers  Json?    @default("[]") @map("oem_numbers")
-  icSku       String?  @map("ic_sku")
-  icMatchedAt DateTime? @map("ic_matched_at")
-  status      String   @default("active")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id             Int       @id @default(autoincrement())
+  supplierId     Int       @map("supplier_id")
+  brandId        Int       @map("brand_id")
+  categoryId     Int?      @map("category_id")
+  sku            String
+  articleNo      String    @map("article_no")
+  ean            String?
+  tecdocId       String?   @map("tecdoc_id")
+  oem            String?
+  description    String    @default("")
+  imageUrl       String?   @map("image_url")
+  images         Json?     @default("[]")
+  price          Float?
+  currency       String?   @default("EUR")
+  stock          Int?
+  weight         Float?
+  genericArticle String?   @map("generic_article")
+  oemNumbers     Json?     @default("[]") @map("oem_numbers")
+  icSku          String?   @map("ic_sku")
+  icMatchedAt    DateTime? @map("ic_matched_at")
+  status         String    @default("active")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   supplier Supplier  @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   brand    Brand     @relation(fields: [brandId], references: [id], onDelete: Cascade)
