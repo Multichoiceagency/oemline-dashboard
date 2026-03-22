@@ -82,13 +82,6 @@ interface IcProduct {
 // ── Main worker ──────────────────────────────────────────────────────────
 
 export async function processIcEnrichJob(job: Job<IcEnrichJobData>): Promise<void> {
-  // DISABLED: IC enrich floods IC API rate limit (60 req/min) with parallel calls,
-  // blocking the catalog crawler. Re-enable after full 3M catalog crawl completes.
-  if (job.data.mode !== "match-only" && job.data.mode !== "aliases-only") {
-    logger.info("IC enrich SKIPPED — catalog crawl in progress. Only match-only/aliases-only allowed.");
-    return;
-  }
-
   const { mode = "full", maxLookup = 0, parallelism = 10 } = job.data;
 
   if (!IC_CLIENT_ID || !IC_CLIENT_SECRET) {

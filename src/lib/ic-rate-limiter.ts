@@ -31,9 +31,8 @@ export async function waitForIcRateLimit(): Promise<void> {
 /**
  * Get current rate limiter stats (for monitoring/logging).
  */
-export function getIcRateLimiterStats(): { burstCount: number; maxPerMinute: number } {
+export function getIcRateLimiterStats(): { maxPerMinute: number } {
   return {
-    burstCount,
     maxPerMinute: MAX_REQUESTS_PER_MINUTE,
   };
 }
