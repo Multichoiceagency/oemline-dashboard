@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { useApi, useInterval } from "@/lib/hooks";
 import {
   getProducts,
@@ -65,6 +66,7 @@ const SEED_QUERIES = [
 ];
 
 export default function ProductsPage() {
+  const router = useRouter();
   const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [supplierFilter, setSupplierFilter] = useState("all");
@@ -450,8 +452,8 @@ export default function ProductsPage() {
               </TableHeader>
               <TableBody>
                 {data.items.map((p) => (
-                  <TableRow key={p.id} className="cursor-pointer hover:bg-muted/50">
-                    <TableCell onClick={() => openDetail(p)}>
+                  <TableRow key={p.id} className="cursor-pointer hover:bg-muted/50" onClick={() => router.push(`/products/${p.id}`)}>
+                    <TableCell>
                       {p.imageUrl ? (
                         <img src={p.imageUrl} alt="" className="h-10 w-10 object-contain rounded border" />
                       ) : (
@@ -460,29 +462,23 @@ export default function ProductsPage() {
                         </div>
                       )}
                     </TableCell>
-                    <TableCell
-                      className="font-mono text-xs font-medium"
-                      onClick={() => openDetail(p)}
-                    >
+                    <TableCell className="font-mono text-xs font-medium">
                       <div>{p.articleNo}</div>
                       <div className="text-muted-foreground">SKU: {p.sku}</div>
                       {p.icCode && (
                         <div className="text-blue-600">IC: {p.icCode}</div>
                       )}
                     </TableCell>
-                    <TableCell onClick={() => openDetail(p)}>
+                    <TableCell>
                       <Badge variant="outline">{p.brand?.name ?? "-"}</Badge>
                     </TableCell>
-                    <TableCell onClick={() => openDetail(p)}>
+                    <TableCell>
                       <Badge variant="secondary">{p.supplier?.name ?? "-"}</Badge>
                     </TableCell>
-                    <TableCell
-                      className="max-w-[200px] truncate text-sm"
-                      onClick={() => openDetail(p)}
-                    >
+                    <TableCell className="max-w-[200px] truncate text-sm">
                       {p.description || "-"}
                     </TableCell>
-                    <TableCell onClick={() => openDetail(p)}>
+                    <TableCell>
                       {p.price != null ? (
                         <span className="font-mono text-xs font-medium">
                           {p.currency ?? "EUR"} {p.price.toFixed(2)}
@@ -491,7 +487,7 @@ export default function ProductsPage() {
                         <span className="text-xs text-muted-foreground">-</span>
                       )}
                     </TableCell>
-                    <TableCell onClick={() => openDetail(p)}>
+                    <TableCell>
                       {p.stock != null ? (
                         <Badge variant={p.stock > 0 ? "success" : "destructive"}>
                           {p.stock}
@@ -504,29 +500,14 @@ export default function ProductsPage() {
                       {formatDate(p.updatedAt)}
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openDetail(p)}
-                        >
+                      <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                        <Button variant="ghost" size="sm" onClick={() => router.push(`/products/${p.id}`)}>
                           <Eye className="h-3 w-3" />
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            openDetail(p);
-                            setEditMode(true);
-                          }}
-                        >
+                        <Button variant="ghost" size="sm" onClick={() => router.push(`/products/${p.id}?edit=true`)}>
                           <Pencil className="h-3 w-3" />
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDelete(p)}
-                        >
+                        <Button variant="ghost" size="sm" onClick={() => handleDelete(p)}>
                           <Trash2 className="h-3 w-3 text-destructive" />
                         </Button>
                       </div>
