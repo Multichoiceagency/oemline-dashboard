@@ -12,6 +12,8 @@ import {
   updateProduct,
   uploadProductImage,
   getTecDocLinkages,
+  getTecDocLinkagesByNumber,
+  getTecDocDetails,
   getJobsStatus,
   pushFinalizedProduct,
   pushAllFinalized,
@@ -1117,10 +1119,11 @@ function ProductDetail({ product }: { product: FinalizedDetail }) {
   const [linkagesLoaded, setLinkagesLoaded] = useState(false);
 
   const loadLinkages = async () => {
-    if (!product.tecdocId || linkagesLoaded) return;
+    if (!product.articleNo || linkagesLoaded) return;
     setLoadingLinkages(true);
     try {
-      const result = await getTecDocLinkages(parseInt(product.tecdocId, 10));
+      // Use articleNumber for lookup (tecdocId stores dataSupplierId, not the real article ID)
+      const result = await getTecDocLinkagesByNumber(product.articleNo);
       setLinkages(result.linkages);
     } catch {
       // TecDoc linkage lookup failed — not critical
@@ -1130,11 +1133,11 @@ function ProductDetail({ product }: { product: FinalizedDetail }) {
     }
   };
 
-  // Auto-load linkages when product has tecdocId
+  // Auto-load linkages when product detail is opened
   useEffect(() => {
-    if (product.tecdocId) loadLinkages();
+    if (product.articleNo) loadLinkages();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [product.tecdocId]);
+  }, [product.articleNo]);
 
   return (
     <div className="space-y-6">
@@ -1292,7 +1295,7 @@ function ProductDetail({ product }: { product: FinalizedDetail }) {
       )}
 
       {/* Vehicle Applicability */}
-      {product.tecdocId && (
+      {product.articleNo && (
         <div>
           <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
             <Car className="h-4 w-4" /> Toepasbaarheid (Voertuigen)

@@ -468,6 +468,20 @@ export interface VehicleLinkagesResponse {
 export const getTecDocLinkages = (articleId: number) =>
   apiFetch<VehicleLinkagesResponse>(`/api/tecdoc/linkages?articleId=${articleId}`);
 
+export const getTecDocLinkagesByNumber = (articleNumber: string) =>
+  apiFetch<VehicleLinkagesResponse>(`/api/tecdoc/linkages?articleNumber=${encodeURIComponent(articleNumber)}`);
+
+export interface ArticleDetailsResponse {
+  description: string;
+  genericArticle: string;
+  articleText: string[];
+  oemNumbers: string[];
+  totalLinkages: number;
+}
+
+export const getTecDocDetails = (articleNumber: string) =>
+  apiFetch<ArticleDetailsResponse>(`/api/tecdoc/details?articleNumber=${encodeURIComponent(articleNumber)}`);
+
 export const populateTecDoc = (queries: string[]) =>
   apiFetch<{ imported: number; updated: number; total: number }>(
     "/api/tecdoc/populate",
