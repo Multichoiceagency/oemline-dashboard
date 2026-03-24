@@ -1357,7 +1357,9 @@ export async function intercarsRoutes(app: FastifyInstance) {
    * The products are created under the TecDoc supplier (so they appear alongside
    * other products) with icSku already set (since they come from IC).
    */
-  app.post("/intercars/import-ic-products", async () => {
+  app.post("/intercars/import-ic-products", {
+    onRequest: async (request) => { request.raw.socket.setTimeout(300_000); },
+  }, async () => {
     const tecdocSupplier = await prisma.supplier.findUnique({ where: { code: "tecdoc" } });
     if (!tecdocSupplier) return { error: "TecDoc supplier not found" };
 
