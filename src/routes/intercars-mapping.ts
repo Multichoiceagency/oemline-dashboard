@@ -1359,17 +1359,14 @@ export async function intercarsRoutes(app: FastifyInstance) {
    */
   app.post("/intercars/import-ic-products", {
     onRequest: async (request) => { request.raw.socket.setTimeout(300_000); },
-  }, async () => {
+  }, async (request) => {
+    const { brandIds, manufacturers } = (request.body ?? {}) as {
+      brandIds?: number[];
+      manufacturers?: string[];
+    };
+
     const tecdocSupplier = await prisma.supplier.findUnique({ where: { code: "tecdoc" } });
     if (!tecdocSupplier) return { error: "TecDoc supplier not found" };
-
-    // Find IC CSV entries that don't match any product_map by normalized article number
-    // and whose brand has an alias or direct match in the DB.
-    // We batch this to avoid memory issues.
-    const BATCH_SIZE = 5000;
-    let totalImported = 0;
-    let totalSkipped = 0;
-    let offset = 0;
 
     // Pre-load brand mapping: IC manufacturer → DB brand ID
     const aliases = await prisma.supplierBrandRule.findMany({
@@ -1379,82 +1376,70 @@ export async function intercarsRoutes(app: FastifyInstance) {
     for (const a of aliases) {
       brandMap.set(a.supplierBrand.toUpperCase(), a.brandId);
     }
-    // Also direct brand name matches
     const allBrands = await prisma.brand.findMany({ select: { id: true, name: true } });
     for (const b of allBrands) {
       const upper = b.name.toUpperCase();
       if (!brandMap.has(upper)) brandMap.set(upper, b.id);
     }
 
-    // Process in batches
-    while (true) {
-      const unmatchedIc = await prisma.$queryRawUnsafe<Array<{
-        tow_kod: string;
-        article_number: string;
-        manufacturer: string;
-        description: string | null;
-        ean: string | null;
-        weight: number | null;
-        tecdoc_prod: number | null;
-        normalized_article_number: string | null;
-      }>>(
-        `SELECT im.tow_kod, im.article_number, im.manufacturer, im.description,
-                im.ean, im.weight, im.tecdoc_prod, im.normalized_article_number
-         FROM intercars_mappings im
-         WHERE NOT EXISTS (
-           SELECT 1 FROM product_maps pm
-           WHERE pm.normalized_article_no = im.normalized_article_number
-         )
-         AND im.normalized_article_number IS NOT NULL
-         AND im.normalized_article_number != ''
-         ORDER BY im.tow_kod
-         LIMIT ${BATCH_SIZE} OFFSET ${offset}`
-      );
-
-      if (unmatchedIc.length === 0) break;
-
-      for (const ic of unmatchedIc) {
-        const brandId = brandMap.get(ic.manufacturer.toUpperCase());
-        if (!brandId) { totalSkipped++; continue; }
-
-        try {
-          // Use raw SQL to include normalized_article_no (not in Prisma schema)
-          await prisma.$executeRawUnsafe(
-            `INSERT INTO product_maps (supplier_id, brand_id, sku, article_no, normalized_article_no,
-              ean, tecdoc_id, description, ic_sku, ic_matched_at, weight, status, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10, 'active', NOW(), NOW())
-             ON CONFLICT (supplier_id, sku) DO UPDATE SET
-               ic_sku = EXCLUDED.ic_sku,
-               ic_matched_at = NOW(),
-               ean = COALESCE(EXCLUDED.ean, product_maps.ean),
-               weight = COALESCE(EXCLUDED.weight, product_maps.weight)`,
-            tecdocSupplier.id,
-            brandId,
-            ic.tow_kod,
-            ic.article_number,
-            ic.normalized_article_number,
-            ic.ean,
-            ic.tecdoc_prod ? String(ic.tecdoc_prod) : null,
-            ic.description ?? ic.article_number,
-            ic.tow_kod,
-            ic.weight
-          );
-          totalImported++;
-        } catch {
-          totalSkipped++;
-        }
+    // Build manufacturer filter if brandIds or manufacturers specified
+    let mfrFilter = "";
+    const targetBrandIds = new Set<number>(brandIds || []);
+    if (manufacturers?.length) {
+      const escaped = manufacturers.map(m => m.replace(/'/g, "''")).join("','");
+      mfrFilter = `AND UPPER(im.manufacturer) IN ('${escaped.toUpperCase()}')`;
+    } else if (brandIds?.length) {
+      // Find manufacturer names that map to these brand IDs
+      const mfrNames: string[] = [];
+      for (const [mfr, bid] of brandMap) {
+        if (targetBrandIds.has(bid)) mfrNames.push(mfr);
       }
-
-      offset += BATCH_SIZE;
-
-      // Safety: don't import more than 500K in one call
-      if (totalImported + totalSkipped > 500_000) break;
+      if (mfrNames.length > 0) {
+        const escaped = mfrNames.map(m => m.replace(/'/g, "''")).join("','");
+        mfrFilter = `AND UPPER(im.manufacturer) IN ('${escaped}')`;
+      }
     }
 
+    // Use efficient bulk INSERT ... SELECT to import all at once
+    const result = await prisma.$executeRawUnsafe(`
+      INSERT INTO product_maps (supplier_id, brand_id, sku, article_no, normalized_article_no,
+        ean, tecdoc_id, description, ic_sku, ic_matched_at, weight, status, created_at, updated_at)
+      SELECT
+        $1::int,
+        sbr.brand_id,
+        im.tow_kod,
+        im.article_number,
+        im.normalized_article_number,
+        im.ean,
+        CASE WHEN im.tecdoc_prod IS NOT NULL THEN im.tecdoc_prod::text ELSE NULL END,
+        COALESCE(im.description, im.article_number),
+        im.tow_kod,
+        NOW(),
+        im.weight,
+        'active',
+        NOW(),
+        NOW()
+      FROM intercars_mappings im
+      JOIN supplier_brand_rules sbr ON UPPER(sbr.supplier_brand) = UPPER(im.manufacturer)
+        AND sbr.active = true
+      WHERE NOT EXISTS (
+        SELECT 1 FROM product_maps pm
+        WHERE pm.supplier_id = $1 AND pm.sku = im.tow_kod
+      )
+      AND im.normalized_article_number IS NOT NULL
+      AND im.normalized_article_number != ''
+      ${mfrFilter}
+      ON CONFLICT (supplier_id, sku) DO UPDATE SET
+        ic_sku = EXCLUDED.ic_sku,
+        ic_matched_at = NOW(),
+        ean = COALESCE(EXCLUDED.ean, product_maps.ean),
+        weight = COALESCE(EXCLUDED.weight, product_maps.weight)
+    `, tecdocSupplier.id);
+
     return {
-      imported: totalImported,
-      skipped: totalSkipped,
-      message: `Imported ${totalImported} IC-only products as product_maps with icSku pre-set`,
+      imported: result,
+      message: `Imported IC-only products as product_maps with icSku pre-set`,
+      filter: mfrFilter ? "filtered by brands" : "all IC brands",
     };
   });
 
