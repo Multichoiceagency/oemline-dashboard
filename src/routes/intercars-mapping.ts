@@ -1401,15 +1401,15 @@ export async function intercarsRoutes(app: FastifyInstance) {
     }
 
     // Use efficient bulk INSERT ... SELECT to import all at once
+    // NOTE: normalized_article_no is a GENERATED column — cannot be inserted directly
     const result = await prisma.$executeRawUnsafe(`
-      INSERT INTO product_maps (supplier_id, brand_id, sku, article_no, normalized_article_no,
+      INSERT INTO product_maps (supplier_id, brand_id, sku, article_no,
         ean, tecdoc_id, description, ic_sku, ic_matched_at, weight, status, created_at, updated_at)
       SELECT
         $1::int,
         sbr.brand_id,
         im.tow_kod,
         im.article_number,
-        im.normalized_article_number,
         im.ean,
         CASE WHEN im.tecdoc_prod IS NOT NULL THEN im.tecdoc_prod::text ELSE NULL END,
         COALESCE(im.description, im.article_number),
