@@ -139,6 +139,18 @@ export const icEnrichQueue = new Queue("ic-enrich", {
   },
 });
 
+// IC CSV sync: download daily CSVs (ProductInfo, Pricing, Stock) from IC HTTPS endpoint
+// Replaces API-based pricing/stock for IC — zero rate limiting, complete data in ~2 minutes
+export const icCsvSyncQueue = new Queue("ic-csv-sync", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 10 },
+    removeOnFail: { count: 20 },
+    attempts: 3,
+    backoff: { type: "exponential", delay: 60_000 },
+  },
+});
+
 // Swarm orchestration queue: parallel sync, matching, and pricing
 // Replaces sequential workers with 4-5x faster parallel execution
 export const swarmQueue = new Queue("swarm", {

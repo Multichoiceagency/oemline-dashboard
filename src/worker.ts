@@ -18,6 +18,7 @@ import { processSwarmWorkerJob } from "./workers/swarm.worker.js";
 import { processOemEnrichJob } from "./workers/oem-enrich.worker.js";
 import { processIcCatalogJob } from "./workers/ic-catalog.worker.js";
 import { processIcEnrichJob } from "./workers/ic-enrich.worker.js";
+import { processIcCsvSyncJob } from "./workers/ic-csv-sync.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 import { sendWorkerNotification } from "./lib/notify.js";
@@ -194,6 +195,16 @@ if (handles("ic-catalog") || handles("sync")) {
     concurrency: 1, // Single job — long-running crawl
     stalledInterval: 600_000,
     lockDuration: 7_200_000, // 2 hours — full crawl takes 2-4h
+  }));
+}
+
+// IC CSV sync: daily CSV download for prices/stock (replaces API-based pricing for IC)
+if (handles("ic-csv-sync") || handles("pricing") || handles("sync")) {
+  workers.push(new Worker("ic-csv-sync", processIcCsvSyncJob, {
+    connection,
+    concurrency: 1,
+    stalledInterval: 600_000,
+    lockDuration: 600_000, // 10 min — CSV sync is fast
   }));
 }
 

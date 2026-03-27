@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue } from "./queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue } from "./queues.js";
 
 /**
  * Sets up repeatable jobs for continuous sync, match, pricing, stock, and index.
@@ -20,7 +20,7 @@ export async function startScheduler(): Promise<void> {
   logger.info("Starting job scheduler...");
 
   // Clean up old repeatable jobs to avoid duplicates
-  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue]) {
+  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue]) {
     const existing = await queue.getRepeatableJobs();
     for (const job of existing) {
       await queue.removeRepeatableByKey(job.key);
@@ -197,6 +197,19 @@ export async function startScheduler(): Promise<void> {
   //   }
   // );
   logger.info("IC enrichment DISABLED (catalog crawl in progress)");
+
+  // IC CSV sync: daily at 4:30 AM CET — download fresh prices/stock from IC HTTPS CSVs
+  // IC generates CSVs between 3:00-5:30 AM Polish time. This replaces API-based pricing.
+  // Zero API calls, zero rate limiting, complete data in ~2 minutes.
+  await icCsvSyncQueue.add(
+    "ic-csv-sync-scheduled",
+    { priceStockOnly: false },
+    {
+      repeat: { every: 24 * 60 * 60 * 1000 }, // Every 24 hours
+      jobId: "ic-csv-sync-repeat",
+    }
+  );
+  logger.info("Scheduled IC CSV sync (24h — prices/stock from CSV)");
 
   // Fire initial jobs immediately for all suppliers
   // Use jobId for deduplication — prevents duplicate jobs accumulating across restarts

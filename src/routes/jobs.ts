@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue } from "../workers/queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue } from "../workers/queues.js";
 
 export async function jobRoutes(app: FastifyInstance) {
   // Get all job queue status
@@ -155,6 +155,17 @@ export async function jobRoutes(app: FastifyInstance) {
       { priority: 1 }
     );
     return { jobId: job.id, queue: "ic-catalog", status: "queued" };
+  });
+
+  // Manually trigger IC CSV sync (download daily CSVs for prices/stock)
+  app.post("/jobs/ic-csv-sync", async (request) => {
+    const body = (request.body ?? {}) as { date?: string; priceStockOnly?: boolean };
+    const job = await icCsvSyncQueue.add(
+      "ic-csv-sync-manual",
+      { date: body.date, priceStockOnly: body.priceStockOnly ?? false },
+      { priority: 1 }
+    );
+    return { jobId: job.id, queue: "ic-csv-sync", status: "queued" };
   });
 
   // IC enrichment: fix articles, SKU lookups, brand aliases, aggressive matching → 100% match
@@ -1753,6 +1764,7 @@ function getQueue(name: string) {
     case "oem-enrich": return oemEnrichQueue;
     case "ic-catalog": return icCatalogQueue;
     case "ic-enrich": return icEnrichQueue;
+    case "ic-csv-sync": return icCsvSyncQueue;
     default: return null;
   }
 }
