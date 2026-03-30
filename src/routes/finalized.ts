@@ -5,6 +5,7 @@ import { logger } from "../lib/logger.js";
 import { getAllSettings } from "./settings.js";
 import { meili, PRODUCTS_INDEX } from "../lib/meilisearch.js";
 import { pushQueue } from "../workers/queues.js";
+import { cacheGet, cacheSet } from "../services/cache.js";
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -34,6 +35,14 @@ export async function finalizedRoutes(app: FastifyInstance) {
   app.get("/finalized", async (request) => {
     const query = listQuerySchema.parse(request.query);
     const { page, limit, q, brand, category, categoryId, supplier, hasStock, hasPrice, hasImage } = query;
+
+    // Redis cache for storefront article lookups (q-only searches with small limits)
+    if (q && !brand && !category && !categoryId && !supplier && !hasStock && !hasPrice && !hasImage && limit <= 10) {
+      const cacheKeyParts = ["finalized", q, String(page), String(limit)];
+      const cached = await cacheGet<unknown>("pricing", cacheKeyParts);
+      if (cached) return cached;
+    }
+
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = {
@@ -210,7 +219,7 @@ export async function finalizedRoutes(app: FastifyInstance) {
       };
     });
 
-    return {
+    const result = {
       items: finalizedItems,
       total,
       page,
@@ -221,6 +230,13 @@ export async function finalizedRoutes(app: FastifyInstance) {
         marginPercentage: marginPct * 100,
       },
     };
+
+    // Cache storefront article lookups
+    if (q && !brand && !category && !categoryId && !supplier && !hasStock && !hasPrice && !hasImage && limit <= 10) {
+      await cacheSet("pricing", ["finalized", q, String(page), String(limit)], result);
+    }
+
+    return result;
   });
 
   // ─── GET /finalized/stats ─── Summary statistics
@@ -440,6 +456,129 @@ export async function finalizedRoutes(app: FastifyInstance) {
       updatedAt: product.updatedAt,
       createdAt: product.createdAt,
     };
+  });
+
+  // ─── POST /batch/articles ─── Fast batch lookup by article numbers (single query)
+  app.post("/batch/articles", async (request, reply) => {
+    const body = request.body as { articleNumbers?: string[] };
+    if (!Array.isArray(body?.articleNumbers) || body.articleNumbers.length === 0) {
+      return reply.code(400).send({ error: "articleNumbers array required (1-100)" });
+    }
+
+    const articleNumbers = body.articleNumbers.slice(0, 100).map((a) => String(a).trim()).filter(Boolean);
+    if (articleNumbers.length === 0) {
+      return { items: {}, found: 0, requested: 0 };
+    }
+
+    // Normalize for matching: uppercase, alphanumeric only
+    const normalized = articleNumbers.map((a) => a.replace(/[^a-zA-Z0-9]/g, "").toUpperCase());
+
+    // Check Redis cache first
+    const cacheKey = normalized.slice().sort().join(",");
+    const cached = await cacheGet<Record<string, unknown>>("pricing", ["batch", cacheKey]);
+    if (cached) {
+      return cached;
+    }
+
+    // Single DB query — find all matching products
+    const products = await prisma.$queryRawUnsafe<Array<{
+      id: number;
+      article_no: string;
+      sku: string | null;
+      description: string | null;
+      image_url: string | null;
+      images: unknown;
+      ean: string | null;
+      tecdoc_id: string | null;
+      oem: string | null;
+      generic_article: string | null;
+      oem_numbers: unknown;
+      price: number | null;
+      currency: string;
+      stock: number | null;
+      weight: number | null;
+      status: string;
+      ic_sku: string | null;
+      brand_id: number | null;
+      brand_name: string | null;
+      brand_code: string | null;
+      brand_logo_url: string | null;
+      category_id: number | null;
+      category_name: string | null;
+      category_code: string | null;
+      supplier_id: number | null;
+      supplier_name: string | null;
+      supplier_code: string | null;
+      updated_at: Date;
+      created_at: Date;
+    }>>(
+      `SELECT
+        p.id, p.article_no, p.sku, p.description, p.image_url, p.images,
+        p.ean, p.tecdoc_id, p.oem, p.generic_article, p.oem_numbers,
+        p.price, p.currency, p.stock, p.weight, p.status, p.ic_sku,
+        p.updated_at, p.created_at,
+        b.id AS brand_id, b.name AS brand_name, b.code AS brand_code, b.logo_url AS brand_logo_url,
+        c.id AS category_id, c.name AS category_name, c.code AS category_code,
+        s.id AS supplier_id, s.name AS supplier_name, s.code AS supplier_code
+      FROM product_maps p
+      LEFT JOIN brands b ON b.id = p.brand_id
+      LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN suppliers s ON s.id = p.supplier_id
+      WHERE p.status = 'active'
+        AND UPPER(REGEXP_REPLACE(p.article_no, '[^a-zA-Z0-9]', '', 'g')) = ANY($1::text[])`,
+      normalized
+    );
+
+    // Apply pricing
+    const settings = await getAllSettings();
+    const taxRate = parseFloat(settings.tax_rate ?? "21") / 100;
+    const marginPct = parseFloat(settings.margin_percentage ?? "0") / 100;
+
+    const items: Record<string, unknown> = {};
+    for (const row of products) {
+      const key = row.article_no.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+      const basePrice = row.price;
+      let priceWithMargin: number | null = null;
+      let priceWithTax: number | null = null;
+      if (basePrice != null) {
+        priceWithMargin = Math.round(basePrice * (1 + marginPct) * 100) / 100;
+        priceWithTax = Math.round(priceWithMargin * (1 + taxRate) * 100) / 100;
+      }
+
+      items[key] = {
+        id: row.id,
+        articleNo: row.article_no,
+        sku: row.sku,
+        description: row.description,
+        imageUrl: row.image_url,
+        images: row.images ?? [],
+        ean: row.ean,
+        tecdocId: row.tecdoc_id,
+        oem: row.oem,
+        genericArticle: row.generic_article,
+        oemNumbers: row.oem_numbers ?? [],
+        price: basePrice,
+        priceWithMargin,
+        priceWithTax,
+        currency: row.currency,
+        stock: row.stock,
+        weight: row.weight,
+        status: row.status,
+        icSku: row.ic_sku,
+        brand: row.brand_id ? { id: row.brand_id, name: row.brand_name, code: row.brand_code, logoUrl: row.brand_logo_url } : null,
+        category: row.category_id ? { id: row.category_id, name: row.category_name, code: row.category_code } : null,
+        supplier: row.supplier_id ? { id: row.supplier_id, name: row.supplier_name, code: row.supplier_code } : null,
+        updatedAt: row.updated_at,
+        createdAt: row.created_at,
+      };
+    }
+
+    const result = { items, found: Object.keys(items).length, requested: articleNumbers.length };
+
+    // Cache for 60 seconds
+    await cacheSet("pricing", ["batch", cacheKey], result);
+
+    return result;
   });
 
   // ─── POST /finalized/push-all ─── Enqueue bulk push of all active products to output API
