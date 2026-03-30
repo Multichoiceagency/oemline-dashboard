@@ -1,17 +1,15 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useApi, useInterval } from "@/lib/hooks";
 import {
   getProducts,
-  updateProduct,
   deleteProduct,
   getSuppliers,
   populateTecDoc,
   searchProducts,
   importProducts,
-  uploadProductImage,
 } from "@/lib/api";
 import type { Product } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,10 +50,6 @@ import {
   Eye,
   X,
   Loader2,
-  ImageIcon,
-  DollarSign,
-  Boxes,
-  Upload,
 } from "lucide-react";
 
 const SEED_QUERIES = [
@@ -95,44 +89,6 @@ export default function ProductsPage() {
   // Auto-refresh products every 30 seconds
   useInterval(() => { refetch(); }, 30_000);
 
-  // Detail/Edit dialog
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState({
-    sku: "",
-    articleNo: "",
-    ean: "",
-    tecdocId: "",
-    oem: "",
-    description: "",
-    imageUrl: "",
-    price: "",
-    currency: "EUR",
-    stock: "",
-    genericArticle: "",
-    status: "active",
-  });
-  const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const imageFileRef = useRef<HTMLInputElement>(null);
-
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !selectedProduct) return;
-    setUploading(true);
-    try {
-      const result = await uploadProductImage(selectedProduct.id, file);
-      setEditForm({ ...editForm, imageUrl: result.url });
-      setSelectedProduct({ ...selectedProduct, imageUrl: result.url, images: result.images });
-      refetch();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(false);
-      if (imageFileRef.current) imageFileRef.current.value = "";
-    }
-  };
-
   // Populate dialog
   const [populateOpen, setPopulateOpen] = useState(false);
   const [populating, setPopulating] = useState(false);
@@ -170,58 +126,10 @@ export default function ProductsPage() {
     setPage(1);
   }, [searchInput]);
 
-  const openDetail = (product: Product) => {
-    setSelectedProduct(product);
-    setEditMode(false);
-    setEditForm({
-      sku: product.sku,
-      articleNo: product.articleNo,
-      ean: product.ean ?? "",
-      tecdocId: product.tecdocId ?? "",
-      oem: product.oem ?? "",
-      description: product.description,
-      imageUrl: product.imageUrl ?? "",
-      price: product.price != null ? String(product.price) : "",
-      currency: product.currency ?? "EUR",
-      stock: product.stock != null ? String(product.stock) : "",
-      genericArticle: product.genericArticle ?? "",
-      status: product.status,
-    });
-  };
-
-  const handleSave = async () => {
-    if (!selectedProduct) return;
-    setSaving(true);
-    try {
-      const updated = await updateProduct(selectedProduct.id, {
-        sku: editForm.sku,
-        articleNo: editForm.articleNo,
-        ean: editForm.ean || null,
-        tecdocId: editForm.tecdocId || null,
-        oem: editForm.oem || null,
-        description: editForm.description,
-        imageUrl: editForm.imageUrl || null,
-        price: editForm.price ? parseFloat(editForm.price) : null,
-        currency: editForm.currency || "EUR",
-        stock: editForm.stock ? parseInt(editForm.stock, 10) : null,
-        genericArticle: editForm.genericArticle || null,
-        status: editForm.status,
-      });
-      setSelectedProduct(updated);
-      setEditMode(false);
-      refetch();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update product");
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const handleDelete = async (product: Product) => {
     if (!confirm(`Delete product ${product.articleNo} (${product.sku})?`)) return;
     try {
       await deleteProduct(product.id);
-      setSelectedProduct(null);
       refetch();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to delete product");
@@ -547,365 +455,6 @@ export default function ProductsPage() {
         </CardContent>
       </Card>
 
-      {/* Product Detail / Edit Dialog */}
-      <Dialog
-        open={!!selectedProduct}
-        onOpenChange={(open) => {
-          if (!open) {
-            setSelectedProduct(null);
-            setEditMode(false);
-          }
-        }}
-      >
-        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Package className="h-5 w-5" />
-              {editMode ? "Edit Product" : "Product Details"}
-            </DialogTitle>
-            <DialogDescription>
-              {selectedProduct?.supplier?.name} - {selectedProduct?.articleNo}
-            </DialogDescription>
-          </DialogHeader>
-
-          {selectedProduct && (
-            <div className="space-y-4 py-4">
-              {editMode ? (
-                <>
-                  {/* Image section */}
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium flex items-center gap-2">
-                      <ImageIcon className="h-4 w-4" /> Product Image
-                    </label>
-                    <div className="flex gap-2">
-                      <Input
-                        value={editForm.imageUrl}
-                        onChange={(e) => setEditForm({ ...editForm, imageUrl: e.target.value })}
-                        placeholder="https://example.com/product.jpg"
-                        className="flex-1"
-                      />
-                      <input
-                        ref={imageFileRef}
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={handleImageUpload}
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => imageFileRef.current?.click()}
-                        disabled={uploading}
-                      >
-                        {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                      </Button>
-                    </div>
-                    {editForm.imageUrl && (
-                      <div className="flex items-center gap-4 p-3 rounded-lg border bg-muted/50">
-                        <span className="text-xs text-muted-foreground">Preview:</span>
-                        <img
-                          src={editForm.imageUrl}
-                          alt="Preview"
-                          className="h-20 w-20 object-contain rounded"
-                        />
-                      </div>
-                    )}
-                    {/* Show existing images gallery */}
-                    {selectedProduct.images && selectedProduct.images.length > 1 && (
-                      <div className="flex gap-2 flex-wrap">
-                        {selectedProduct.images.map((img, i) => (
-                          <img key={i} src={img} alt="" className="h-12 w-12 object-contain rounded border p-0.5 cursor-pointer hover:ring-2 ring-primary" onClick={() => setEditForm({ ...editForm, imageUrl: img })} />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">SKU</label>
-                      <Input
-                        value={editForm.sku}
-                        onChange={(e) => setEditForm({ ...editForm, sku: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Article No.</label>
-                      <Input
-                        value={editForm.articleNo}
-                        onChange={(e) => setEditForm({ ...editForm, articleNo: e.target.value })}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">EAN</label>
-                      <Input
-                        value={editForm.ean}
-                        onChange={(e) => setEditForm({ ...editForm, ean: e.target.value })}
-                        placeholder="None"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">TecDoc ID</label>
-                      <Input
-                        value={editForm.tecdocId}
-                        onChange={(e) => setEditForm({ ...editForm, tecdocId: e.target.value })}
-                        placeholder="None"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">OEM Number</label>
-                      <Input
-                        value={editForm.oem}
-                        onChange={(e) => setEditForm({ ...editForm, oem: e.target.value })}
-                        placeholder="None"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Description</label>
-                    <Input
-                      value={editForm.description}
-                      onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Generic Article</label>
-                    <Input
-                      value={editForm.genericArticle}
-                      onChange={(e) => setEditForm({ ...editForm, genericArticle: e.target.value })}
-                      placeholder="e.g. Brake Pad Set"
-                    />
-                  </div>
-
-                  {/* Pricing & Stock */}
-                  <div className="rounded-lg border p-4 space-y-4">
-                    <h4 className="text-sm font-semibold flex items-center gap-2">
-                      <DollarSign className="h-4 w-4" /> Pricing & Stock
-                    </h4>
-                    <div className="grid grid-cols-3 gap-4">
-                      <div className="space-y-2">
-                        <label className="text-sm font-medium">Price</label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={editForm.price}
-                          onChange={(e) => setEditForm({ ...editForm, price: e.target.value })}
-                          placeholder="0.00"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-sm font-medium">Currency</label>
-                        <Select
-                          value={editForm.currency}
-                          onValueChange={(v) => setEditForm({ ...editForm, currency: v })}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="EUR">EUR</SelectItem>
-                            <SelectItem value="USD">USD</SelectItem>
-                            <SelectItem value="GBP">GBP</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-sm font-medium">Stock</label>
-                        <Input
-                          type="number"
-                          value={editForm.stock}
-                          onChange={(e) => setEditForm({ ...editForm, stock: e.target.value })}
-                          placeholder="0"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Status */}
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Status</label>
-                    <Select
-                      value={editForm.status}
-                      onValueChange={(v) => setEditForm({ ...editForm, status: v })}
-                    >
-                      <SelectTrigger className="w-[200px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="active">Active</SelectItem>
-                        <SelectItem value="inactive">Inactive</SelectItem>
-                        <SelectItem value="discontinued">Discontinued</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </>
-              ) : (
-                <>
-                  {/* Product images */}
-                  {(selectedProduct.imageUrl || (selectedProduct.images && selectedProduct.images.length > 0)) && (
-                    <div className="space-y-2">
-                      <p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                        <ImageIcon className="h-3 w-3" /> Product Images
-                      </p>
-                      <div className="flex gap-3 flex-wrap">
-                        {selectedProduct.imageUrl && (
-                          <img
-                            src={selectedProduct.imageUrl}
-                            alt={selectedProduct.articleNo}
-                            className="h-24 w-24 object-contain rounded-lg border p-1"
-                          />
-                        )}
-                        {selectedProduct.images
-                          ?.filter((img) => img !== selectedProduct.imageUrl)
-                          .map((img, i) => (
-                            <img
-                              key={i}
-                              src={img}
-                              alt=""
-                              className="h-24 w-24 object-contain rounded-lg border p-1"
-                            />
-                          ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <DetailField label="ID" value={String(selectedProduct.id)} />
-                    <DetailField label="SKU" value={selectedProduct.sku} mono />
-                    <DetailField label="Article No." value={selectedProduct.articleNo} mono />
-                    <DetailField label="Brand" value={selectedProduct.brand?.name ?? "-"} />
-                    <DetailField label="Supplier" value={selectedProduct.supplier?.name ?? "-"} />
-                    <DetailField label="InterCars Code" value={selectedProduct.icCode ?? "-"} mono />
-                    <DetailField label="EAN" value={selectedProduct.ean ?? "-"} mono />
-                    <DetailField label="TecDoc ID" value={selectedProduct.tecdocId ?? "-"} mono />
-                    <DetailField label="OEM Number" value={selectedProduct.oem ?? "-"} mono />
-                  </div>
-
-                  <DetailField label="Description" value={selectedProduct.description || "-"} />
-                  {selectedProduct.genericArticle && (
-                    <DetailField label="Generic Article" value={selectedProduct.genericArticle} />
-                  )}
-
-                  {/* Pricing & Stock display */}
-                  <div className="rounded-lg border p-4 grid grid-cols-3 gap-4">
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                        <DollarSign className="h-3 w-3" /> Price
-                      </p>
-                      <p className="text-lg font-bold font-mono">
-                        {selectedProduct.price != null
-                          ? `${selectedProduct.currency ?? "EUR"} ${selectedProduct.price.toFixed(2)}`
-                          : "-"}
-                      </p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                        <Boxes className="h-3 w-3" /> Stock
-                      </p>
-                      <p className="text-lg font-bold">
-                        {selectedProduct.stock != null ? (
-                          <Badge variant={selectedProduct.stock > 0 ? "success" : "destructive"} className="text-base">
-                            {selectedProduct.stock} units
-                          </Badge>
-                        ) : "-"}
-                      </p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium text-muted-foreground">Status</p>
-                      <Badge variant={selectedProduct.status === "active" ? "success" : "secondary"}>
-                        {selectedProduct.status}
-                      </Badge>
-                    </div>
-                  </div>
-
-                  {/* OEM Numbers list */}
-                  {selectedProduct.oemNumbers && selectedProduct.oemNumbers.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-xs font-medium text-muted-foreground">OEM Numbers</p>
-                      <div className="flex gap-1 flex-wrap">
-                        {selectedProduct.oemNumbers.map((oem, i) => (
-                          <Badge key={i} variant="outline" className="font-mono text-xs">
-                            {oem}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* InterCars Mapping */}
-                  {selectedProduct.icMapping && selectedProduct.icMapping.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-xs font-medium text-muted-foreground">InterCars Mapping</p>
-                      <div className="rounded-lg border overflow-hidden">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>TOW Code</TableHead>
-                              <TableHead>IC Index</TableHead>
-                              <TableHead>Manufacturer</TableHead>
-                              <TableHead>Description</TableHead>
-                              <TableHead>EAN</TableHead>
-                              <TableHead>Weight</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {selectedProduct.icMapping.map((ic, i) => (
-                              <TableRow key={i}>
-                                <TableCell className="font-mono text-sm">{ic.towKod}</TableCell>
-                                <TableCell className="font-mono text-sm">{ic.icIndex}</TableCell>
-                                <TableCell>{ic.manufacturer}</TableCell>
-                                <TableCell className="max-w-[200px] truncate">{ic.description}</TableCell>
-                                <TableCell className="font-mono text-xs">{ic.ean ?? "-"}</TableCell>
-                                <TableCell>{ic.weight != null ? `${ic.weight} kg` : "-"}</TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <DetailField label="Created" value={formatDate(selectedProduct.createdAt)} />
-                    <DetailField label="Updated" value={formatDate(selectedProduct.updatedAt)} />
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          <DialogFooter>
-            {editMode ? (
-              <>
-                <Button variant="outline" onClick={() => setEditMode(false)} disabled={saving}>
-                  Cancel
-                </Button>
-                <Button onClick={handleSave} disabled={saving}>
-                  {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Save Changes
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={() => selectedProduct && handleDelete(selectedProduct)}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" /> Delete
-                </Button>
-                <Button onClick={() => setEditMode(true)}>
-                  <Pencil className="mr-2 h-4 w-4" /> Edit
-                </Button>
-              </>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Populate from TecDoc Dialog */}
       <Dialog open={populateOpen} onOpenChange={setPopulateOpen}>
         <DialogContent className="max-w-lg">
@@ -1057,23 +606,6 @@ export default function ProductsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-function DetailField({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="space-y-1">
-      <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <p className={`text-sm ${mono ? "font-mono" : ""}`}>{value}</p>
     </div>
   );
 }

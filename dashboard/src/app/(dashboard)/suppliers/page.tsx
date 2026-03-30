@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useApi } from "@/lib/hooks";
-import { getSuppliers, createSupplier, updateSupplier, syncSupplier } from "@/lib/api";
+import { getSuppliers, updateSupplier, syncSupplier } from "@/lib/api";
 import type { Supplier } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -16,65 +16,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { formatNumber, formatDate } from "@/lib/utils";
+import { formatNumber } from "@/lib/utils";
 import { Plus, RefreshCw, Power, PowerOff } from "lucide-react";
 
 export default function SuppliersPage() {
+  const router = useRouter();
   const [page, setPage] = useState(1);
   const { data, loading, refetch } = useApi(
     () => getSuppliers({ page, limit: 25 }),
     [page]
   );
-  const [dialogOpen, setDialogOpen] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    name: "",
-    code: "",
-    adapterType: "intercars",
-    baseUrl: "",
-    credentials: "",
-    priority: "10",
-  });
-
-  const handleCreate = async () => {
-    try {
-      let creds: Record<string, string> = {};
-      try {
-        creds = JSON.parse(form.credentials);
-      } catch {
-        creds = { apiKey: form.credentials };
-      }
-      await createSupplier({
-        name: form.name,
-        code: form.code,
-        adapterType: form.adapterType,
-        baseUrl: form.baseUrl,
-        credentials: creds,
-        priority: parseInt(form.priority),
-      });
-      setDialogOpen(false);
-      setForm({ name: "", code: "", adapterType: "intercars", baseUrl: "", credentials: "", priority: "10" });
-      refetch();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to create supplier");
-    }
-  };
 
   const handleSync = async (id: string) => {
     setSyncing(id);
@@ -103,79 +55,9 @@ export default function SuppliersPage() {
           <h2 className="text-3xl font-bold tracking-tight">Suppliers</h2>
           <p className="text-muted-foreground">Manage supplier connections and catalog syncing</p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-2 h-4 w-4" /> Add Supplier
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add Supplier</DialogTitle>
-              <DialogDescription>Connect a new parts supplier to the platform</DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Name</label>
-                  <Input
-                    placeholder="InterCars"
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Code</label>
-                  <Input
-                    placeholder="intercars"
-                    value={form.code}
-                    onChange={(e) => setForm({ ...form, code: e.target.value })}
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Adapter Type</label>
-                  <Select value={form.adapterType} onValueChange={(v) => setForm({ ...form, adapterType: v })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="intercars">InterCars</SelectItem>
-                      <SelectItem value="partspoint">PartsPoint</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Priority</label>
-                  <Input
-                    type="number"
-                    value={form.priority}
-                    onChange={(e) => setForm({ ...form, priority: e.target.value })}
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Base URL</label>
-                <Input
-                  placeholder="https://api.supplier.com"
-                  value={form.baseUrl}
-                  onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Credentials (JSON)</label>
-                <Input
-                  placeholder='{"clientId":"...","clientSecret":"..."}'
-                  value={form.credentials}
-                  onChange={(e) => setForm({ ...form, credentials: e.target.value })}
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-              <Button onClick={handleCreate} disabled={!form.name || !form.code}>Create</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <Button onClick={() => router.push("/suppliers/new")}>
+          <Plus className="mr-2 h-4 w-4" /> Add Supplier
+        </Button>
       </div>
 
       <Card>

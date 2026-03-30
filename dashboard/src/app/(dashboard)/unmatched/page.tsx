@@ -1,12 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useApi } from "@/lib/hooks";
-import { getUnmatched, createOverride } from "@/lib/api";
-import type { UnmatchedItem } from "@/lib/api";
+import { getUnmatched } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -16,14 +15,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -35,36 +26,13 @@ import { formatDate } from "@/lib/utils";
 import { AlertTriangle, GitCompare } from "lucide-react";
 
 export default function UnmatchedPage() {
+  const router = useRouter();
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState("false");
   const { data, loading, refetch } = useApi(
     () => getUnmatched({ page, limit: 25, resolved: filter }),
     [page, filter]
   );
-  const [resolveItem, setResolveItem] = useState<UnmatchedItem | null>(null);
-  const [form, setForm] = useState({ sku: "", ean: "", tecdocId: "", oem: "", reason: "" });
-
-  const handleResolve = async () => {
-    if (!resolveItem) return;
-    try {
-      await createOverride({
-        supplierCode: resolveItem.supplier?.code ?? "",
-        brandCode: resolveItem.brand?.code ?? "",
-        articleNo: resolveItem.articleNo ?? resolveItem.query,
-        sku: form.sku,
-        ean: form.ean || undefined,
-        tecdocId: form.tecdocId || undefined,
-        oem: form.oem || undefined,
-        reason: form.reason || "Manual resolution from dashboard",
-        createdBy: "dashboard",
-      });
-      setResolveItem(null);
-      setForm({ sku: "", ean: "", tecdocId: "", oem: "", reason: "" });
-      refetch();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to create override");
-    }
-  };
 
   return (
     <div className="space-y-6">
@@ -137,7 +105,7 @@ export default function UnmatchedPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       {!item.resolvedAt && (
-                        <Button variant="outline" size="sm" onClick={() => setResolveItem(item)}>
+                        <Button variant="outline" size="sm" onClick={() => router.push(`/unmatched/${item.id}`)}>
                           <GitCompare className="h-3 w-3 mr-1" /> Resolve
                         </Button>
                       )}
@@ -159,45 +127,6 @@ export default function UnmatchedPage() {
           )}
         </CardContent>
       </Card>
-
-      <Dialog open={!!resolveItem} onOpenChange={(open) => !open && setResolveItem(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Resolve Unmatched Item</DialogTitle>
-            <DialogDescription>
-              Create a manual override for: <strong>{resolveItem?.query}</strong>
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">SKU (Supplier Part Number)</label>
-              <Input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} placeholder="Supplier SKU" />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">EAN</label>
-                <Input value={form.ean} onChange={(e) => setForm({ ...form, ean: e.target.value })} />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">TecDoc ID</label>
-                <Input value={form.tecdocId} onChange={(e) => setForm({ ...form, tecdocId: e.target.value })} />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">OEM Number</label>
-              <Input value={form.oem} onChange={(e) => setForm({ ...form, oem: e.target.value })} />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Reason</label>
-              <Input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="Manual match from dashboard" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setResolveItem(null)}>Cancel</Button>
-            <Button onClick={handleResolve} disabled={!form.sku}>Create Override</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

@@ -1,24 +1,19 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { useApi, useInterval } from "@/lib/hooks";
 import {
   getFinalized,
   getFinalizedStats,
-  getFinalizedProduct,
   getBrands,
   getCategories,
   getSuppliers,
-  updateProduct,
-  uploadProductImage,
-  getTecDocLinkages,
-  getTecDocLinkagesByNumber,
-  getTecDocDetails,
   getJobsStatus,
   pushFinalizedProduct,
   pushAllFinalized,
 } from "@/lib/api";
-import type { FinalizedProduct, FinalizedDetail, VehicleLinkage } from "@/lib/api";
+import type { FinalizedProduct } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,13 +34,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { formatNumber, formatDate } from "@/lib/utils";
 import {
   ShoppingCart,
@@ -61,12 +49,7 @@ import {
   ChevronRight,
   Tag,
   Eye,
-  Pencil,
-  Upload,
-  Trash2,
   Car,
-  Star,
-  Plus,
   Activity,
   RefreshCw,
   CheckCircle2,
@@ -79,6 +62,7 @@ import {
 
 export default function FinalizedPage() {
   const { t } = useTranslation();
+  const router = useRouter();
   const [fieldDistOpen, setFieldDistOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
@@ -124,121 +108,8 @@ export default function FinalizedPage() {
   const { data: categoriesData } = useApi(() => getCategories({ limit: 250 }), []);
   const { data: suppliersData } = useApi(() => getSuppliers({ limit: 50 }), []);
 
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const { data: detail, loading: loadingDetail, refetch: refetchDetail } = useApi(
-    () => (selectedId ? getFinalizedProduct(selectedId) : Promise.resolve(null)),
-    [selectedId]
-  );
-
-  // Edit mode state
-  const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState({
-    description: "",
-    imageUrl: "",
-    images: [] as string[],
-    price: "",
-    currency: "EUR",
-    stock: "",
-    genericArticle: "",
-    status: "active",
-  });
-  const [saving, setSaving] = useState(false);
-  const [pushing, setPushing] = useState(false);
-  const [pushResult, setPushResult] = useState<"success" | "error" | null>(null);
   const [bulkPushing, setBulkPushing] = useState(false);
   const [bulkPushResult, setBulkPushResult] = useState<"queued" | "error" | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const imageFileRef = useRef<HTMLInputElement>(null);
-
-  const openEdit = (product: FinalizedDetail) => {
-    setEditMode(true);
-    setEditForm({
-      description: product.description || "",
-      imageUrl: product.imageUrl || "",
-      images: product.images ?? [],
-      price: product.price != null ? String(product.price) : "",
-      currency: product.currency || "EUR",
-      stock: product.stock != null ? String(product.stock) : "",
-      genericArticle: product.genericArticle || "",
-      status: product.status || "active",
-    });
-  };
-
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0 || !selectedId) return;
-    setUploading(true);
-    try {
-      for (const file of Array.from(files)) {
-        const result = await uploadProductImage(selectedId, file);
-        setEditForm((prev) => ({
-          ...prev,
-          images: [...prev.images, result.url],
-          imageUrl: prev.imageUrl || result.url,
-        }));
-      }
-      refetchDetail();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(false);
-      if (imageFileRef.current) imageFileRef.current.value = "";
-    }
-  };
-
-  const removeImage = (url: string) => {
-    setEditForm((prev) => {
-      const newImages = prev.images.filter((img) => img !== url);
-      const newPrimary = prev.imageUrl === url
-        ? (newImages[0] ?? "")
-        : prev.imageUrl;
-      return { ...prev, images: newImages, imageUrl: newPrimary };
-    });
-  };
-
-  const setPrimaryImage = (url: string) => {
-    setEditForm((prev) => ({ ...prev, imageUrl: url }));
-  };
-
-  const handleSave = async () => {
-    if (!selectedId) return;
-    setSaving(true);
-    try {
-      await updateProduct(selectedId, {
-        description: editForm.description,
-        imageUrl: editForm.imageUrl || null,
-        images: editForm.images,
-        price: editForm.price ? parseFloat(editForm.price) : null,
-        currency: editForm.currency || "EUR",
-        stock: editForm.stock ? parseInt(editForm.stock, 10) : null,
-        genericArticle: editForm.genericArticle || null,
-        status: editForm.status,
-      });
-      setEditMode(false);
-      refetchDetail();
-      refetch();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update product");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handlePush = async () => {
-    if (!detail) return;
-    setPushing(true);
-    setPushResult(null);
-    try {
-      await pushFinalizedProduct(detail.id);
-      setPushResult("success");
-      setTimeout(() => setPushResult(null), 4000);
-    } catch {
-      setPushResult("error");
-      setTimeout(() => setPushResult(null), 5000);
-    } finally {
-      setPushing(false);
-    }
-  };
 
   const handleBulkPush = async () => {
     setBulkPushing(true);
@@ -656,7 +527,7 @@ export default function FinalizedPage() {
                       <ProductRow
                         key={product.id}
                         product={product}
-                        onClick={() => setSelectedId(product.id)}
+                        onNavigate={() => router.push(`/finalized/${product.id}`)}
                         onPush={pushFinalizedProduct}
                       />
                     ))}
@@ -734,273 +605,17 @@ export default function FinalizedPage() {
         </Card>
       )}
 
-      {/* Detail Dialog */}
-      <Dialog open={selectedId !== null} onOpenChange={(open) => { if (!open) { setSelectedId(null); setEditMode(false); } }}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Package className="h-5 w-5" />
-              {editMode ? "Edit Product" : t("finalized.productDetails")}
-            </DialogTitle>
-          </DialogHeader>
-          {loadingDetail ? (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin" />
-            </div>
-          ) : detail ? (
-            editMode ? (
-              <div className="space-y-4 py-4">
-                {/* Image Gallery Management */}
-                <div className="space-y-3">
-                  <label className="text-sm font-medium flex items-center gap-2">
-                    <ImageIcon className="h-4 w-4" /> Product Images
-                  </label>
-
-                  {/* Existing images grid */}
-                  {editForm.images.length > 0 ? (
-                    <div className="grid grid-cols-4 gap-3">
-                      {editForm.images.map((url, i) => (
-                        <div
-                          key={i}
-                          className={`relative group rounded-lg border-2 overflow-hidden ${
-                            url === editForm.imageUrl
-                              ? "border-blue-500 ring-2 ring-blue-200"
-                              : "border-muted hover:border-muted-foreground/30"
-                          }`}
-                        >
-                          <img
-                            src={url}
-                            alt={`Product image ${i + 1}`}
-                            className="h-24 w-full object-contain bg-white p-1"
-                          />
-                          {url === editForm.imageUrl && (
-                            <div className="absolute top-1 left-1">
-                              <Badge className="bg-blue-500 text-[10px] px-1 py-0">
-                                <Star className="h-2.5 w-2.5 mr-0.5" /> Primary
-                              </Badge>
-                            </div>
-                          )}
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100">
-                            {url !== editForm.imageUrl && (
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="secondary"
-                                className="h-7 text-xs"
-                                onClick={() => setPrimaryImage(url)}
-                              >
-                                <Star className="h-3 w-3" />
-                              </Button>
-                            )}
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="destructive"
-                              className="h-7 text-xs"
-                              onClick={() => removeImage(url)}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-center h-24 rounded-lg border-2 border-dashed border-muted text-muted-foreground text-sm">
-                      No images yet
-                    </div>
-                  )}
-
-                  {/* Upload button */}
-                  <div className="flex gap-2">
-                    <input
-                      ref={imageFileRef}
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      className="hidden"
-                      onChange={handleImageUpload}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => imageFileRef.current?.click()}
-                      disabled={uploading}
-                      className="w-full"
-                    >
-                      {uploading ? (
-                        <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Uploading...</>
-                      ) : (
-                        <><Plus className="h-4 w-4 mr-2" /> Upload Images</>
-                      )}
-                    </Button>
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    Click an image to set as primary. Supports multiple file upload.
-                  </p>
-                </div>
-
-                {/* Description */}
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Description</label>
-                  <Input
-                    value={editForm.description}
-                    onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                  />
-                </div>
-
-                {/* Generic Article */}
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Generic Article</label>
-                  <Input
-                    value={editForm.genericArticle}
-                    onChange={(e) => setEditForm({ ...editForm, genericArticle: e.target.value })}
-                    placeholder="e.g. Brake Pad Set"
-                  />
-                </div>
-
-                {/* Pricing & Stock */}
-                <div className="rounded-lg border p-4 space-y-4">
-                  <h4 className="text-sm font-semibold flex items-center gap-2">
-                    <DollarSign className="h-4 w-4" /> Pricing & Stock
-                  </h4>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Price</label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={editForm.price}
-                        onChange={(e) => setEditForm({ ...editForm, price: e.target.value })}
-                        placeholder="0.00"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Currency</label>
-                      <Select
-                        value={editForm.currency}
-                        onValueChange={(v) => setEditForm({ ...editForm, currency: v })}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="EUR">EUR</SelectItem>
-                          <SelectItem value="USD">USD</SelectItem>
-                          <SelectItem value="GBP">GBP</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Stock</label>
-                      <Input
-                        type="number"
-                        value={editForm.stock}
-                        onChange={(e) => setEditForm({ ...editForm, stock: e.target.value })}
-                        placeholder="0"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Status */}
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Status</label>
-                  <Select
-                    value={editForm.status}
-                    onValueChange={(v) => setEditForm({ ...editForm, status: v })}
-                  >
-                    <SelectTrigger className="w-[200px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="active">Active</SelectItem>
-                      <SelectItem value="inactive">Inactive</SelectItem>
-                      <SelectItem value="discontinued">Discontinued</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Read-only info */}
-                <div className="grid grid-cols-2 gap-4 text-sm border-t pt-4">
-                  <div>
-                    <span className="text-muted-foreground">Article No.:</span>{" "}
-                    <span className="font-mono">{detail.articleNo}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">SKU:</span>{" "}
-                    <span className="font-mono">{detail.sku}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Brand:</span>{" "}
-                    {detail.brand?.name}
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Supplier:</span>{" "}
-                    {detail.supplier?.name}
-                  </div>
-                  {detail.icMapping && detail.icMapping.length > 0 && (
-                    <div>
-                      <span className="text-muted-foreground">InterCars Code:</span>{" "}
-                      <span className="font-mono text-blue-600">{detail.icMapping[0].towKod}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <ProductDetail product={detail} />
-            )
-          ) : null}
-
-          {detail && !loadingDetail && (
-            <DialogFooter className="flex-wrap gap-2">
-              {editMode ? (
-                <>
-                  <Button variant="outline" onClick={() => setEditMode(false)} disabled={saving}>
-                    Cancel
-                  </Button>
-                  <Button onClick={handleSave} disabled={saving}>
-                    {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save Changes
-                  </Button>
-                </>
-              ) : (
-                <Button variant="outline" onClick={() => openEdit(detail)}>
-                  <Pencil className="mr-2 h-4 w-4" /> Edit Product
-                </Button>
-              )}
-              <Button
-                variant={pushResult === "success" ? "default" : pushResult === "error" ? "destructive" : "secondary"}
-                onClick={handlePush}
-                disabled={pushing}
-                className={pushResult === "success" ? "bg-green-600 hover:bg-green-700" : ""}
-              >
-                {pushing ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : pushResult === "success" ? (
-                  <CheckCircle2 className="mr-2 h-4 w-4" />
-                ) : pushResult === "error" ? (
-                  <AlertCircle className="mr-2 h-4 w-4" />
-                ) : (
-                  <Send className="mr-2 h-4 w-4" />
-                )}
-                {pushing ? "Pushing..." : pushResult === "success" ? "Pushed!" : pushResult === "error" ? "Push Failed" : "Push to Output API"}
-              </Button>
-            </DialogFooter>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
 
 function ProductRow({
   product,
-  onClick,
+  onNavigate,
   onPush,
 }: {
   product: FinalizedProduct;
-  onClick: () => void;
+  onNavigate: () => void;
   onPush: (id: number) => Promise<{ success: boolean }>;
 }) {
   const [rowPushing, setRowPushing] = useState(false);
@@ -1021,7 +636,7 @@ function ProductRow({
   };
 
   return (
-    <TableRow className="cursor-pointer hover:bg-accent/50" onClick={onClick}>
+    <TableRow className="cursor-pointer hover:bg-accent/50" onClick={onNavigate}>
       <TableCell>
         {product.imageUrl ? (
           <img
@@ -1100,7 +715,7 @@ function ProductRow({
               <Send className="h-4 w-4" />
             )}
           </Button>
-          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); onClick(); }}>
+          <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); onNavigate(); }}>
             <Eye className="h-4 w-4" />
           </Button>
         </div>
@@ -1109,282 +724,3 @@ function ProductRow({
   );
 }
 
-function ProductDetail({ product }: { product: FinalizedDetail }) {
-  const { t } = useTranslation();
-  const cur = product.currency === "EUR" ? "\u20AC" : product.currency ?? "";
-
-  // Vehicle applicability from TecDoc
-  const [linkages, setLinkages] = useState<VehicleLinkage[]>([]);
-  const [loadingLinkages, setLoadingLinkages] = useState(false);
-  const [linkagesLoaded, setLinkagesLoaded] = useState(false);
-
-  const loadLinkages = async () => {
-    if (!product.articleNo || linkagesLoaded) return;
-    setLoadingLinkages(true);
-    try {
-      // Use articleNumber for lookup (tecdocId stores dataSupplierId, not the real article ID)
-      const result = await getTecDocLinkagesByNumber(product.articleNo);
-      setLinkages(result.linkages);
-    } catch {
-      // TecDoc linkage lookup failed — not critical
-    } finally {
-      setLoadingLinkages(false);
-      setLinkagesLoaded(true);
-    }
-  };
-
-  // Auto-load linkages when product detail is opened
-  useEffect(() => {
-    if (product.articleNo) loadLinkages();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [product.articleNo]);
-
-  return (
-    <div className="space-y-6">
-      {/* Image + Basic Info */}
-      <div className="flex gap-6">
-        {product.imageUrl ? (
-          <img
-            src={product.imageUrl}
-            alt={product.description}
-            className="h-40 w-40 object-contain rounded-lg border"
-          />
-        ) : (
-          <div className="h-40 w-40 rounded-lg border bg-muted flex items-center justify-center">
-            <ImageIcon className="h-12 w-12 text-muted-foreground" />
-          </div>
-        )}
-        <div className="flex-1 space-y-2">
-          <h3 className="text-lg font-semibold">{product.description}</h3>
-          <div className="flex items-center gap-2">
-            {product.brand?.logoUrl && (
-              <img src={product.brand.logoUrl} alt="" className="h-6 w-6 object-contain" />
-            )}
-            <span className="font-medium">{product.brand?.name}</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <span className="text-muted-foreground">{t("finalized.articleNo")}:</span>{" "}
-              <span className="font-mono">{product.articleNo}</span>
-            </div>
-            <div>
-              <span className="text-muted-foreground">{t("finalized.sku")}:</span>{" "}
-              <span className="font-mono">{product.sku}</span>
-            </div>
-            {product.icMapping && product.icMapping.length > 0 && (
-              <div>
-                <span className="text-muted-foreground">InterCars Code:</span>{" "}
-                <span className="font-mono text-blue-600">{product.icMapping[0].towKod}</span>
-              </div>
-            )}
-            {product.ean && (
-              <div>
-                <span className="text-muted-foreground">{t("finalized.ean")}:</span>{" "}
-                <span className="font-mono">{product.ean}</span>
-              </div>
-            )}
-            {product.tecdocId && (
-              <div>
-                <span className="text-muted-foreground">{t("finalized.tecdocId")}:</span>{" "}
-                <span className="font-mono">{product.tecdocId}</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Pricing & Stock */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground">{t("settings.basePrice")}</p>
-            <p className="text-lg font-bold">
-              {product.price != null
-                ? `${cur} ${product.price.toFixed(2)}`
-                : t("finalized.notSet")}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground">{t("settings.withTax")}</p>
-            <p className="text-lg font-bold text-green-600">
-              {product.priceWithTax != null
-                ? `${cur} ${product.priceWithTax.toFixed(2)}`
-                : t("finalized.notSet")}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground">{t("finalized.stock")}</p>
-            <p className="text-lg font-bold">{product.stock ?? 0}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground">{t("finalized.weight")}</p>
-            <p className="text-lg font-bold">
-              {product.weight != null ? `${product.weight} kg` : "-"}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Metadata */}
-      <div className="grid grid-cols-2 gap-4 text-sm">
-        <div>
-          <span className="text-muted-foreground">{t("finalized.category")}:</span>{" "}
-          {product.category?.name ?? "-"}
-        </div>
-        <div>
-          <span className="text-muted-foreground">{t("finalized.supplier")}:</span>{" "}
-          {product.supplier?.name}
-        </div>
-        {product.genericArticle && (
-          <div>
-            <span className="text-muted-foreground">{t("finalized.genericArticle")}:</span>{" "}
-            {product.genericArticle}
-          </div>
-        )}
-        <div>
-          <span className="text-muted-foreground">{t("finalized.status")}:</span>{" "}
-          <Badge variant={product.status === "active" ? "default" : "secondary"}>
-            {product.status}
-          </Badge>
-        </div>
-        <div>
-          <span className="text-muted-foreground">{t("finalized.updated")}:</span>{" "}
-          {formatDate(product.updatedAt)}
-        </div>
-        <div>
-          <span className="text-muted-foreground">{t("finalized.created")}:</span>{" "}
-          {formatDate(product.createdAt)}
-        </div>
-      </div>
-
-      {/* OEM Numbers */}
-      {product.oemNumbers && product.oemNumbers.length > 0 && (
-        <div>
-          <h4 className="text-sm font-medium mb-2">{t("finalized.oemNumbers")}</h4>
-          <div className="flex flex-wrap gap-1">
-            {product.oemNumbers.map((oem, i) => (
-              <Badge key={i} variant="outline" className="font-mono text-xs">
-                {oem}
-              </Badge>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Additional Images */}
-      {product.images && product.images.length > 1 && (
-        <div>
-          <h4 className="text-sm font-medium mb-2">{t("finalized.images")}</h4>
-          <div className="flex gap-2 flex-wrap">
-            {product.images.map((url, i) => (
-              <img
-                key={i}
-                src={url}
-                alt=""
-                className="h-20 w-20 object-contain rounded border"
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Vehicle Applicability */}
-      {product.articleNo && (
-        <div>
-          <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-            <Car className="h-4 w-4" /> Toepasbaarheid (Voertuigen)
-          </h4>
-          {!linkagesLoaded ? (
-            <Button variant="outline" size="sm" onClick={loadLinkages} disabled={loadingLinkages}>
-              {loadingLinkages ? (
-                <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Laden...</>
-              ) : (
-                <><Car className="h-4 w-4 mr-2" /> Toepasbaarheid laden</>
-              )}
-            </Button>
-          ) : loadingLinkages ? (
-            <div className="flex justify-center py-4">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : linkages.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Geen voertuigkoppelingen gevonden in TecDoc</p>
-          ) : (
-            <div className="rounded-lg border overflow-hidden max-h-[300px] overflow-y-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Merk</TableHead>
-                    <TableHead>Model</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Bouwjaar</TableHead>
-                    <TableHead>Motor</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {linkages.map((v, i) => (
-                    <TableRow key={i}>
-                      <TableCell className="font-medium text-sm">{v.mfrName}</TableCell>
-                      <TableCell className="text-sm">{v.vehicleModelSeriesName}</TableCell>
-                      <TableCell className="text-sm max-w-[200px] truncate">
-                        {v.description || v.typeName}
-                      </TableCell>
-                      <TableCell className="text-xs font-mono">
-                        {v.beginYearMonth && v.endYearMonth
-                          ? `${v.beginYearMonth} - ${v.endYearMonth}`
-                          : v.beginYearMonth
-                          ? `${v.beginYearMonth} -`
-                          : "-"}
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        {[v.capacity, v.power, v.fuelType].filter(Boolean).join(" / ") || "-"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* InterCars Mapping */}
-      {product.icMapping && product.icMapping.length > 0 && (
-        <div>
-          <h4 className="text-sm font-medium mb-2">{t("finalized.icMapping")}</h4>
-          <div className="rounded-lg border overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t("finalized.towCode")}</TableHead>
-                  <TableHead>{t("finalized.icIndex")}</TableHead>
-                  <TableHead>{t("finalized.manufacturer")}</TableHead>
-                  <TableHead>{t("finalized.description")}</TableHead>
-                  <TableHead>{t("finalized.ean")}</TableHead>
-                  <TableHead>{t("finalized.weight")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {product.icMapping.map((ic, i) => (
-                  <TableRow key={i}>
-                    <TableCell className="font-mono text-sm">{ic.towKod}</TableCell>
-                    <TableCell className="font-mono text-sm">{ic.icIndex}</TableCell>
-                    <TableCell>{ic.manufacturer}</TableCell>
-                    <TableCell className="max-w-[200px] truncate">{ic.description}</TableCell>
-                    <TableCell className="font-mono text-xs">{ic.ean ?? "-"}</TableCell>
-                    <TableCell>{ic.weight != null ? `${ic.weight} kg` : "-"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}

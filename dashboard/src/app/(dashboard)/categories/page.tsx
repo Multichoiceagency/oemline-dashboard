@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useApi } from "@/lib/hooks";
-import { getCategories, updateCategory, syncTecDocCategories } from "@/lib/api";
+import { getCategories, syncTecDocCategories } from "@/lib/api";
 import type { Category } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -16,13 +17,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { formatNumber } from "@/lib/utils";
 import {
   FolderTree,
@@ -37,6 +31,7 @@ import {
 } from "lucide-react";
 
 export default function CategoriesPage() {
+  const router = useRouter();
   const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
@@ -54,10 +49,6 @@ export default function CategoriesPage() {
     [page, parentId, searchQuery]
   );
 
-  // Edit dialog
-  const [editCategory, setEditCategory] = useState<Category | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", code: "" });
-  const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<{ created: number; updated: number; linked: number; total: number } | null>(null);
 
@@ -118,25 +109,7 @@ export default function CategoriesPage() {
 
   const openEdit = (cat: Category, e: React.MouseEvent) => {
     e.stopPropagation();
-    setEditCategory(cat);
-    setEditForm({ name: cat.name, code: cat.code });
-  };
-
-  const handleSave = async () => {
-    if (!editCategory) return;
-    setSaving(true);
-    try {
-      await updateCategory(editCategory.id, {
-        name: editForm.name,
-        code: editForm.code,
-      });
-      setEditCategory(null);
-      refetch();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update category");
-    } finally {
-      setSaving(false);
-    }
+    router.push(`/categories/${cat.id}`);
   };
 
   return (
@@ -325,44 +298,6 @@ export default function CategoriesPage() {
         </CardContent>
       </Card>
 
-      {/* Edit Category Dialog */}
-      <Dialog open={!!editCategory} onOpenChange={(open) => { if (!open) setEditCategory(null); }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Pencil className="h-5 w-5" /> Edit Category
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Name</label>
-              <Input
-                value={editForm.name}
-                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Code</label>
-              <Input
-                value={editForm.code}
-                onChange={(e) => setEditForm({ ...editForm, code: e.target.value })}
-              />
-            </div>
-            <div className="text-sm text-muted-foreground">
-              TecDoc ID: {editCategory?.tecdocId ?? "-"}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditCategory(null)} disabled={saving}>
-              Cancel
-            </Button>
-            <Button onClick={handleSave} disabled={saving}>
-              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save Changes
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
