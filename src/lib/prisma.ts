@@ -3,7 +3,7 @@ import { config } from "../config.js";
 import { logger } from "./logger.js";
 
 const url = new URL(config.DATABASE_URL);
-url.searchParams.set("connection_limit", "50");
+url.searchParams.set("connection_limit", "100");
 url.searchParams.set("pool_timeout", "15");
 
 export const prisma = new PrismaClient({
