@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
+import { logger } from "../lib/logger.js";
 import { getAllSettings } from "./settings.js";
 
 const listQuerySchema = z.object({
@@ -106,8 +107,11 @@ export async function storefrontRoutes(app: FastifyInstance) {
       prisma.productMap.count({ where }),
     ]);
 
+    // Enrich with IC descriptions (richer, Dutch, includes vehicle fitment)
+    const icDescriptions = await fetchIcDescriptions(items.map((p) => p.id));
+
     return {
-      items: items.map((p) => formatPublicProduct(p, marginPct, taxRate)),
+      items: items.map((p) => formatPublicProduct(p, marginPct, taxRate, icDescriptions.get(p.id))),
       total,
       page,
       limit,
@@ -133,7 +137,8 @@ export async function storefrontRoutes(app: FastifyInstance) {
     const taxRate = parseFloat(settings.tax_rate ?? "21") / 100;
     const marginPct = parseFloat(settings.margin_percentage ?? "0") / 100;
 
-    return formatPublicProduct(product, marginPct, taxRate);
+    const icDescriptions = await fetchIcDescriptions([product.id]);
+    return formatPublicProduct(product, marginPct, taxRate, icDescriptions.get(product.id));
   });
 
   // ─── GET /storefront/lookup ─── Lookup by articleNo, EAN, or OEM
@@ -162,8 +167,10 @@ export async function storefrontRoutes(app: FastifyInstance) {
       },
     });
 
+    const icDescriptions = await fetchIcDescriptions(products.map((p) => p.id));
+
     return {
-      items: products.map((p) => formatPublicProduct(p, marginPct, taxRate)),
+      items: products.map((p) => formatPublicProduct(p, marginPct, taxRate, icDescriptions.get(p.id))),
       total: products.length,
     };
   });
@@ -243,11 +250,60 @@ export async function storefrontRoutes(app: FastifyInstance) {
 }
 
 /**
+ * Fetch IC CSV descriptions for a set of product IDs.
+ * Uses the same LATERAL join as the finalized route.
+ * Returns a Map<productId, { description, shortDescription }>.
+ */
+async function fetchIcDescriptions(productIds: number[]): Promise<Map<number, string>> {
+  const map = new Map<number, string>();
+  if (productIds.length === 0) return map;
+
+  try {
+    const rows = await prisma.$queryRawUnsafe<Array<{
+      product_id: number;
+      ic_description: string;
+    }>>(
+      `SELECT pm.id AS product_id,
+              ic.description AS ic_description
+       FROM product_maps pm
+       JOIN brands b ON b.id = pm.brand_id
+       LEFT JOIN LATERAL (
+         SELECT im.description
+         FROM intercars_mappings im
+         WHERE im.normalized_article_number = pm.normalized_article_no
+           AND (
+             im.normalized_manufacturer = b.normalized_name
+             OR (LENGTH(b.normalized_name) >= 3 AND im.normalized_manufacturer LIKE b.normalized_name || '%')
+             OR (LENGTH(im.normalized_manufacturer) >= 3 AND b.normalized_name LIKE im.normalized_manufacturer || '%')
+           )
+         LIMIT 1
+       ) ic ON true
+       WHERE pm.id = ANY($1::int[]) AND ic.description IS NOT NULL AND ic.description != ''`,
+      productIds
+    );
+
+    for (const row of rows) {
+      map.set(row.product_id, row.ic_description);
+    }
+  } catch (err) {
+    logger.warn({ err }, "Failed to fetch IC descriptions for storefront products");
+  }
+
+  return map;
+}
+
+/**
  * Format a product for public consumption.
  * - Applies margin + tax to base price
+ * - Uses IC description when available (richer, Dutch, includes vehicle fitment)
  * - Strips all internal fields (icSku, tecdocId, supplierId, supplier name)
  */
-function formatPublicProduct(p: Record<string, unknown>, marginPct: number, taxRate: number) {
+function formatPublicProduct(
+  p: Record<string, unknown>,
+  marginPct: number,
+  taxRate: number,
+  icDescription?: string,
+) {
   const images = p.images as string[] | null;
   const basePrice = p.price as number | null;
 
@@ -258,12 +314,16 @@ function formatPublicProduct(p: Record<string, unknown>, marginPct: number, taxR
     price = Math.round(priceExclTax * (1 + taxRate) * 100) / 100;
   }
 
+  // Use IC description (richer, Dutch, with vehicle fitment) when available
+  const productDesc = p.description as string | null;
+  const description = icDescription || productDesc || null;
+
   return {
     id: p.id,
     articleNo: p.articleNo,
     ean: p.ean,
     oem: p.oem,
-    description: p.description,
+    description,
     genericArticle: p.genericArticle,
     imageUrl: p.imageUrl,
     images: Array.isArray(images) ? images : [],
