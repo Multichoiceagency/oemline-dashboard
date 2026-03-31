@@ -4,27 +4,71 @@
  * work well for content-centric websites.
  */
 
-/* You can override the default Infima variables here. */
+/* OEMline brand color: #F36C21 (orange) */
 :root {
-  --ifm-color-primary: #2e8555;
-  --ifm-color-primary-dark: #29784c;
-  --ifm-color-primary-darker: #277148;
-  --ifm-color-primary-darkest: #205d3b;
-  --ifm-color-primary-light: #33925d;
-  --ifm-color-primary-lighter: #359962;
-  --ifm-color-primary-lightest: #3cad6e;
+  --ifm-color-primary: #F36C21;
+  --ifm-color-primary-dark: #DA6018;
+  --ifm-color-primary-darker: #CE5A17;
+  --ifm-color-primary-darkest: #A94A13;
+  --ifm-color-primary-light: #F5802E;
+  --ifm-color-primary-lighter: #F68C3E;
+  --ifm-color-primary-lightest: #F8A96A;
   --ifm-code-font-size: 95%;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
 }
 
 /* For readability concerns, you should choose a lighter palette in dark mode. */
 [data-theme='dark'] {
-  --ifm-color-primary: #25c2a0;
-  --ifm-color-primary-dark: #21af90;
-  --ifm-color-primary-darker: #1fa588;
-  --ifm-color-primary-darkest: #1a8870;
-  --ifm-color-primary-light: #29d5b0;
-  --ifm-color-primary-lighter: #32d8b4;
-  --ifm-color-primary-lightest: #4fddbf;
+  --ifm-color-primary: #F5802E;
+  --ifm-color-primary-dark: #F36C21;
+  --ifm-color-primary-darker: #DA6018;
+  --ifm-color-primary-darkest: #CE5A17;
+  --ifm-color-primary-light: #F68C3E;
+  --ifm-color-primary-lighter: #F8A96A;
+  --ifm-color-primary-lightest: #FACB9A;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Hero banner with brand color */
+.hero--primary {
+  --ifm-hero-background-color: #F36C21;
+  --ifm-hero-text-color: #fff;
+  background-color: #F36C21;
+  color: #fff;
+}
+
+[data-theme='dark'] .hero--primary {
+  --ifm-hero-background-color: #DA6018;
+  background-color: #DA6018;
+}
+
+/* Google Translate widget styling */
+.google-translate-container {
+  display: flex;
+  align-items: center;
+  margin-left: 0.5rem;
+}
+
+.google-translate-container .goog-te-gadget {
+  font-size: 0 !important;
+  line-height: 0;
+}
+
+.google-translate-container .goog-te-gadget .goog-te-combo {
+  font-size: 0.85rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 4px;
+  background: var(--ifm-background-color);
+  color: var(--ifm-font-color-base);
+  cursor: pointer;
+}
+
+/* Hide the Google Translate top bar frame */
+.skiptranslate {
+  display: none !important;
+}
+
+body {
+  top: 0 !important;
 }

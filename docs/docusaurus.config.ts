@@ -21,8 +21,23 @@ const config: Config = {
 
   i18n: {
     defaultLocale: 'en',
-    locales: ['en', 'nl'],
+    locales: ['en'],
   },
+
+  scripts: [
+    {
+      src: '/js/google-translate.js',
+      async: true,
+    },
+    {
+      src: 'https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit',
+      async: true,
+    },
+  ],
+
+  clientModules: [
+    './src/clientModules/googleTranslate.ts',
+  ],
 
   presets: [
     [
