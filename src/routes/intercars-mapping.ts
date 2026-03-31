@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { Prisma } from "@prisma/client";
+import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 
@@ -1457,5 +1458,203 @@ export async function intercarsRoutes(app: FastifyInstance) {
     });
 
     return { deleted: deleted.count, before };
+  });
+
+  /**
+   * GET /intercars/match-overview
+   *
+   * Dashboard-friendly overview of IC matching status per brand:
+   *   - How many products are matched (have ic_sku)
+   *   - How many are unmatched (no ic_sku)
+   *   - Match rate per brand
+   *   - Filterable by brand, sortable by unmatched count
+   */
+  app.get("/intercars/match-overview", async (request) => {
+    const schema = z.object({
+      brandId: z.coerce.number().int().optional(),
+      sort: z.enum(["unmatched_desc", "unmatched_asc", "rate_asc", "rate_desc", "name_asc"]).default("unmatched_desc"),
+      limit: z.coerce.number().int().min(1).max(500).default(200),
+    });
+    const { brandId, sort, limit: take } = schema.parse(request.query);
+
+    const orderBy = {
+      unmatched_desc: "unmatched_count DESC",
+      unmatched_asc: "unmatched_count ASC",
+      rate_asc: "match_rate ASC",
+      rate_desc: "match_rate DESC",
+      name_asc: "brand_name ASC",
+    }[sort];
+
+    const brandFilter = brandId ? `AND pm.brand_id = ${brandId}` : "";
+
+    const rows = await prisma.$queryRawUnsafe<Array<{
+      brand_id: number;
+      brand_name: string;
+      brand_code: string;
+      logo_url: string | null;
+      total_products: bigint;
+      matched_count: bigint;
+      unmatched_count: bigint;
+      match_rate: number;
+    }>>(`
+      SELECT
+        b.id AS brand_id,
+        b.name AS brand_name,
+        b.code AS brand_code,
+        b.logo_url,
+        COUNT(*) AS total_products,
+        COUNT(pm.ic_sku) AS matched_count,
+        COUNT(*) - COUNT(pm.ic_sku) AS unmatched_count,
+        CASE WHEN COUNT(*) > 0
+          THEN ROUND(COUNT(pm.ic_sku)::numeric / COUNT(*)::numeric * 100, 1)
+          ELSE 0
+        END AS match_rate
+      FROM product_maps pm
+      JOIN brands b ON b.id = pm.brand_id
+      WHERE pm.status = 'active' ${brandFilter}
+      GROUP BY b.id, b.name, b.code, b.logo_url
+      ORDER BY ${orderBy}
+      LIMIT ${take}
+    `);
+
+    const totals = {
+      totalProducts: rows.reduce((s, r) => s + Number(r.total_products), 0),
+      totalMatched: rows.reduce((s, r) => s + Number(r.matched_count), 0),
+      totalUnmatched: rows.reduce((s, r) => s + Number(r.unmatched_count), 0),
+    };
+
+    return {
+      brands: rows.map((r) => ({
+        brandId: r.brand_id,
+        brandName: r.brand_name,
+        brandCode: r.brand_code,
+        logoUrl: r.logo_url,
+        totalProducts: Number(r.total_products),
+        matched: Number(r.matched_count),
+        unmatched: Number(r.unmatched_count),
+        matchRate: Number(r.match_rate),
+      })),
+      totals,
+      overallMatchRate: totals.totalProducts > 0
+        ? `${((totals.totalMatched / totals.totalProducts) * 100).toFixed(1)}%`
+        : "0%",
+    };
+  });
+
+  /**
+   * GET /intercars/unmatched-products
+   *
+   * Paginated list of products without IC SKU, with brand/article info
+   * for manual matching in the dashboard.
+   */
+  app.get("/intercars/unmatched-products", async (request) => {
+    const schema = z.object({
+      page: z.coerce.number().int().min(1).default(1),
+      limit: z.coerce.number().int().min(1).max(100).default(50),
+      brandId: z.coerce.number().int().optional(),
+      q: z.string().optional(),
+    });
+    const { page, limit: take, brandId, q } = schema.parse(request.query);
+    const skip = (page - 1) * take;
+
+    const where: Record<string, unknown> = {
+      status: "active",
+      icSku: null,
+    };
+    if (brandId) where.brandId = brandId;
+    if (q) {
+      where.OR = [
+        { articleNo: { contains: q, mode: "insensitive" } },
+        { ean: { contains: q, mode: "insensitive" } },
+        { oem: { contains: q, mode: "insensitive" } },
+      ];
+    }
+
+    const [items, total] = await Promise.all([
+      prisma.productMap.findMany({
+        where,
+        skip,
+        take,
+        orderBy: { articleNo: "asc" },
+        select: {
+          id: true,
+          articleNo: true,
+          ean: true,
+          oem: true,
+          sku: true,
+          description: true,
+          brand: { select: { id: true, name: true, code: true } },
+          supplier: { select: { name: true, code: true } },
+        },
+      }),
+      prisma.productMap.count({ where }),
+    ]);
+
+    return {
+      items,
+      total,
+      page,
+      limit: take,
+      totalPages: Math.ceil(total / take),
+    };
+  });
+
+  /**
+   * POST /intercars/manual-match
+   *
+   * Manually assign an IC SKU to a product_map (for items the auto-matcher missed).
+   */
+  app.post("/intercars/manual-match", async (request) => {
+    const schema = z.object({
+      productMapId: z.number().int(),
+      icSku: z.string().min(1),
+    });
+    const { productMapId, icSku } = schema.parse(request.body);
+
+    const product = await prisma.productMap.findUnique({ where: { id: productMapId } });
+    if (!product) return { error: "Product not found" };
+    if (product.icSku) return { error: "Product already has IC SKU", currentIcSku: product.icSku };
+
+    const updated = await prisma.productMap.update({
+      where: { id: productMapId },
+      data: { icSku },
+      select: { id: true, articleNo: true, icSku: true, brand: { select: { name: true } } },
+    });
+
+    return { matched: true, product: updated };
+  });
+
+  /**
+   * POST /intercars/manual-match-bulk
+   *
+   * Bulk manual match: assign IC SKUs to multiple products at once.
+   */
+  app.post("/intercars/manual-match-bulk", async (request) => {
+    const schema = z.object({
+      matches: z.array(z.object({
+        productMapId: z.number().int(),
+        icSku: z.string().min(1),
+      })).min(1).max(500),
+    });
+    const { matches } = schema.parse(request.body);
+
+    let matched = 0;
+    let skipped = 0;
+    const errors: Array<{ productMapId: number; reason: string }> = [];
+
+    for (const m of matches) {
+      try {
+        const result = await prisma.productMap.updateMany({
+          where: { id: m.productMapId, icSku: null },
+          data: { icSku: m.icSku },
+        });
+        if (result.count > 0) matched++;
+        else skipped++;
+      } catch (err) {
+        errors.push({ productMapId: m.productMapId, reason: String(err).slice(0, 100) });
+      }
+    }
+
+    return { matched, skipped, errors: errors.length > 0 ? errors : undefined };
   });
 }
