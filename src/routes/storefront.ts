@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
+import { getAllSettings } from "./settings.js";
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -9,7 +10,7 @@ const listQuerySchema = z.object({
   brand: z.string().optional(),
   category: z.string().optional(),
   categoryId: z.coerce.number().int().optional(),
-  supplier: z.string().optional(),
+  categoryIds: z.string().optional(), // comma-separated category IDs
   minPrice: z.coerce.number().optional(),
   maxPrice: z.coerce.number().optional(),
   inStock: z.enum(["true", "false"]).optional(),
@@ -21,19 +22,21 @@ const detailQuerySchema = z.object({
   articleNo: z.string().optional(),
   ean: z.string().optional(),
   oem: z.string().optional(),
-  tecdocId: z.string().optional(),
 });
 
 /**
- * Storefront API — unified endpoint for frontend consumption.
- * All data (product, brand, category, supplier, price, stock, images)
- * is returned in a single response. Queries run in parallel.
+ * OEMline Storefront API — official public-facing product API.
+ *
+ * All prices include margin + tax from settings.
+ * No internal supplier details (InterCars, TecDoc IDs, IC SKUs) are exposed.
+ * This is the API the storefront and external integrations consume.
  */
 export async function storefrontRoutes(app: FastifyInstance) {
-  // List products with all related data — optimized for frontend
+
+  // ─── GET /storefront/products ─── Paginated product listing with calculated prices
   app.get("/storefront/products", async (request) => {
     const query = listQuerySchema.parse(request.query);
-    const { page, limit, q, brand, category, categoryId, supplier, minPrice, maxPrice, inStock, hasPrice, sort } = query;
+    const { page, limit, q, brand, category, categoryId, categoryIds, minPrice, maxPrice, inStock, hasPrice, sort } = query;
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = { status: "active" };
@@ -49,15 +52,12 @@ export async function storefrontRoutes(app: FastifyInstance) {
       ];
     }
 
-    if (brand) {
-      where.brand = { code: brand };
-    }
+    if (brand) where.brand = { code: brand };
 
-    if (supplier) {
-      where.supplier = { code: supplier };
-    }
-
-    if (categoryId) {
+    if (categoryIds) {
+      const ids = categoryIds.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n));
+      if (ids.length > 0) where.categoryId = { in: ids };
+    } else if (categoryId) {
       where.categoryId = categoryId;
     } else if (category) {
       where.category = { code: category };
@@ -70,9 +70,7 @@ export async function storefrontRoutes(app: FastifyInstance) {
       where.price = priceFilter;
     }
 
-    if (inStock === "true") {
-      where.stock = { gt: 0 };
-    }
+    if (inStock === "true") where.stock = { gt: 0 };
 
     if (hasPrice === "true") {
       where.price = { ...(where.price as Record<string, number> || {}), not: null, gt: 0 };
@@ -80,7 +78,6 @@ export async function storefrontRoutes(app: FastifyInstance) {
       where.price = null;
     }
 
-    // Default: show products with prices first, then newest
     let orderBy: any = [{ price: { sort: "asc", nulls: "last" } }, { updatedAt: "desc" }];
     switch (sort) {
       case "price_asc": orderBy = [{ price: { sort: "asc", nulls: "last" } }]; break;
@@ -91,7 +88,10 @@ export async function storefrontRoutes(app: FastifyInstance) {
       case "updated": orderBy = { updatedAt: "desc" }; break;
     }
 
-    // Run count and data queries in parallel
+    const settings = await getAllSettings();
+    const taxRate = parseFloat(settings.tax_rate ?? "21") / 100;
+    const marginPct = parseFloat(settings.margin_percentage ?? "0") / 100;
+
     const [items, total] = await Promise.all([
       prisma.productMap.findMany({
         where,
@@ -99,7 +99,6 @@ export async function storefrontRoutes(app: FastifyInstance) {
         take: limit,
         orderBy,
         include: {
-          supplier: { select: { id: true, name: true, code: true } },
           brand: { select: { id: true, name: true, code: true, logoUrl: true } },
           category: { select: { id: true, name: true, code: true, parentId: true } },
         },
@@ -108,7 +107,7 @@ export async function storefrontRoutes(app: FastifyInstance) {
     ]);
 
     return {
-      items: items.map(formatProduct),
+      items: items.map((p) => formatPublicProduct(p, marginPct, taxRate)),
       total,
       page,
       limit,
@@ -116,57 +115,60 @@ export async function storefrontRoutes(app: FastifyInstance) {
     };
   });
 
-  // Get single product by ID with full details
+  // ─── GET /storefront/products/:id ─── Single product detail
   app.get("/storefront/products/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
 
     const product = await prisma.productMap.findUnique({
       where: { id: parseInt(id, 10) },
       include: {
-        supplier: { select: { id: true, name: true, code: true } },
         brand: { select: { id: true, name: true, code: true, logoUrl: true } },
         category: { select: { id: true, name: true, code: true, parentId: true } },
       },
     });
 
-    if (!product) {
-      return reply.code(404).send({ error: "Product not found" });
-    }
+    if (!product) return reply.code(404).send({ error: "Product not found" });
 
-    return formatProduct(product);
+    const settings = await getAllSettings();
+    const taxRate = parseFloat(settings.tax_rate ?? "21") / 100;
+    const marginPct = parseFloat(settings.margin_percentage ?? "0") / 100;
+
+    return formatPublicProduct(product, marginPct, taxRate);
   });
 
-  // Lookup product by article number, EAN, OEM, or TecDoc ID
+  // ─── GET /storefront/lookup ─── Lookup by articleNo, EAN, or OEM
   app.get("/storefront/lookup", async (request, reply) => {
     const query = detailQuerySchema.parse(request.query);
 
-    if (!query.articleNo && !query.ean && !query.oem && !query.tecdocId) {
-      return reply.code(400).send({ error: "Provide at least one of: articleNo, ean, oem, tecdocId" });
+    if (!query.articleNo && !query.ean && !query.oem) {
+      return reply.code(400).send({ error: "Provide at least one of: articleNo, ean, oem" });
     }
 
     const where: Record<string, unknown> = { status: "active" };
     if (query.articleNo) where.articleNo = query.articleNo;
     if (query.ean) where.ean = query.ean;
     if (query.oem) where.oem = query.oem;
-    if (query.tecdocId) where.tecdocId = query.tecdocId;
+
+    const settings = await getAllSettings();
+    const taxRate = parseFloat(settings.tax_rate ?? "21") / 100;
+    const marginPct = parseFloat(settings.margin_percentage ?? "0") / 100;
 
     const products = await prisma.productMap.findMany({
       where,
       take: 50,
       include: {
-        supplier: { select: { id: true, name: true, code: true } },
         brand: { select: { id: true, name: true, code: true, logoUrl: true } },
         category: { select: { id: true, name: true, code: true, parentId: true } },
       },
     });
 
     return {
-      items: products.map(formatProduct),
+      items: products.map((p) => formatPublicProduct(p, marginPct, taxRate)),
       total: products.length,
     };
   });
 
-  // Get all brands marked for storefront display
+  // ─── GET /storefront/brands ─── Public brands list
   app.get("/storefront/brands", async () => {
     const brands = await prisma.brand.findMany({
       where: { showOnStorefront: true },
@@ -182,14 +184,13 @@ export async function storefrontRoutes(app: FastifyInstance) {
         name: b.name,
         code: b.code,
         logoUrl: b.logoUrl,
-        showOnStorefront: b.showOnStorefront,
         productCount: b._count.productMaps,
       })),
       total: brands.length,
     };
   });
 
-  // Get category tree
+  // ─── GET /storefront/categories ─── Category tree
   app.get("/storefront/categories", async (request) => {
     const { parentId } = z.object({ parentId: z.coerce.number().int().optional() }).parse(request.query);
 
@@ -199,7 +200,6 @@ export async function storefrontRoutes(app: FastifyInstance) {
     } else {
       where.parentId = null;
     }
-    // Only show categories that have products directly OR have children with products
     where.OR = [
       { products: { some: {} } },
       { children: { some: { products: { some: {} } } } },
@@ -213,7 +213,6 @@ export async function storefrontRoutes(app: FastifyInstance) {
         children: {
           take: 500,
           orderBy: { name: "asc" },
-          // Only include children that have products
           where: { products: { some: {} } },
           include: {
             _count: { select: { products: true, children: true } },
@@ -243,30 +242,39 @@ export async function storefrontRoutes(app: FastifyInstance) {
   });
 }
 
-function formatProduct(p: Record<string, unknown>) {
+/**
+ * Format a product for public consumption.
+ * - Applies margin + tax to base price
+ * - Strips all internal fields (icSku, tecdocId, supplierId, supplier name)
+ */
+function formatPublicProduct(p: Record<string, unknown>, marginPct: number, taxRate: number) {
   const images = p.images as string[] | null;
+  const basePrice = p.price as number | null;
+
+  let price: number | null = null;
+  let priceExclTax: number | null = null;
+  if (basePrice != null && basePrice > 0) {
+    priceExclTax = Math.round(basePrice * (1 + marginPct) * 100) / 100;
+    price = Math.round(priceExclTax * (1 + taxRate) * 100) / 100;
+  }
+
   return {
     id: p.id,
-    sku: p.sku,
     articleNo: p.articleNo,
     ean: p.ean,
-    tecdocId: p.tecdocId,
     oem: p.oem,
     description: p.description,
     genericArticle: p.genericArticle,
     imageUrl: p.imageUrl,
     images: Array.isArray(images) ? images : [],
     oemNumbers: Array.isArray(p.oemNumbers) ? p.oemNumbers : [],
-    price: p.price,
-    currency: p.currency ?? "EUR",
+    price,            // incl. BTW (margin + tax applied)
+    priceExclTax,     // excl. BTW (margin applied)
+    currency: "EUR",
     stock: p.stock,
     weight: p.weight,
-    icSku: p.icSku ?? null,
-    status: p.status,
-    supplier: p.supplier,
     brand: p.brand,
     category: p.category,
-    createdAt: p.createdAt,
     updatedAt: p.updatedAt,
   };
 }
