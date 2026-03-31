@@ -26,6 +26,7 @@ import {
   LogOut,
   Menu,
   X,
+  FileText,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useTranslation } from "@/lib/i18n";
@@ -176,6 +177,15 @@ export function Sidebar() {
         </nav>
 
         <div className="border-t p-4 space-y-2">
+          <a
+            href="https://docs.oemline.eu"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors min-h-[44px]"
+          >
+            <FileText className="h-4 w-4 shrink-0" />
+            Documentation
+          </a>
           {email && (
             <p className="text-xs text-muted-foreground truncate px-3 pb-1">{email}</p>
           )}
