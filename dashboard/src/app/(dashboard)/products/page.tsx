@@ -214,19 +214,19 @@ export default function ProductsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">Products</h2>
-          <p className="text-muted-foreground">
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Products</h2>
+          <p className="text-muted-foreground text-sm">
             All products with images, pricing, and stock information
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setImportOpen(true)}>
-            <Download className="mr-2 h-4 w-4" /> Import from Search
+        <div className="flex gap-2 self-start sm:self-auto">
+          <Button variant="outline" onClick={() => setImportOpen(true)} className="min-h-[44px] sm:min-h-0 text-xs sm:text-sm">
+            <Download className="mr-1 sm:mr-2 h-4 w-4" /> Import
           </Button>
-          <Button onClick={() => setPopulateOpen(true)}>
-            <Database className="mr-2 h-4 w-4" /> Populate from TecDoc
+          <Button onClick={() => setPopulateOpen(true)} className="min-h-[44px] sm:min-h-0 text-xs sm:text-sm">
+            <Database className="mr-1 sm:mr-2 h-4 w-4" /> Populate
           </Button>
         </div>
       </div>
@@ -234,15 +234,15 @@ export default function ProductsPage() {
       {/* Search & Filters */}
       <Card>
         <CardContent className="pt-6">
-          <div className="flex gap-4">
+          <div className="flex flex-col gap-3">
             <div className="flex flex-1 gap-2">
               <Input
-                placeholder="Search by SKU, article no, EAN, OEM, description..."
+                placeholder="Search by SKU, article no, EAN, OEM..."
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               />
-              <Button onClick={handleSearch}>
+              <Button onClick={handleSearch} className="min-h-[44px] sm:min-h-0">
                 <Search className="h-4 w-4" />
               </Button>
               {searchQuery && (
@@ -254,62 +254,65 @@ export default function ProductsPage() {
                     setSearchQuery("");
                     setPage(1);
                   }}
+                  className="min-h-[44px] sm:min-h-0"
                 >
                   <X className="h-4 w-4" />
                 </Button>
               )}
             </div>
-            <Select
-              value={supplierFilter}
-              onValueChange={(v) => {
-                setSupplierFilter(v);
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="w-[200px]">
-                <SelectValue placeholder="All suppliers" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All suppliers</SelectItem>
-                {suppliersData?.items.map((s) => (
-                  <SelectItem key={s.code} value={s.code}>
-                    {s.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select
-              value={imageFilter}
-              onValueChange={(v) => {
-                setImageFilter(v);
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="w-[160px]">
-                <SelectValue placeholder="Images" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All images</SelectItem>
-                <SelectItem value="true">Has image</SelectItem>
-                <SelectItem value="false">No image</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select
-              value={priceFilter}
-              onValueChange={(v) => {
-                setPriceFilter(v);
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="w-[160px]">
-                <SelectValue placeholder="Price" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All prices</SelectItem>
-                <SelectItem value="true">Has price</SelectItem>
-                <SelectItem value="false">No price</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex flex-wrap gap-2">
+              <Select
+                value={supplierFilter}
+                onValueChange={(v) => {
+                  setSupplierFilter(v);
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-[200px]">
+                  <SelectValue placeholder="All suppliers" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All suppliers</SelectItem>
+                  {suppliersData?.items.map((s) => (
+                    <SelectItem key={s.code} value={s.code}>
+                      {s.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={imageFilter}
+                onValueChange={(v) => {
+                  setImageFilter(v);
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger className="w-[calc(50%-0.25rem)] sm:w-[160px]">
+                  <SelectValue placeholder="Images" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All images</SelectItem>
+                  <SelectItem value="true">Has image</SelectItem>
+                  <SelectItem value="false">No image</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select
+                value={priceFilter}
+                onValueChange={(v) => {
+                  setPriceFilter(v);
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger className="w-[calc(50%-0.25rem)] sm:w-[160px]">
+                  <SelectValue placeholder="Price" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All prices</SelectItem>
+                  <SelectItem value="true">Has price</SelectItem>
+                  <SelectItem value="false">No price</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -344,6 +347,7 @@ export default function ProductsPage() {
               </p>
             </div>
           ) : (
+            <div className="overflow-x-auto -mx-6 px-6">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -351,10 +355,10 @@ export default function ProductsPage() {
                   <TableHead>Article No.</TableHead>
                   <TableHead>Brand</TableHead>
                   <TableHead>Supplier</TableHead>
-                  <TableHead>Description</TableHead>
+                  <TableHead className="hidden md:table-cell">Description</TableHead>
                   <TableHead>Price</TableHead>
                   <TableHead>Stock</TableHead>
-                  <TableHead>Updated</TableHead>
+                  <TableHead className="hidden lg:table-cell">Updated</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -383,7 +387,7 @@ export default function ProductsPage() {
                     <TableCell>
                       <Badge variant="secondary">{p.supplier?.name ?? "-"}</Badge>
                     </TableCell>
-                    <TableCell className="max-w-[200px] truncate text-sm">
+                    <TableCell className="max-w-[200px] truncate text-sm hidden md:table-cell">
                       {p.description || "-"}
                     </TableCell>
                     <TableCell>
@@ -404,7 +408,7 @@ export default function ProductsPage() {
                         <span className="text-xs text-muted-foreground">-</span>
                       )}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell className="text-xs text-muted-foreground hidden lg:table-cell">
                       {formatDate(p.updatedAt)}
                     </TableCell>
                     <TableCell className="text-right">
@@ -424,6 +428,7 @@ export default function ProductsPage() {
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
 
           {/* Pagination */}

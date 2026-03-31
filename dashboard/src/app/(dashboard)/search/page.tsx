@@ -47,8 +47,8 @@ export default function SearchPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-3xl font-bold tracking-tight">Product Search</h2>
-        <p className="text-muted-foreground">
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Product Search</h2>
+        <p className="text-muted-foreground text-sm">
           Search across all suppliers and local index simultaneously
         </p>
       </div>
@@ -68,24 +68,24 @@ export default function SearchPage() {
               Search
             </Button>
           </div>
-          <div className="flex gap-3 mt-3">
+          <div className="flex flex-col sm:flex-row gap-3 mt-3">
             <Input
               placeholder="Filter brand..."
               value={filters.brand}
               onChange={(e) => setFilters({ ...filters, brand: e.target.value })}
-              className="max-w-[200px]"
+              className="sm:max-w-[200px]"
             />
             <Input
               placeholder="Filter EAN..."
               value={filters.ean}
               onChange={(e) => setFilters({ ...filters, ean: e.target.value })}
-              className="max-w-[200px]"
+              className="sm:max-w-[200px]"
             />
             <Input
               placeholder="Filter OEM..."
               value={filters.oem}
               onChange={(e) => setFilters({ ...filters, oem: e.target.value })}
-              className="max-w-[200px]"
+              className="sm:max-w-[200px]"
             />
           </div>
         </CardContent>
@@ -138,15 +138,16 @@ export default function SearchPage() {
               {result.results.length === 0 ? (
                 <p className="text-muted-foreground text-center py-8">No products found</p>
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Supplier</TableHead>
-                      <TableHead>SKU</TableHead>
+                      <TableHead className="hidden sm:table-cell">SKU</TableHead>
                       <TableHead>Brand</TableHead>
                       <TableHead>Article No.</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead>EAN</TableHead>
+                      <TableHead className="hidden md:table-cell">Description</TableHead>
+                      <TableHead className="hidden lg:table-cell">EAN</TableHead>
                       <TableHead>Price</TableHead>
                       <TableHead>Stock</TableHead>
                     </TableRow>
@@ -157,11 +158,11 @@ export default function SearchPage() {
                         <TableCell>
                           <Badge variant="outline">{p.supplier}</Badge>
                         </TableCell>
-                        <TableCell className="font-mono text-xs">{p.sku}</TableCell>
+                        <TableCell className="font-mono text-xs hidden sm:table-cell">{p.sku}</TableCell>
                         <TableCell className="font-medium">{p.brand}</TableCell>
                         <TableCell>{p.articleNo}</TableCell>
-                        <TableCell className="max-w-[200px] truncate">{p.description}</TableCell>
-                        <TableCell className="font-mono text-xs">{p.ean || "-"}</TableCell>
+                        <TableCell className="max-w-[200px] truncate hidden md:table-cell">{p.description}</TableCell>
+                        <TableCell className="font-mono text-xs hidden lg:table-cell">{p.ean || "-"}</TableCell>
                         <TableCell>
                           {p.price != null ? (
                             <span className="font-medium">{p.currency ?? "EUR"} {p.price.toFixed(2)}</span>
@@ -182,6 +183,7 @@ export default function SearchPage() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </CardContent>
           </Card>
@@ -192,6 +194,7 @@ export default function SearchPage() {
                 <CardTitle>Match Details</CardTitle>
               </CardHeader>
               <CardContent>
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -211,7 +214,7 @@ export default function SearchPage() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
-                            <div className="h-2 w-24 rounded-full bg-muted">
+                            <div className="h-2 w-16 sm:w-24 rounded-full bg-muted">
                               <div
                                 className="h-2 rounded-full bg-primary"
                                 style={{ width: `${m.confidence * 100}%` }}
@@ -224,6 +227,7 @@ export default function SearchPage() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               </CardContent>
             </Card>
           )}

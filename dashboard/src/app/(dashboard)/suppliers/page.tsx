@@ -50,12 +50,12 @@ export default function SuppliersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">Suppliers</h2>
-          <p className="text-muted-foreground">Manage supplier connections and catalog syncing</p>
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Suppliers</h2>
+          <p className="text-muted-foreground text-sm">Manage supplier connections and catalog syncing</p>
         </div>
-        <Button onClick={() => router.push("/suppliers/new")}>
+        <Button onClick={() => router.push("/suppliers/new")} className="min-h-[44px] sm:min-h-0 self-start sm:self-auto">
           <Plus className="mr-2 h-4 w-4" /> Add Supplier
         </Button>
       </div>
@@ -72,15 +72,16 @@ export default function SuppliersPage() {
               No suppliers registered yet. Click &quot;Add Supplier&quot; to get started.
             </p>
           ) : (
+            <div className="overflow-x-auto -mx-6 px-6">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
-                  <TableHead>Code</TableHead>
-                  <TableHead>Adapter</TableHead>
-                  <TableHead>Priority</TableHead>
+                  <TableHead className="hidden sm:table-cell">Code</TableHead>
+                  <TableHead className="hidden md:table-cell">Adapter</TableHead>
+                  <TableHead className="hidden lg:table-cell">Priority</TableHead>
                   <TableHead>Products</TableHead>
-                  <TableHead>Unmatched</TableHead>
+                  <TableHead className="hidden md:table-cell">Unmatched</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -89,13 +90,13 @@ export default function SuppliersPage() {
                 {data.items.map((s) => (
                   <TableRow key={s.id}>
                     <TableCell className="font-medium">{s.name}</TableCell>
-                    <TableCell>
+                    <TableCell className="hidden sm:table-cell">
                       <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{s.code}</code>
                     </TableCell>
-                    <TableCell>{s.adapterType}</TableCell>
-                    <TableCell>{s.priority}</TableCell>
+                    <TableCell className="hidden md:table-cell">{s.adapterType}</TableCell>
+                    <TableCell className="hidden lg:table-cell">{s.priority}</TableCell>
                     <TableCell>{formatNumber(s._count?.productMaps ?? 0)}</TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       {(s._count?.unmatched ?? 0) > 0 ? (
                         <Badge variant="warning">{s._count?.unmatched}</Badge>
                       ) : (
@@ -107,20 +108,22 @@ export default function SuppliersPage() {
                         {s.active ? "Active" : "Inactive"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-right space-x-2">
+                    <TableCell className="text-right space-x-1 sm:space-x-2">
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => handleSync(s.id)}
                         disabled={syncing === s.id}
+                        className="min-h-[44px] sm:min-h-0"
                       >
                         <RefreshCw className={`h-3 w-3 mr-1 ${syncing === s.id ? "animate-spin" : ""}`} />
-                        Sync
+                        <span className="hidden sm:inline">Sync</span>
                       </Button>
                       <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => handleToggle(s)}
+                        className="min-h-[44px] sm:min-h-0"
                       >
                         {s.active ? <PowerOff className="h-3 w-3" /> : <Power className="h-3 w-3" />}
                       </Button>
@@ -129,6 +132,7 @@ export default function SuppliersPage() {
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
 
           {data && data.totalPages > 1 && (

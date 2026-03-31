@@ -71,8 +71,8 @@ export default function BrandsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-3xl font-bold tracking-tight">Brands</h2>
-        <p className="text-muted-foreground">All product brands and manufacturers</p>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Brands</h2>
+        <p className="text-muted-foreground text-sm">All product brands and manufacturers</p>
       </div>
 
       {/* Search */}
@@ -100,25 +100,25 @@ export default function BrandsPage() {
 
       {/* Brands Grid */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <CardTitle className="flex items-center gap-2">
             <Tag className="h-5 w-5" />
             Brands ({data?.total ?? 0})
           </CardTitle>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {syncResult && (
               <span className="text-xs text-green-600 flex items-center gap-1">
                 <CheckCircle2 className="h-3.5 w-3.5" />
                 {syncResult.fetched} fetched · {syncResult.totalInDb} in DB
               </span>
             )}
-            <Button size="sm" variant="outline" disabled={syncing} onClick={handleSyncBrands}>
+            <Button size="sm" variant="outline" disabled={syncing} onClick={handleSyncBrands} className="min-h-[44px] sm:min-h-0">
               {syncing ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <RefreshCw className="mr-2 h-4 w-4" />
               )}
-              {syncing ? "Syncing..." : "Sync Brands from TecDoc"}
+              {syncing ? "Syncing..." : "Sync from TecDoc"}
             </Button>
           </div>
         </CardHeader>

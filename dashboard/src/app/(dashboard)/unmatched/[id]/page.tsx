@@ -108,7 +108,7 @@ export default function ResolveUnmatchedPage() {
       </div>
 
       <div>
-        <h2 className="text-3xl font-bold tracking-tight">Resolve Unmatched Item</h2>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Resolve Unmatched Item</h2>
         <p className="text-muted-foreground">
           Create a manual override for this unmatched product
         </p>
@@ -119,7 +119,7 @@ export default function ResolveUnmatchedPage() {
           <CardTitle>Item Information</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-4 max-w-2xl">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Query</p>
               <p className="font-mono text-sm font-medium">{item.query}</p>
@@ -156,7 +156,7 @@ export default function ResolveUnmatchedPage() {
                 onChange={(e) => setForm({ ...form, sku: e.target.value })}
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">EAN</label>
                 <Input

@@ -181,8 +181,8 @@ export default function StoragePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-3xl font-bold tracking-tight">Storage</h2>
-        <p className="text-muted-foreground">
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Storage</h2>
+        <p className="text-muted-foreground text-sm">
           Manage files in MinIO object storage
         </p>
       </div>
@@ -402,13 +402,14 @@ export default function StoragePage() {
               No files found
             </p>
           ) : (
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-8"></TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Size</TableHead>
-                  <TableHead>Modified</TableHead>
+                  <TableHead className="hidden sm:table-cell">Modified</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -425,7 +426,7 @@ export default function StoragePage() {
                     </TableCell>
                     <TableCell className="font-medium">{folder}/</TableCell>
                     <TableCell className="text-muted-foreground">-</TableCell>
-                    <TableCell className="text-muted-foreground">-</TableCell>
+                    <TableCell className="text-muted-foreground hidden sm:table-cell">-</TableCell>
                     <TableCell></TableCell>
                   </TableRow>
                 ))}
@@ -453,7 +454,7 @@ export default function StoragePage() {
                       <TableCell className="text-sm">
                         {formatBytes(file.size)}
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
+                      <TableCell className="text-sm text-muted-foreground hidden sm:table-cell">
                         {formatDate(file.lastModified)}
                       </TableCell>
                       <TableCell className="text-right">
@@ -501,6 +502,7 @@ export default function StoragePage() {
                 })}
               </TableBody>
             </Table>
+            </div>
           )}
         </CardContent>
       </Card>

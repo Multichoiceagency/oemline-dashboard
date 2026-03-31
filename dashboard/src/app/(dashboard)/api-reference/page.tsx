@@ -280,8 +280,8 @@ export default function ApiReferencePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-3xl font-bold tracking-tight">API Reference</h2>
-        <p className="text-muted-foreground">
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">API Reference</h2>
+        <p className="text-muted-foreground text-sm">
           Use these endpoints in your frontend to access the OEMline platform
         </p>
       </div>
@@ -381,6 +381,7 @@ export default function ApiReferencePage() {
                 {endpoint.params && endpoint.params.length > 0 && (
                   <div>
                     <p className="text-xs font-medium text-muted-foreground mb-2">PARAMETERS</p>
+                    <div className="overflow-x-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -407,6 +408,7 @@ export default function ApiReferencePage() {
                         ))}
                       </TableBody>
                     </Table>
+                    </div>
                   </div>
                 )}
 
@@ -457,7 +459,7 @@ export default function ApiReferencePage() {
               <p className="text-muted-foreground mt-1">{`// data.results → [{ supplier, brand, articleNo, description, price, stock }]`}</p>
             </div>
           </div>
-          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 mt-4">
+          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 mt-4">
             <div className="rounded-lg border p-3">
               <p className="text-sm font-medium">Finalized Products</p>
               <p className="text-xs text-muted-foreground mt-1">Complete product catalog with prices (margin + tax applied), stock, and IC mapping. Use this for the storefront.</p>

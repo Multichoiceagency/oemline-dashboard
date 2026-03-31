@@ -50,8 +50,8 @@ export default function TecDocPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-3xl font-bold tracking-tight">TecDoc Search</h2>
-        <p className="text-muted-foreground">
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">TecDoc Search</h2>
+        <p className="text-muted-foreground text-sm">
           Search the TecDoc database for article cross-references
         </p>
       </div>
@@ -111,16 +111,17 @@ export default function TecDocPage() {
                 No articles found for &quot;{query}&quot; ({searchType} search)
               </p>
             ) : (
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Article Number</TableHead>
                     <TableHead>Brand</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>TecDoc ID</TableHead>
-                    <TableHead>Brand ID</TableHead>
-                    <TableHead>EAN</TableHead>
-                    <TableHead>OEM Numbers</TableHead>
+                    <TableHead className="hidden md:table-cell">Description</TableHead>
+                    <TableHead className="hidden sm:table-cell">TecDoc ID</TableHead>
+                    <TableHead className="hidden lg:table-cell">Brand ID</TableHead>
+                    <TableHead className="hidden lg:table-cell">EAN</TableHead>
+                    <TableHead className="hidden sm:table-cell">OEM Numbers</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -130,13 +131,13 @@ export default function TecDocPage() {
                       <TableCell>
                         <Badge variant="outline">{a.brand}</Badge>
                       </TableCell>
-                      <TableCell>{a.description}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">
+                      <TableCell className="hidden md:table-cell">{a.description}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground hidden sm:table-cell">
                         {a.tecdocId}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{a.brandId}</TableCell>
-                      <TableCell className="font-mono text-xs">{a.ean || "-"}</TableCell>
-                      <TableCell>
+                      <TableCell className="text-muted-foreground hidden lg:table-cell">{a.brandId}</TableCell>
+                      <TableCell className="font-mono text-xs hidden lg:table-cell">{a.ean || "-"}</TableCell>
+                      <TableCell className="hidden sm:table-cell">
                         {a.oemNumbers.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
                             {a.oemNumbers.slice(0, 3).map((oem, j) => (
@@ -158,6 +159,7 @@ export default function TecDocPage() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
           </CardContent>
         </Card>

@@ -164,30 +164,31 @@ export default function BrandDetailPage() {
   return (
     <div className="space-y-6 max-w-5xl">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-0">
           <Button
             variant="ghost"
             size="sm"
             onClick={() => router.push("/brands")}
+            className="shrink-0 min-h-[44px] sm:min-h-0"
           >
             <ArrowLeft className="h-4 w-4 mr-1" /> Back
           </Button>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <BrandLogo brand={brand} size="sm" />
-            <div>
-              <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-                <Tag className="h-5 w-5" />
+            <div className="min-w-0">
+              <h2 className="text-xl sm:text-2xl font-bold tracking-tight flex items-center gap-2 truncate">
+                <Tag className="h-5 w-5 shrink-0" />
                 {brand.name}
               </h2>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-xs sm:text-sm text-muted-foreground truncate">
                 Code: {brand.code} &middot; ID: {brand.id} &middot; Updated:{" "}
                 {formatDate(brand.updatedAt)}
               </p>
             </div>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 self-start sm:self-auto shrink-0">
           {editMode ? (
             <>
               <Button
@@ -196,10 +197,11 @@ export default function BrandDetailPage() {
                   setEditMode(false);
                   populateForm(brand);
                 }}
+                className="min-h-[44px] sm:min-h-0"
               >
                 <X className="h-4 w-4 mr-1" /> Cancel
               </Button>
-              <Button onClick={handleSave} disabled={saving}>
+              <Button onClick={handleSave} disabled={saving} className="min-h-[44px] sm:min-h-0">
                 {saving ? (
                   <Loader2 className="h-4 w-4 animate-spin mr-1" />
                 ) : (
@@ -209,7 +211,7 @@ export default function BrandDetailPage() {
               </Button>
             </>
           ) : (
-            <Button variant="outline" onClick={() => setEditMode(true)}>
+            <Button variant="outline" onClick={() => setEditMode(true)} className="min-h-[44px] sm:min-h-0">
               <Pencil className="h-4 w-4 mr-1" /> Edit
             </Button>
           )}
@@ -381,15 +383,16 @@ export default function BrandDetailPage() {
                   No products found for this brand
                 </p>
               ) : (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Image</TableHead>
                       <TableHead>Article No.</TableHead>
-                      <TableHead>EAN</TableHead>
-                      <TableHead>Description</TableHead>
+                      <TableHead className="hidden md:table-cell">EAN</TableHead>
+                      <TableHead className="hidden sm:table-cell">Description</TableHead>
                       <TableHead>Price</TableHead>
-                      <TableHead>Supplier</TableHead>
+                      <TableHead className="hidden sm:table-cell">Supplier</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -421,10 +424,10 @@ export default function BrandDetailPage() {
                             <div className="text-blue-600">IC: {p.icCode}</div>
                           )}
                         </TableCell>
-                        <TableCell className="font-mono text-xs">
+                        <TableCell className="font-mono text-xs hidden md:table-cell">
                           {p.ean ?? "-"}
                         </TableCell>
-                        <TableCell className="max-w-[200px] truncate text-sm">
+                        <TableCell className="max-w-[200px] truncate text-sm hidden sm:table-cell">
                           {p.description || "-"}
                         </TableCell>
                         <TableCell className="font-mono text-xs">
@@ -432,7 +435,7 @@ export default function BrandDetailPage() {
                             ? `${p.currency ?? "EUR"} ${p.price.toFixed(2)}`
                             : "-"}
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="hidden sm:table-cell">
                           <Badge variant="secondary">
                             {p.supplier?.name}
                           </Badge>
@@ -441,6 +444,7 @@ export default function BrandDetailPage() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
               {productsTotal > 20 && (
                 <div className="pt-3 text-center">

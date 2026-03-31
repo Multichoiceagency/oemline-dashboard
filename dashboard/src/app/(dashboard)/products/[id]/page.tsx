@@ -178,38 +178,38 @@ export default function ProductDetailPage() {
   return (
     <div className="space-y-6 max-w-5xl">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={() => router.push("/products")}>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <Button variant="ghost" size="sm" onClick={() => router.push("/products")} className="shrink-0 min-h-[44px] sm:min-h-0">
             <ArrowLeft className="h-4 w-4 mr-1" /> Back
           </Button>
-          <div>
-            <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Package className="h-5 w-5" />
+          <div className="min-w-0">
+            <h2 className="text-xl sm:text-2xl font-bold tracking-tight flex items-center gap-2 truncate">
+              <Package className="h-5 w-5 shrink-0" />
               {product.brand?.name} {product.articleNo}
             </h2>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs sm:text-sm text-muted-foreground truncate">
               {product.supplier?.name} &middot; ID: {product.id} &middot; Updated: {formatDate(product.updatedAt)}
             </p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 self-start sm:self-auto shrink-0">
           {editMode ? (
             <>
-              <Button variant="outline" onClick={() => { setEditMode(false); populateForm(product); }}>
+              <Button variant="outline" onClick={() => { setEditMode(false); populateForm(product); }} className="min-h-[44px] sm:min-h-0">
                 <X className="h-4 w-4 mr-1" /> Cancel
               </Button>
-              <Button onClick={handleSave} disabled={saving}>
+              <Button onClick={handleSave} disabled={saving} className="min-h-[44px] sm:min-h-0">
                 {saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Save className="h-4 w-4 mr-1" />}
                 Save
               </Button>
             </>
           ) : (
             <>
-              <Button variant="outline" onClick={() => setEditMode(true)}>
+              <Button variant="outline" onClick={() => setEditMode(true)} className="min-h-[44px] sm:min-h-0">
                 <Pencil className="h-4 w-4 mr-1" /> Edit
               </Button>
-              <Button variant="destructive" size="sm" onClick={handleDelete}>
+              <Button variant="destructive" size="sm" onClick={handleDelete} className="min-h-[44px] sm:min-h-0">
                 <Trash2 className="h-4 w-4 mr-1" /> Delete
               </Button>
             </>
@@ -342,7 +342,7 @@ export default function ProductDetailPage() {
             </CardHeader>
             <CardContent>
               {editMode ? (
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium text-muted-foreground">SKU</label>
                     <Input value={editForm.sku} onChange={(e) => setEditForm({ ...editForm, sku: e.target.value })} />
@@ -359,13 +359,13 @@ export default function ProductDetailPage() {
                     <label className="text-xs font-medium text-muted-foreground">TecDoc ID</label>
                     <Input value={editForm.tecdocId} onChange={(e) => setEditForm({ ...editForm, tecdocId: e.target.value })} placeholder="None" />
                   </div>
-                  <div className="space-y-1.5 col-span-2">
+                  <div className="space-y-1.5 sm:col-span-2">
                     <label className="text-xs font-medium text-muted-foreground">OEM Number</label>
                     <Input value={editForm.oem} onChange={(e) => setEditForm({ ...editForm, oem: e.target.value })} placeholder="None" />
                   </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-y-3 gap-x-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6">
                   {[
                     ["SKU", product.sku],
                     ["Article No.", product.articleNo],
@@ -436,7 +436,7 @@ export default function ProductDetailPage() {
             </CardHeader>
             <CardContent>
               {editMode ? (
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium text-muted-foreground">Price</label>
                     <Input type="number" step="0.01" value={editForm.price} onChange={(e) => setEditForm({ ...editForm, price: e.target.value })} placeholder="0.00" />
@@ -458,7 +458,7 @@ export default function ProductDetailPage() {
                   </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
                   <div>
                     <p className="text-xs text-muted-foreground">Price</p>
                     <p className="text-lg font-mono font-bold">

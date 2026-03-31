@@ -246,8 +246,8 @@ export default function FinalizedDetailPage() {
     return (
       <div className="space-y-6 max-w-5xl">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
             <Button
               variant="ghost"
               size="sm"
@@ -255,20 +255,21 @@ export default function FinalizedDetailPage() {
                 setEditMode(false);
                 populateForm(product);
               }}
+              className="shrink-0 min-h-[44px] sm:min-h-0"
             >
               <X className="h-4 w-4 mr-1" /> Cancel
             </Button>
-            <div>
-              <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-                <Pencil className="h-5 w-5" />
+            <div className="min-w-0">
+              <h2 className="text-xl sm:text-2xl font-bold tracking-tight flex items-center gap-2 truncate">
+                <Pencil className="h-5 w-5 shrink-0" />
                 Edit: {product.brand?.name} {product.articleNo}
               </h2>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-xs sm:text-sm text-muted-foreground truncate">
                 {product.supplier?.name} &middot; ID: {product.id}
               </p>
             </div>
           </div>
-          <Button onClick={handleSave} disabled={saving}>
+          <Button onClick={handleSave} disabled={saving} className="self-start sm:self-auto min-h-[44px] sm:min-h-0 shrink-0">
             {saving ? (
               <Loader2 className="h-4 w-4 animate-spin mr-1" />
             ) : (
@@ -477,7 +478,7 @@ export default function FinalizedDetailPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium text-muted-foreground">
                       Price
@@ -538,27 +539,28 @@ export default function FinalizedDetailPage() {
   return (
     <div className="space-y-6 max-w-5xl">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-0">
           <Button
             variant="ghost"
             size="sm"
             onClick={() => router.push("/finalized")}
+            className="shrink-0 min-h-[44px] sm:min-h-0"
           >
             <ArrowLeft className="h-4 w-4 mr-1" /> Back
           </Button>
-          <div>
-            <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Package className="h-5 w-5" />
+          <div className="min-w-0">
+            <h2 className="text-xl sm:text-2xl font-bold tracking-tight flex items-center gap-2 truncate">
+              <Package className="h-5 w-5 shrink-0" />
               {product.brand?.name} {product.articleNo}
             </h2>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs sm:text-sm text-muted-foreground truncate">
               {product.supplier?.name} &middot; ID: {product.id} &middot;
               Updated: {formatDate(product.updatedAt)}
             </p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 self-start sm:self-auto shrink-0">
           <Button
             variant="outline"
             onClick={() => {

@@ -53,13 +53,13 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-3xl font-bold tracking-tight">Match Analytics</h2>
-        <p className="text-muted-foreground">Product matching performance and audit trail</p>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Match Analytics</h2>
+        <p className="text-muted-foreground text-sm">Product matching performance and audit trail</p>
       </div>
 
       {/* Stats cards */}
       {stats.length > 0 && (
-        <div className="grid gap-4 md:grid-cols-5">
+        <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
           {stats.map((s) => (
             <Card key={s.method}>
               <CardHeader className="pb-2">
@@ -116,11 +116,11 @@ export default function AnalyticsPage() {
       {/* Logs table */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <CardTitle className="flex items-center gap-2">
               <BarChart3 className="h-5 w-5" /> Match Logs ({formatNumber(data?.total ?? 0)})
             </CardTitle>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <Select value={matchFilter} onValueChange={(v) => { setMatchFilter(v); setPage(1); }}>
                 <SelectTrigger className="w-[130px]">
                   <SelectValue />
@@ -153,23 +153,24 @@ export default function AnalyticsPage() {
           ) : !data?.items.length ? (
             <p className="text-muted-foreground text-center py-8">No match logs found</p>
           ) : (
+            <div className="overflow-x-auto -mx-6 px-6">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Query</TableHead>
-                  <TableHead>Supplier</TableHead>
+                  <TableHead className="hidden sm:table-cell">Supplier</TableHead>
                   <TableHead>Method</TableHead>
                   <TableHead>Result</TableHead>
-                  <TableHead>Confidence</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead>Time</TableHead>
+                  <TableHead className="hidden md:table-cell">Confidence</TableHead>
+                  <TableHead className="hidden lg:table-cell">Duration</TableHead>
+                  <TableHead className="hidden lg:table-cell">Time</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {data.items.map((log) => (
                   <TableRow key={log.id}>
                     <TableCell className="font-mono text-xs">{log.query}</TableCell>
-                    <TableCell>
+                    <TableCell className="hidden sm:table-cell">
                       <Badge variant="outline">{log.supplier?.name ?? "-"}</Badge>
                     </TableCell>
                     <TableCell>
@@ -184,7 +185,7 @@ export default function AnalyticsPage() {
                         <XCircle className="h-4 w-4 text-red-500" />
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden md:table-cell">
                       <div className="flex items-center gap-2">
                         <div className="h-2 w-16 rounded-full bg-muted">
                           <div
@@ -195,14 +196,15 @@ export default function AnalyticsPage() {
                         <span className="text-xs">{(log.confidence * 100).toFixed(0)}%</span>
                       </div>
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">
+                    <TableCell className="text-muted-foreground text-xs hidden lg:table-cell">
                       {formatDuration(log.durationMs)}
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">{formatDate(log.createdAt)}</TableCell>
+                    <TableCell className="text-muted-foreground text-xs hidden lg:table-cell">{formatDate(log.createdAt)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
 
           {data && data.totalPages > 1 && (

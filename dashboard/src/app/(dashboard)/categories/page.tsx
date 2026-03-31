@@ -114,20 +114,20 @@ export default function CategoriesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">Categories</h2>
-          <p className="text-muted-foreground">
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Categories</h2>
+          <p className="text-muted-foreground text-sm">
             Product categories and assembly groups from TecDoc
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
           {syncResult && (
             <Badge variant="secondary" className="text-xs">
               {syncResult.created} created, {syncResult.updated} updated, {syncResult.linked} linked
             </Badge>
           )}
-          <Button onClick={handleSyncCategories} disabled={syncing}>
+          <Button onClick={handleSyncCategories} disabled={syncing} className="min-h-[44px] sm:min-h-0">
             {syncing ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : (
@@ -218,14 +218,15 @@ export default function CategoriesPage() {
               </p>
             </div>
           ) : (
+            <div className="overflow-x-auto -mx-6 px-6">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Category</TableHead>
-                  <TableHead>Code</TableHead>
-                  <TableHead>TecDoc ID</TableHead>
+                  <TableHead className="hidden sm:table-cell">Code</TableHead>
+                  <TableHead className="hidden md:table-cell">TecDoc ID</TableHead>
                   <TableHead>Products</TableHead>
-                  <TableHead>Subcategories</TableHead>
+                  <TableHead className="hidden sm:table-cell">Subcategories</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -242,12 +243,12 @@ export default function CategoriesPage() {
                         {cat.name}
                       </div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden sm:table-cell">
                       <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
                         {cat.code}
                       </code>
                     </TableCell>
-                    <TableCell className="font-mono text-xs">
+                    <TableCell className="font-mono text-xs hidden md:table-cell">
                       {cat.tecdocId ?? "-"}
                     </TableCell>
                     <TableCell>
@@ -255,7 +256,7 @@ export default function CategoriesPage() {
                         {formatNumber(cat._count?.products ?? 0)}
                       </Badge>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden sm:table-cell">
                       {(cat._count?.children ?? 0) > 0 && (
                         <Badge variant="secondary">
                           {cat._count?.children} subcategories
@@ -278,6 +279,7 @@ export default function CategoriesPage() {
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
 
           {data && data.totalPages > 1 && (

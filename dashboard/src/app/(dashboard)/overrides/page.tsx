@@ -28,12 +28,12 @@ export default function OverridesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">Overrides</h2>
-          <p className="text-muted-foreground">Manual product mapping overrides</p>
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Overrides</h2>
+          <p className="text-muted-foreground text-sm">Manual product mapping overrides</p>
         </div>
-        <Button onClick={() => router.push("/overrides/new")}>
+        <Button onClick={() => router.push("/overrides/new")} className="min-h-[44px] sm:min-h-0 self-start sm:self-auto">
           <Plus className="mr-2 h-4 w-4" /> New Override
         </Button>
       </div>
@@ -50,18 +50,19 @@ export default function OverridesPage() {
           ) : !data?.items.length ? (
             <p className="text-muted-foreground text-center py-8">No overrides created yet</p>
           ) : (
+            <div className="overflow-x-auto -mx-6 px-6">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Supplier</TableHead>
                   <TableHead>Brand</TableHead>
                   <TableHead>Article No.</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead>EAN</TableHead>
-                  <TableHead>TecDoc ID</TableHead>
-                  <TableHead>Reason</TableHead>
+                  <TableHead className="hidden sm:table-cell">SKU</TableHead>
+                  <TableHead className="hidden md:table-cell">EAN</TableHead>
+                  <TableHead className="hidden md:table-cell">TecDoc ID</TableHead>
+                  <TableHead className="hidden lg:table-cell">Reason</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Created</TableHead>
+                  <TableHead className="hidden lg:table-cell">Created</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -70,20 +71,21 @@ export default function OverridesPage() {
                     <TableCell><Badge variant="outline">{o.supplier?.name ?? "-"}</Badge></TableCell>
                     <TableCell>{o.brand?.name ?? "-"}</TableCell>
                     <TableCell className="font-mono text-xs">{o.articleNo}</TableCell>
-                    <TableCell className="font-mono text-xs">{o.sku}</TableCell>
-                    <TableCell className="font-mono text-xs">{o.ean ?? "-"}</TableCell>
-                    <TableCell className="font-mono text-xs">{o.tecdocId ?? "-"}</TableCell>
-                    <TableCell className="max-w-[150px] truncate text-muted-foreground">{o.reason ?? "-"}</TableCell>
+                    <TableCell className="font-mono text-xs hidden sm:table-cell">{o.sku}</TableCell>
+                    <TableCell className="font-mono text-xs hidden md:table-cell">{o.ean ?? "-"}</TableCell>
+                    <TableCell className="font-mono text-xs hidden md:table-cell">{o.tecdocId ?? "-"}</TableCell>
+                    <TableCell className="max-w-[150px] truncate text-muted-foreground hidden lg:table-cell">{o.reason ?? "-"}</TableCell>
                     <TableCell>
                       <Badge variant={o.active ? "success" : "secondary"}>
                         {o.active ? "Active" : "Inactive"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{formatDate(o.createdAt)}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground hidden lg:table-cell">{formatDate(o.createdAt)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
 
           {data && data.totalPages > 1 && (

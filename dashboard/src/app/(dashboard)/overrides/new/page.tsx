@@ -59,7 +59,7 @@ export default function NewOverridePage() {
       </div>
 
       <div>
-        <h2 className="text-3xl font-bold tracking-tight">Create Override</h2>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Create Override</h2>
         <p className="text-muted-foreground">
           Manually map a supplier product to article identifiers
         </p>
@@ -73,7 +73,7 @@ export default function NewOverridePage() {
         </CardHeader>
         <CardContent>
           <div className="grid gap-6 max-w-2xl">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Supplier Code</label>
                 <Input
@@ -91,7 +91,7 @@ export default function NewOverridePage() {
                 />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Article No.</label>
                 <Input
@@ -107,7 +107,7 @@ export default function NewOverridePage() {
                 />
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">EAN</label>
                 <Input

@@ -84,11 +84,11 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">{t("settings.title")}</h1>
-        <p className="text-muted-foreground">{t("settings.subtitle")}</p>
+        <h1 className="text-2xl sm:text-3xl font-bold">{t("settings.title")}</h1>
+        <p className="text-muted-foreground text-sm">{t("settings.subtitle")}</p>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid gap-6 grid-cols-1 md:grid-cols-2">
         {/* Settings Form */}
         <Card>
           <CardHeader>
@@ -201,7 +201,7 @@ export default function SettingsPage() {
             {preview && preview.preview.length > 0 && (
               <div className="mt-4">
                 <p className="text-xs font-medium text-muted-foreground mb-2">{t("settings.previewDesc")}</p>
-                <div className="rounded-lg border overflow-hidden">
+                <div className="rounded-lg border overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>

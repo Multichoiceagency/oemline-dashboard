@@ -148,13 +148,13 @@ export default function FinalizedPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">{t("finalized.title")}</h1>
-        <p className="text-muted-foreground">{t("finalized.subtitle")}</p>
+        <h1 className="text-2xl sm:text-3xl font-bold">{t("finalized.title")}</h1>
+        <p className="text-muted-foreground text-sm">{t("finalized.subtitle")}</p>
       </div>
 
       {/* Stats cards */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 sm:gap-4">
           <Card>
             <CardContent className="pt-6">
               <div className="flex items-center gap-2">
@@ -249,7 +249,7 @@ export default function FinalizedPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
               {(
                 [
                   { key: "icMatch" as const, label: "IC Match", icon: Link2, color: "violet" },
@@ -346,7 +346,7 @@ export default function FinalizedPage() {
           </CardHeader>
           {fieldDistOpen && (
             <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
                 {Object.entries(stats.indexStats.fieldDistribution)
                   .sort(([, a], [, b]) => b - a)
                   .map(([field, count]) => {
@@ -472,7 +472,7 @@ export default function FinalizedPage() {
 
       {/* Products table */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <CardTitle className="flex items-center gap-2">
             <ShoppingCart className="h-5 w-5" />
             {t("finalized.products")}
@@ -484,7 +484,7 @@ export default function FinalizedPage() {
             size="sm"
             variant={bulkPushResult === "queued" ? "default" : bulkPushResult === "error" ? "destructive" : "outline"}
             disabled={bulkPushing}
-            className={bulkPushResult === "queued" ? "bg-green-600 hover:bg-green-700" : ""}
+            className={`min-h-[44px] sm:min-h-0 ${bulkPushResult === "queued" ? "bg-green-600 hover:bg-green-700" : ""}`}
             onClick={handleBulkPush}
           >
             {bulkPushing ? (
@@ -494,7 +494,7 @@ export default function FinalizedPage() {
             ) : (
               <Send className="mr-2 h-4 w-4" />
             )}
-            {bulkPushing ? "Queuing..." : bulkPushResult === "queued" ? "Push Queued!" : bulkPushResult === "error" ? "Push Failed" : "Push All to Output API"}
+            {bulkPushing ? "Queuing..." : bulkPushResult === "queued" ? "Push Queued!" : bulkPushResult === "error" ? "Push Failed" : "Push All"}
           </Button>
         </CardHeader>
         <CardContent>
@@ -536,32 +536,34 @@ export default function FinalizedPage() {
               </div>
 
               {/* Pagination */}
-              <div className="flex items-center justify-between mt-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mt-4 gap-3">
                 <p className="text-sm text-muted-foreground">
                   {t("common.showing")} {(data.page - 1) * data.limit + 1}-
                   {Math.min(data.page * data.limit, data.total)} {t("common.of")}{" "}
                   {formatNumber(data.total)}
                 </p>
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
                   <Button
                     variant="outline"
                     size="sm"
                     disabled={page <= 1}
                     onClick={() => setPage(page - 1)}
+                    className="min-h-[44px] sm:min-h-0"
                   >
                     <ChevronLeft className="h-4 w-4" />
-                    {t("common.previous")}
+                    <span className="hidden sm:inline">{t("common.previous")}</span>
                   </Button>
                   <span className="flex items-center text-sm px-2">
-                    {t("common.page")} {data.page} {t("common.of")} {data.totalPages}
+                    {data.page}/{data.totalPages}
                   </span>
                   <Button
                     variant="outline"
                     size="sm"
                     disabled={page >= data.totalPages}
                     onClick={() => setPage(page + 1)}
+                    className="min-h-[44px] sm:min-h-0"
                   >
-                    {t("common.next")}
+                    <span className="hidden sm:inline">{t("common.next")}</span>
                     <ChevronRight className="h-4 w-4" />
                   </Button>
                 </div>

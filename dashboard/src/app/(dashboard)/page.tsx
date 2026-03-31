@@ -133,17 +133,17 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
-          <p className="text-muted-foreground">OEMline multi-supplier parts platform overview</p>
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Dashboard</h2>
+          <p className="text-muted-foreground text-sm">OEMline multi-supplier parts platform overview</p>
         </div>
         <Button
           variant="outline"
           size="sm"
           onClick={handleRunAll}
           disabled={runningAll}
-          className="gap-2"
+          className="gap-2 self-start sm:self-auto min-h-[44px] sm:min-h-0"
         >
           {runningAll ? (
             <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting...</>
@@ -342,7 +342,7 @@ export default function DashboardPage() {
             <CardTitle>Match Performance by Method</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 md:grid-cols-5">
+            <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
               {matchLogs.data.stats.map((stat) => (
                 <div key={stat.method} className="space-y-1 rounded-lg border p-4">
                   <p className="text-sm font-medium capitalize">{stat.method.replace("_", " ")}</p>

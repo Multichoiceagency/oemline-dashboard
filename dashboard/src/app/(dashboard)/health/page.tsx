@@ -145,17 +145,17 @@ export default function HealthPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">System Health</h2>
-          <p className="text-muted-foreground">Real-time monitoring of all platform services (auto-refreshes every 10s)</p>
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">System Health</h2>
+          <p className="text-muted-foreground text-sm">Real-time monitoring of all platform services (auto-refreshes every 10s)</p>
         </div>
         <Button
           variant="outline"
           size="sm"
           onClick={handleRunAll}
           disabled={runningAll}
-          className="gap-2"
+          className="gap-2 self-start sm:self-auto min-h-[44px] sm:min-h-0"
         >
           {runningAll ? (
             <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting...</>
@@ -250,12 +250,13 @@ export default function HealthPage() {
               <CardTitle>Service Status</CardTitle>
             </CardHeader>
             <CardContent>
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Service</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Details</TableHead>
+                    <TableHead className="hidden sm:table-cell">Details</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -275,7 +276,7 @@ export default function HealthPage() {
                           {st}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
+                      <TableCell className="text-muted-foreground hidden sm:table-cell">
                         {name === "postgres" && "PostgreSQL database"}
                         {name === "redis" && "Redis cache & queue broker"}
                         {name === "meilisearch" && "Meilisearch full-text search engine"}
@@ -284,6 +285,7 @@ export default function HealthPage() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
             </CardContent>
           </Card>
 
@@ -293,7 +295,7 @@ export default function HealthPage() {
               <Activity className="h-5 w-5" /> Background Workers
             </h3>
             {q ? (
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
                 {(Object.entries(QUEUE_LABELS) as [keyof typeof q, string][])
                   .filter(([key]) => key !== "aiMatch" && q[key])
                   .map(([key, label]) => (
@@ -387,6 +389,7 @@ export default function HealthPage() {
                 <CardTitle>Circuit Breakers</CardTitle>
               </CardHeader>
               <CardContent>
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -417,6 +420,7 @@ export default function HealthPage() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               </CardContent>
             </Card>
           )}
