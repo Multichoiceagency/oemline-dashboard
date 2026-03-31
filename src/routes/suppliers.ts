@@ -192,6 +192,33 @@ export async function supplierRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
+  app.delete("/suppliers/:id", async (request, reply) => {
+    const { id } = z.object({ id: z.coerce.number().int().positive() }).parse(request.params);
+
+    const supplier = await prisma.supplier.findUnique({
+      where: { id },
+      include: { _count: { select: { productMaps: true, overrides: true, unmatched: true } } },
+    });
+
+    if (!supplier) return reply.code(404).send({ error: "Supplier not found" });
+
+    const total = supplier._count.productMaps + supplier._count.overrides + supplier._count.unmatched;
+    if (total > 0) {
+      return reply.code(409).send({
+        error: "Supplier has related data",
+        counts: supplier._count,
+        hint: "Delete related product_maps, overrides, and unmatched records first, or set active=false instead.",
+      });
+    }
+
+    // Delete brand rules first (FK constraint)
+    await prisma.supplierBrandRule.deleteMany({ where: { supplierId: id } });
+    await prisma.supplier.delete({ where: { id } });
+    await loadAdaptersFromDb();
+
+    return reply.send({ deleted: true, name: supplier.name, code: supplier.code });
+  });
+
   app.post("/suppliers/:id/sync", async (request, reply) => {
     const idSchema = z.object({
       id: z.coerce.number().int().positive(),
