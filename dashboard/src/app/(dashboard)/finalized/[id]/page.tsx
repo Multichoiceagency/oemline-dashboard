@@ -570,39 +570,6 @@ export default function FinalizedDetailPage() {
           >
             <Pencil className="h-4 w-4 mr-1" /> Edit
           </Button>
-          <Button
-            variant={
-              pushResult === "success"
-                ? "default"
-                : pushResult === "error"
-                ? "destructive"
-                : "secondary"
-            }
-            onClick={handlePush}
-            disabled={pushing}
-            className={
-              pushResult === "success"
-                ? "bg-green-600 hover:bg-green-700"
-                : ""
-            }
-          >
-            {pushing ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : pushResult === "success" ? (
-              <CheckCircle2 className="mr-2 h-4 w-4" />
-            ) : pushResult === "error" ? (
-              <AlertCircle className="mr-2 h-4 w-4" />
-            ) : (
-              <Send className="mr-2 h-4 w-4" />
-            )}
-            {pushing
-              ? "Pushing..."
-              : pushResult === "success"
-              ? "Pushed!"
-              : pushResult === "error"
-              ? "Push Failed"
-              : "Push to Output API"}
-          </Button>
         </div>
       </div>
 

@@ -480,22 +480,6 @@ export default function FinalizedPage() {
               <Badge variant="secondary">{formatNumber(data.total)}</Badge>
             )}
           </CardTitle>
-          <Button
-            size="sm"
-            variant={bulkPushResult === "queued" ? "default" : bulkPushResult === "error" ? "destructive" : "outline"}
-            disabled={bulkPushing}
-            className={`min-h-[44px] sm:min-h-0 ${bulkPushResult === "queued" ? "bg-green-600 hover:bg-green-700" : ""}`}
-            onClick={handleBulkPush}
-          >
-            {bulkPushing ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : bulkPushResult === "queued" ? (
-              <CheckCircle2 className="mr-2 h-4 w-4" />
-            ) : (
-              <Send className="mr-2 h-4 w-4" />
-            )}
-            {bulkPushing ? "Queuing..." : bulkPushResult === "queued" ? "Push Queued!" : bulkPushResult === "error" ? "Push Failed" : "Push All"}
-          </Button>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -701,22 +685,6 @@ function ProductRow({
       </TableCell>
       <TableCell>
         <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            title="Push to Output API"
-            disabled={rowPushing}
-            onClick={handleRowPush}
-            className={rowPushDone ? "text-green-600" : ""}
-          >
-            {rowPushing ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : rowPushDone ? (
-              <CheckCircle2 className="h-4 w-4" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-          </Button>
           <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); onNavigate(); }}>
             <Eye className="h-4 w-4" />
           </Button>

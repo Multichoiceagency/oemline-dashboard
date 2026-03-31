@@ -41,14 +41,14 @@ const features = [
     link: '/docs/api/storefront-products',
   },
   {
-    title: 'Multi-Supplier',
-    description: 'TecDoc catalog, InterCars pricing/stock, DIEDERICHS and VAN WEZEL with their own APIs and price lists.',
-    link: '/docs/api/suppliers',
+    title: '100 Brands',
+    description: 'Complete catalog of 100 trusted automotive brands with real-time pricing, stock levels, and Dutch product descriptions.',
+    link: '/docs/api/storefront-brands',
   },
   {
-    title: 'Smart Matching',
-    description: '5-priority matching engine with IC CSV mapping (565K rows), multi-phase auto-matching, and manual match tools.',
-    link: '/docs/api/matching',
+    title: 'Pricing & Stock',
+    description: 'Live pricing with configurable margin and tax. Real-time stock availability across all products.',
+    link: '/docs/api/pricing',
   },
 ];
 

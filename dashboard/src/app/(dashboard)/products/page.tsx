@@ -7,6 +7,7 @@ import {
   getProducts,
   deleteProduct,
   getSuppliers,
+  getBrands,
   populateTecDoc,
   searchProducts,
   importProducts,
@@ -64,6 +65,7 @@ export default function ProductsPage() {
   const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [supplierFilter, setSupplierFilter] = useState("all");
+  const [brandFilter, setBrandFilter] = useState("all");
   const [imageFilter, setImageFilter] = useState("all");
   const [priceFilter, setPriceFilter] = useState("all");
   const [searchInput, setSearchInput] = useState("");
@@ -75,14 +77,20 @@ export default function ProductsPage() {
         limit: 50,
         q: searchQuery || undefined,
         supplier: supplierFilter !== "all" ? supplierFilter : undefined,
+        brand: brandFilter !== "all" ? brandFilter : undefined,
         hasImage: imageFilter !== "all" ? imageFilter : undefined,
         hasPrice: priceFilter !== "all" ? priceFilter : undefined,
       }),
-    [page, searchQuery, supplierFilter, imageFilter, priceFilter]
+    [page, searchQuery, supplierFilter, brandFilter, imageFilter, priceFilter]
   );
 
   const { data: suppliersData } = useApi(
     () => getSuppliers({ limit: 100, active: "all" }),
+    []
+  );
+
+  const { data: brandsData } = useApi(
+    () => getBrands({ limit: 500 }),
     []
   );
 
@@ -276,6 +284,25 @@ export default function ProductsPage() {
                   {suppliersData?.items.map((s) => (
                     <SelectItem key={s.code} value={s.code}>
                       {s.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={brandFilter}
+                onValueChange={(v) => {
+                  setBrandFilter(v);
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-[200px]">
+                  <SelectValue placeholder="All brands" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All brands</SelectItem>
+                  {brandsData?.items.map((b: { code: string; name: string }) => (
+                    <SelectItem key={b.code} value={b.code}>
+                      {b.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
