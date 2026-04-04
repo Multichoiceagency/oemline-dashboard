@@ -50,6 +50,99 @@ function statusEmoji(status: string): string {
   return status === "completed" ? "\u2705" : "\u274c";
 }
 
+export interface ProgressReport {
+  worker: string;
+  progress: number;       // 0-100
+  processed?: number;
+  total?: number;
+  detail?: string;
+}
+
+/**
+ * Send a progress update email at every 5% milestone.
+ * Tracks last-sent percentage per worker to avoid duplicate emails.
+ * Fire-and-forget — never throws.
+ */
+const _lastNotifiedPct = new Map<string, number>();
+
+export async function sendProgressNotification(report: ProgressReport): Promise<void> {
+  if (recipients.length === 0 || !config.SMTP_USER) return;
+
+  const pct = Math.floor(report.progress);
+  const milestone = Math.floor(pct / 5) * 5; // round down to nearest 5%
+  const lastSent = _lastNotifiedPct.get(report.worker) ?? -1;
+  if (milestone <= lastSent || milestone < 5) return; // skip if already sent this milestone
+  _lastNotifiedPct.set(report.worker, milestone);
+
+  try {
+    const subject = `⚙️ OEMline ${report.worker}: ${milestone}% voltooid`;
+
+    const progressBar = "█".repeat(Math.floor(milestone / 5)) + "░".repeat(20 - Math.floor(milestone / 5));
+    const rows: Array<[string, string]> = [
+      ["Worker", report.worker],
+      ["Voortgang", `${milestone}%  [${progressBar}]`],
+    ];
+    if (report.processed != null && report.total != null) {
+      rows.push(["Verwerkt", `${report.processed.toLocaleString("nl-NL")} / ${report.total.toLocaleString("nl-NL")}`]);
+    } else if (report.processed != null) {
+      rows.push(["Verwerkt", report.processed.toLocaleString("nl-NL")]);
+    }
+    if (report.detail) rows.push(["Details", report.detail]);
+    rows.push(["Tijd", new Date().toLocaleString("nl-NL", { timeZone: "Europe/Amsterdam" })]);
+
+    const tableRows = rows
+      .map(([k, v]) =>
+        `<tr><td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#374151;white-space:nowrap;">${k}</td>` +
+        `<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#111827;font-family:monospace;">${v}</td></tr>`
+      ).join("");
+
+    const html = `<!DOCTYPE html>
+<html lang="nl">
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:40px 0;">
+    <tr><td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <tr><td style="background:#1a1a2e;padding:20px 28px;">
+          <table width="100%"><tr>
+            <td><div style="display:inline-block;width:36px;height:36px;background:#3b82f6;border-radius:8px;line-height:36px;color:#fff;font-weight:bold;font-size:14px;text-align:center;">OL</div></td>
+            <td style="padding-left:12px;"><span style="color:#ffffff;font-size:18px;font-weight:600;">Voortgangsrapport</span></td>
+            <td style="text-align:right;"><span style="display:inline-block;padding:4px 14px;border-radius:20px;font-size:16px;font-weight:700;color:#fff;background:#3b82f6;">${milestone}%</span></td>
+          </tr></table>
+        </td></tr>
+        <tr><td style="padding:8px 28px 4px;">
+          <div style="background:#e5e7eb;border-radius:4px;height:8px;overflow:hidden;">
+            <div style="background:#3b82f6;height:8px;width:${milestone}%;transition:width 0.3s;"></div>
+          </div>
+        </td></tr>
+        <tr><td style="padding:16px 28px 24px;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+            ${tableRows}
+          </table>
+        </td></tr>
+        <tr><td style="background:#f9fafb;padding:14px 28px;border-top:1px solid #e5e7eb;">
+          <p style="color:#9ca3af;font-size:11px;margin:0;text-align:center;">OEMline B.V. — Automatisch voortgangsbericht</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+    await transporter.sendMail({
+      from: `"OEMline Workers" <${config.EMAIL_FROM}>`,
+      to: recipients.join(", "),
+      subject,
+      text: rows.map(([k, v]) => `${k}: ${v}`).join("\n"),
+      html,
+    });
+
+    logger.info({ worker: report.worker, milestone }, "Progress notification email sent");
+  } catch (err) {
+    logger.warn({ err, worker: report.worker }, "Failed to send progress notification email");
+  }
+}
+
 /**
  * Send a worker status notification email to all configured recipients.
  * Fire-and-forget — never throws.

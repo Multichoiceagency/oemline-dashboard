@@ -1,6 +1,7 @@
 import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { sendProgressNotification } from "../lib/notify.js";
 
 /**
  * IC CSV Sync Worker
@@ -35,6 +36,7 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
   const priceStockOnly = job.data.priceStockOnly ?? false;
 
   logger.info({ date: today, priceStockOnly }, "IC CSV sync starting");
+  await sendProgressNotification({ worker: "IC CSV Sync", progress: 5, detail: `Downloaden IC CSV voor ${today}` });
 
   const basicAuth = Buffer.from(`${CSV_USER}:${CSV_PASS}`).toString("base64");
   const headers = { Authorization: `Basic ${basicAuth}` };
@@ -58,10 +60,12 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
     logger.info("Downloading WholesalePricing CSV...");
     pricingRows = await downloadAndParseCsv<PricingRow>(pricingUrl, headers, parsePricingRow);
     logger.info({ count: pricingRows.length }, "WholesalePricing loaded");
+    await sendProgressNotification({ worker: "IC CSV Sync", progress: 25, processed: pricingRows.length, detail: "WholesalePricing CSV geladen" });
 
     logger.info("Downloading Stock CSV...");
     stockRows = await downloadAndParseCsv<StockRow>(stockUrl, headers, parseStockRow);
     logger.info({ count: stockRows.length }, "Stock loaded");
+  await sendProgressNotification({ worker: "IC CSV Sync", progress: 40, processed: stockRows.length, detail: "Stock CSV geladen" });
   } catch (err) {
     // If today's file isn't ready yet, try yesterday
     const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
@@ -105,6 +109,8 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
   const tokArray = Array.from(allToks);
   let totalUpdated = 0;
 
+  await sendProgressNotification({ worker: "IC CSV Sync", progress: 50, processed: priceMap.size, total: allToks.size, detail: `${priceMap.size.toLocaleString("nl-NL")} prijzen → ${allToks.size.toLocaleString("nl-NL")} producten bijwerken` });
+
   const BATCH = 500;
   for (let i = 0; i < tokArray.length; i += BATCH) {
     const batch = tokArray.slice(i, i + BATCH);
@@ -131,7 +137,15 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
     }
 
     if (i % 5000 === 0) {
-      await job.updateProgress(30 + Math.round(70 * i / tokArray.length));
+      const pct = 50 + Math.round(45 * i / tokArray.length);
+      await job.updateProgress(pct);
+      await sendProgressNotification({
+        worker: "IC CSV Sync",
+        progress: pct,
+        processed: i,
+        total: tokArray.length,
+        detail: `${totalUpdated.toLocaleString("nl-NL")} producten bijgewerkt`,
+      });
     }
   }
 
@@ -141,6 +155,14 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
     stockProducts: stockMap.size,
     productRows: productRows.length,
   }, "IC CSV sync completed");
+
+  await sendProgressNotification({
+    worker: "IC CSV Sync",
+    progress: 100,
+    processed: totalUpdated,
+    total: allToks.size,
+    detail: `Klaar! ${totalUpdated.toLocaleString("nl-NL")} producten bijgewerkt met actuele prijzen en voorraad`,
+  });
 }
 
 // ── CSV types ───────────────────────────────────────────────────────────

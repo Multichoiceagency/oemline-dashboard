@@ -2,6 +2,7 @@ import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { waitForIcRateLimit } from "../lib/ic-rate-limiter.js";
+import { sendProgressNotification } from "../lib/notify.js";
 
 /**
  * IC Catalog Sync Worker
@@ -199,6 +200,7 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
   }
 
   logger.info({ maxCategories, maxProducts, skipDetails }, "IC catalog sync starting");
+  await sendProgressNotification({ worker: "IC Catalog Sync", progress: 5, detail: "Start: ophalen IC categorie-overzicht" });
 
   // ── Step 1: Fetch top-level categories ────────────────────────────────
   const catResp = await icFetch(`${IC_API_URL}/catalog/category`);
@@ -294,6 +296,17 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
     // Extend job lock (long-running job)
     try { await job.extendLock(job.token!, 600_000); } catch { /* ok */ }
     await job.updateProgress(totalProcessed);
+
+    // Send progress email at every 5% of estimated 3M products
+    const estimatedTotal = maxProducts || 3_000_000;
+    const pct = Math.min(95, Math.round(totalProcessed / estimatedTotal * 90)); // 90% = pass 1
+    await sendProgressNotification({
+      worker: "IC Catalog Sync",
+      progress: pct,
+      processed: totalProcessed,
+      total: estimatedTotal,
+      detail: `Categorie: ${cat.label}`,
+    });
   }
 
   logger.info({ totalProcessed, totalInserted }, "Pass 1 done (top-level 10K each)");
@@ -370,6 +383,13 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
     totalSkipped,
     leafCategories: allLeafCategories.length,
   }, "IC catalog sync completed");
+
+  await sendProgressNotification({
+    worker: "IC Catalog Sync",
+    progress: 100,
+    processed: totalProcessed,
+    detail: `Klaar! ${totalInserted.toLocaleString("nl-NL")} nieuwe mappings toegevoegd, ${totalProcessed.toLocaleString("nl-NL")} producten verwerkt`,
+  });
 }
 
 // ── Batch upsert ─────────────────────────────────────────────────────────
