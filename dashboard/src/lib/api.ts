@@ -303,6 +303,7 @@ export interface BulkOverrideItem {
   tecdocId?: string;
   oem?: string;
   reason?: string;
+  categoryId?: number | null;
 }
 
 export interface BulkOverrideResult {
@@ -627,6 +628,15 @@ export const getCategories = (params?: { page?: number; limit?: number; parentId
 
 export const getCategory = (id: number) =>
   apiFetch<Category & { parent: { id: number; name: string; code: string } | null; products: Product[] }>(`/api/categories/${id}`);
+
+export const createCategory = (data: { name: string; code?: string; parentId?: number | null }) =>
+  apiFetch<Category>("/api/categories", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const deleteCategory = (id: number) =>
+  apiFetch<{ success: boolean }>(`/api/categories/${id}`, { method: "DELETE" });
 
 export const updateCategory = (id: number, data: { name?: string; code?: string; parentId?: number | null }) =>
   apiFetch<Category>(`/api/categories/${id}`, {

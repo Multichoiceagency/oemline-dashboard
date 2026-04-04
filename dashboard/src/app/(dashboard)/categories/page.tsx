@@ -127,6 +127,9 @@ export default function CategoriesPage() {
               {syncResult.created} created, {syncResult.updated} updated, {syncResult.linked} linked
             </Badge>
           )}
+          <Button variant="outline" onClick={() => router.push("/categories/new")} className="min-h-[44px] sm:min-h-0">
+            + Nieuwe categorie
+          </Button>
           <Button onClick={handleSyncCategories} disabled={syncing} className="min-h-[44px] sm:min-h-0">
             {syncing ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />

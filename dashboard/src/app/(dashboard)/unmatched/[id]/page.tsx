@@ -2,13 +2,14 @@
 
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { getUnmatchedItem, bulkCreateOverrides } from "@/lib/api";
-import type { UnmatchedItem } from "@/lib/api";
+import { getUnmatchedItem, bulkCreateOverrides, getCategories } from "@/lib/api";
+import type { UnmatchedItem, Category } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Loader2, Link2, Info } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ArrowLeft, Loader2, Link2, Info, FolderTree } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 
 export default function ResolveUnmatchedPage() {
@@ -17,16 +18,23 @@ export default function ResolveUnmatchedPage() {
   const id = params.id as string;
 
   const [item, setItem] = useState<UnmatchedItem | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ sku: "", ean: "", tecdocId: "", oem: "", reason: "" });
+  const [form, setForm] = useState({ sku: "", ean: "", tecdocId: "", oem: "", reason: "", categoryId: "none" });
 
   useEffect(() => {
     setLoading(true);
     setError(null);
-    getUnmatchedItem(id)
-      .then(setItem)
+    Promise.all([
+      getUnmatchedItem(id),
+      getCategories({ limit: 250, hideEmpty: "false" }),
+    ])
+      .then(([i, cats]) => {
+        setItem(i);
+        setCategories(cats.items ?? []);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : "Ophalen mislukt"))
       .finally(() => setLoading(false));
   }, [id]);
@@ -44,6 +52,7 @@ export default function ResolveUnmatchedPage() {
         tecdocId: form.tecdocId || undefined,
         oem: form.oem || undefined,
         reason: form.reason || "Handmatige koppeling vanuit dashboard",
+        categoryId: form.categoryId !== "none" ? Number(form.categoryId) : undefined,
       }]);
       router.push("/unmatched");
     } catch (err) {
@@ -54,11 +63,7 @@ export default function ResolveUnmatchedPage() {
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <div className="flex items-center justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
   }
 
   if (error || !item) {
@@ -67,11 +72,7 @@ export default function ResolveUnmatchedPage() {
         <Button variant="ghost" size="sm" onClick={() => router.push("/unmatched")}>
           <ArrowLeft className="h-4 w-4 mr-1" /> Terug
         </Button>
-        <Card>
-          <CardContent className="py-8 text-center text-muted-foreground text-sm">
-            {error ?? "Item niet gevonden"}
-          </CardContent>
-        </Card>
+        <Card><CardContent className="py-8 text-center text-muted-foreground text-sm">{error ?? "Item niet gevonden"}</CardContent></Card>
       </div>
     );
   }
@@ -87,20 +88,16 @@ export default function ResolveUnmatchedPage() {
           <Link2 className="h-6 w-6 text-blue-500" />
           Item koppelen
         </h2>
-        <p className="text-muted-foreground text-sm">
-          Maak een handmatige IC-koppeling aan voor dit niet-gekoppeld product
-        </p>
+        <p className="text-muted-foreground text-sm">Handmatige IC-koppeling en categorie voor dit product</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Item info */}
+        {/* Product info */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Info className="h-4 w-4" /> Productgegevens
-            </CardTitle>
+            <CardTitle className="text-base flex items-center gap-2"><Info className="h-4 w-4" /> Productgegevens</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-2.5">
             {([
               ["Query", item.query, true],
               ["Artikelnummer", item.articleNo, true],
@@ -114,9 +111,7 @@ export default function ResolveUnmatchedPage() {
             ] as [string, string | null | undefined, boolean][]).filter(([, v]) => v).map(([label, value, mono]) => (
               <div key={label} className="flex justify-between items-start gap-4">
                 <span className="text-sm text-muted-foreground shrink-0">{label}</span>
-                <span className={`text-sm font-medium text-right ${mono ? "font-mono" : ""}`}>
-                  {value}
-                </span>
+                <span className={`text-sm font-medium text-right ${mono ? "font-mono" : ""}`}>{value}</span>
               </div>
             ))}
             <div className="pt-1">
@@ -131,15 +126,11 @@ export default function ResolveUnmatchedPage() {
         {/* Match form */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Link2 className="h-4 w-4" /> IC-koppeling instellen
-            </CardTitle>
+            <CardTitle className="text-base flex items-center gap-2"><Link2 className="h-4 w-4" /> Koppeling instellen</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">
-                IC SKU / TOW_KOD <span className="text-red-500">*</span>
-              </label>
+              <label className="text-sm font-medium">IC SKU / TOW_KOD <span className="text-red-500">*</span></label>
               <Input
                 placeholder="bijv. H17R23"
                 value={form.sku}
@@ -147,8 +138,37 @@ export default function ResolveUnmatchedPage() {
                 className="font-mono"
                 autoFocus
               />
+              <p className="text-xs text-muted-foreground">De InterCars product-code (TOW_KOD) uit de IC catalogus</p>
+            </div>
+
+            {/* Category selector */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium flex items-center gap-1.5">
+                <FolderTree className="h-3.5 w-3.5" />
+                Categorie
+              </label>
+              <Select value={form.categoryId} onValueChange={(v) => setForm({ ...form, categoryId: v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecteer categorie (optioneel)" />
+                </SelectTrigger>
+                <SelectContent className="max-h-64 overflow-y-auto">
+                  <SelectItem value="none">— Geen categorie</SelectItem>
+                  {categories.map((c) => (
+                    <SelectItem key={c.id} value={String(c.id)}>
+                      {"·".repeat(c.level ?? 0)}{c.level ? " " : ""}{c.name}
+                      {c.tecdocId && <span className="text-muted-foreground ml-1 text-xs">(TecDoc)</span>}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <p className="text-xs text-muted-foreground">
-                De InterCars product-code (TOW_KOD) uit de IC catalogus
+                Kies een bestaande categorie of{" "}
+                <button
+                  className="text-blue-600 underline hover:text-blue-800"
+                  onClick={() => window.open("/categories/new", "_blank")}
+                >
+                  maak een nieuwe aan
+                </button>
               </p>
             </div>
 
@@ -170,29 +190,19 @@ export default function ResolveUnmatchedPage() {
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Reden</label>
-              <Input
-                placeholder="Handmatige koppeling vanuit dashboard"
-                value={form.reason}
-                onChange={(e) => setForm({ ...form, reason: e.target.value })}
-              />
+              <Input placeholder="Handmatige koppeling vanuit dashboard" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
             </div>
 
             <div className="flex items-center gap-3 pt-2">
-              <Button variant="outline" onClick={() => router.push("/unmatched")}>
-                Annuleren
-              </Button>
+              <Button variant="outline" onClick={() => router.push("/unmatched")}>Annuleren</Button>
               <Button onClick={handleResolve} disabled={!form.sku.trim() || saving}>
-                {saving
-                  ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Opslaan...</>
-                  : <><Link2 className="h-4 w-4 mr-2" />Koppeling opslaan</>
-                }
+                {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Opslaan...</> : <><Link2 className="h-4 w-4 mr-2" />Koppeling opslaan</>}
               </Button>
             </div>
 
             {!item.resolvedAt && (
               <p className="text-xs text-muted-foreground bg-muted/50 rounded p-2">
-                Na het opslaan wordt dit product direct beschikbaar in de Finalized API
-                en verschijnt het in de storefront.
+                Na het opslaan is dit product direct beschikbaar in de Finalized API en verschijnt het met de gekozen categorie in de storefront.
               </p>
             )}
           </CardContent>

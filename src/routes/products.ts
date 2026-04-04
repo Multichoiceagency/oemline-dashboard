@@ -41,6 +41,7 @@ const updateSchema = z.object({
   stock: z.number().int().nullable().optional(),
   genericArticle: z.string().nullable().optional(),
   status: z.string().optional(),
+  categoryId: z.number().int().nullable().optional(),
 });
 
 const batchImportSchema = z.object({

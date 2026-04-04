@@ -381,6 +381,59 @@ export async function categoryRoutes(app: FastifyInstance) {
   });
 
   // Update category
+  // Create manual category
+  app.post("/categories", async (request, reply) => {
+    const schema = z.object({
+      name: z.string().min(1).max(200),
+      code: z.string().min(1).max(100).optional(),
+      parentId: z.number().int().nullable().optional(),
+    });
+
+    const body = schema.parse(request.body);
+
+    // Auto-generate code from name if not provided
+    const code = body.code?.trim() ||
+      body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+    const existing = await prisma.category.findUnique({ where: { code } });
+    if (existing) {
+      return reply.code(409).send({ error: `Categorie code '${code}' bestaat al` });
+    }
+
+    // Determine level from parent
+    let level = 0;
+    if (body.parentId) {
+      const parent = await prisma.category.findUnique({ where: { id: body.parentId } });
+      if (!parent) return reply.code(404).send({ error: "Bovenliggende categorie niet gevonden" });
+      level = (parent.level ?? 0) + 1;
+    }
+
+    const category = await prisma.category.create({
+      data: { name: body.name, code, parentId: body.parentId ?? null, level },
+    });
+
+    return reply.code(201).send(category);
+  });
+
+  // Delete manual category (only if no products linked)
+  app.delete("/categories/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const catId = parseInt(id, 10);
+
+    const cat = await prisma.category.findUnique({
+      where: { id: catId },
+      include: { _count: { select: { products: true, children: true } } },
+    });
+
+    if (!cat) return reply.code(404).send({ error: "Categorie niet gevonden" });
+    if (cat.tecdocId) return reply.code(409).send({ error: "Kan TecDoc-categorieën niet verwijderen" });
+    if (cat._count.products > 0) return reply.code(409).send({ error: `Categorie heeft nog ${cat._count.products} gekoppelde producten` });
+    if (cat._count.children > 0) return reply.code(409).send({ error: `Categorie heeft nog ${cat._count.children} subcategorieën` });
+
+    await prisma.category.delete({ where: { id: catId } });
+    return { success: true };
+  });
+
   app.patch("/categories/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = updateCategorySchema.parse(request.body);

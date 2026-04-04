@@ -114,6 +114,7 @@ export async function overrideRoutes(app: FastifyInstance): Promise<void> {
       tecdocId: z.string().optional(),
       oem: z.string().optional(),
       reason: z.string().default(""),
+      categoryId: z.number().int().nullable().optional(),
     });
 
     const bulkSchema = z.object({
@@ -215,6 +216,14 @@ export async function overrideRoutes(app: FastifyInstance): Promise<void> {
             resolvedBy: `override:${override.id}`,
           },
         });
+
+        // If a category was specified, assign it to the matching product_maps
+        if (item.categoryId != null) {
+          await prisma.productMap.updateMany({
+            where: { supplierId: supplier.id, articleNo: item.articleNo },
+            data: { categoryId: item.categoryId },
+          });
+        }
       } catch (err) {
         request.log.error({ err, articleNo: item.articleNo }, "Bulk override item failed");
         errors.push({ articleNo: item.articleNo, error: err instanceof Error ? err.message : "Unknown error" });
