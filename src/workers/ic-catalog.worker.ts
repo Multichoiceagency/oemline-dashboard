@@ -2,7 +2,7 @@ import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { waitForIcRateLimit } from "../lib/ic-rate-limiter.js";
-import { sendProgressNotification } from "../lib/notify.js";
+import { sendSyncSummary } from "../lib/notify.js";
 
 /**
  * IC Catalog Sync Worker
@@ -199,8 +199,8 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
     return;
   }
 
+  const startTime = Date.now();
   logger.info({ maxCategories, maxProducts, skipDetails }, "IC catalog sync starting");
-  await sendProgressNotification({ worker: "IC Catalog Sync", progress: 5, detail: "Start: ophalen IC categorie-overzicht" });
 
   // ── Step 1: Fetch top-level categories ────────────────────────────────
   const catResp = await icFetch(`${IC_API_URL}/catalog/category`);
@@ -296,17 +296,6 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
     // Extend job lock (long-running job)
     try { await job.extendLock(job.token!, 600_000); } catch { /* ok */ }
     await job.updateProgress(totalProcessed);
-
-    // Send progress email at every 5% of estimated 3M products
-    const estimatedTotal = maxProducts || 3_000_000;
-    const pct = Math.min(95, Math.round(totalProcessed / estimatedTotal * 90)); // 90% = pass 1
-    await sendProgressNotification({
-      worker: "IC Catalog Sync",
-      progress: pct,
-      processed: totalProcessed,
-      total: estimatedTotal,
-      detail: `Categorie: ${cat.label}`,
-    });
   }
 
   logger.info({ totalProcessed, totalInserted }, "Pass 1 done (top-level 10K each)");
@@ -384,12 +373,26 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
     leafCategories: allLeafCategories.length,
   }, "IC catalog sync completed");
 
-  await sendProgressNotification({
-    worker: "IC Catalog Sync",
-    progress: 100,
-    processed: totalProcessed,
-    detail: `Klaar! ${totalInserted.toLocaleString("nl-NL")} nieuwe mappings toegevoegd, ${totalProcessed.toLocaleString("nl-NL")} producten verwerkt`,
-  });
+  // Send ONE summary email with live DB stats
+  try {
+    const [totalProducts, totalWithIcSku, stillPending] = await Promise.all([
+      prisma.productMap.count({ where: { status: "active" } }),
+      prisma.productMap.count({ where: { icSku: { not: null }, status: "active" } }),
+      prisma.productMap.count({ where: { price: null, icSku: { not: null }, status: "active" } }),
+    ]);
+    await sendSyncSummary({
+      worker: "IC Catalog Sync",
+      updated: totalInserted + totalUpdated,
+      stillPending,
+      totalWithIcSku,
+      totalProducts,
+      newMappings: totalInserted,
+      durationMs: Date.now() - startTime,
+      detail: `${totalProcessed.toLocaleString("nl-NL")} producten verwerkt in ${allLeafCategories.length} categorieën`,
+    });
+  } catch (err) {
+    logger.warn({ err }, "Failed to query stats for catalog sync summary email");
+  }
 }
 
 // ── Batch upsert ─────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { sendProgressNotification } from "../lib/notify.js";
+import { sendSyncSummary } from "../lib/notify.js";
 
 /**
  * IC CSV Sync Worker
@@ -32,11 +32,11 @@ interface IcCsvSyncJobData {
 }
 
 export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<void> {
+  const startTime = Date.now();
   const today = job.data.date || new Date().toISOString().split("T")[0];
   const priceStockOnly = job.data.priceStockOnly ?? false;
 
   logger.info({ date: today, priceStockOnly }, "IC CSV sync starting");
-  await sendProgressNotification({ worker: "IC CSV Sync", progress: 5, detail: `Downloaden IC CSV voor ${today}` });
 
   const basicAuth = Buffer.from(`${CSV_USER}:${CSV_PASS}`).toString("base64");
   const headers = { Authorization: `Basic ${basicAuth}` };
@@ -60,12 +60,10 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
     logger.info("Downloading WholesalePricing CSV...");
     pricingRows = await downloadAndParseCsv<PricingRow>(pricingUrl, headers, parsePricingRow);
     logger.info({ count: pricingRows.length }, "WholesalePricing loaded");
-    await sendProgressNotification({ worker: "IC CSV Sync", progress: 25, processed: pricingRows.length, detail: "WholesalePricing CSV geladen" });
 
     logger.info("Downloading Stock CSV...");
     stockRows = await downloadAndParseCsv<StockRow>(stockUrl, headers, parseStockRow);
     logger.info({ count: stockRows.length }, "Stock loaded");
-  await sendProgressNotification({ worker: "IC CSV Sync", progress: 40, processed: stockRows.length, detail: "Stock CSV geladen" });
   } catch (err) {
     // If today's file isn't ready yet, try yesterday
     const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
@@ -109,8 +107,6 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
   const tokArray = Array.from(allToks);
   let totalUpdated = 0;
 
-  await sendProgressNotification({ worker: "IC CSV Sync", progress: 50, processed: priceMap.size, total: allToks.size, detail: `${priceMap.size.toLocaleString("nl-NL")} prijzen → ${allToks.size.toLocaleString("nl-NL")} producten bijwerken` });
-
   const BATCH = 500;
   for (let i = 0; i < tokArray.length; i += BATCH) {
     const batch = tokArray.slice(i, i + BATCH);
@@ -139,13 +135,6 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
     if (i % 5000 === 0) {
       const pct = 50 + Math.round(45 * i / tokArray.length);
       await job.updateProgress(pct);
-      await sendProgressNotification({
-        worker: "IC CSV Sync",
-        progress: pct,
-        processed: i,
-        total: tokArray.length,
-        detail: `${totalUpdated.toLocaleString("nl-NL")} producten bijgewerkt`,
-      });
     }
   }
 
@@ -156,13 +145,25 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
     productRows: productRows.length,
   }, "IC CSV sync completed");
 
-  await sendProgressNotification({
-    worker: "IC CSV Sync",
-    progress: 100,
-    processed: totalUpdated,
-    total: allToks.size,
-    detail: `Klaar! ${totalUpdated.toLocaleString("nl-NL")} producten bijgewerkt met actuele prijzen en voorraad`,
-  });
+  // Send ONE summary email with live DB stats
+  try {
+    const [totalProducts, totalWithIcSku, stillPending] = await Promise.all([
+      prisma.productMap.count({ where: { status: "active" } }),
+      prisma.productMap.count({ where: { icSku: { not: null }, status: "active" } }),
+      prisma.productMap.count({ where: { price: null, icSku: { not: null }, status: "active" } }),
+    ]);
+    await sendSyncSummary({
+      worker: "IC CSV Sync",
+      updated: totalUpdated,
+      stillPending,
+      totalWithIcSku,
+      totalProducts,
+      durationMs: Date.now() - startTime,
+      detail: `CSV datum: ${today}`,
+    });
+  } catch (err) {
+    logger.warn({ err }, "Failed to query stats for sync summary email");
+  }
 }
 
 // ── CSV types ───────────────────────────────────────────────────────────
