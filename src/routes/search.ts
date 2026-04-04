@@ -96,4 +96,27 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
       totalPages: Math.ceil(total / limit),
     });
   });
+
+  app.get("/unmatched/:id", async (request, reply) => {
+    const rawId = (request.params as { id: string }).id;
+    const id = parseInt(rawId, 10);
+
+    if (isNaN(id)) {
+      return reply.code(400).send({ error: "Invalid id" });
+    }
+
+    const item = await prisma.unmatched.findUnique({
+      where: { id },
+      include: {
+        supplier: { select: { name: true, code: true } },
+        brand: { select: { name: true, code: true } },
+      },
+    });
+
+    if (!item) {
+      return reply.code(404).send({ error: "Not found" });
+    }
+
+    return reply.send(item);
+  });
 }

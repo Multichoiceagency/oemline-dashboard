@@ -104,6 +104,130 @@ export async function overrideRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
+  app.post("/override/bulk", async (request, reply) => {
+    const itemSchema = z.object({
+      supplierCode: z.string().min(1),
+      brandCode: z.string().min(1),
+      articleNo: z.string().min(1),
+      sku: z.string().min(1),
+      ean: z.string().optional(),
+      tecdocId: z.string().optional(),
+      oem: z.string().optional(),
+      reason: z.string().default(""),
+    });
+
+    const bulkSchema = z.object({
+      items: z.array(itemSchema).min(1),
+      createdBy: z.string().min(1),
+    });
+
+    const parsed = bulkSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "Bad Request",
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    const { items, createdBy } = parsed.data;
+
+    let created = 0;
+    let updated = 0;
+    const errors: Array<{ articleNo: string; error: string }> = [];
+
+    for (const item of items) {
+      try {
+        const supplier = await prisma.supplier.findUnique({
+          where: { code: item.supplierCode },
+        });
+
+        if (!supplier) {
+          request.log.warn({ supplierCode: item.supplierCode, articleNo: item.articleNo }, "Supplier not found — skipping item");
+          errors.push({ articleNo: item.articleNo, error: `Supplier not found: ${item.supplierCode}` });
+          continue;
+        }
+
+        let brand = await prisma.brand.findUnique({
+          where: { code: item.brandCode },
+        });
+
+        if (!brand) {
+          brand = await prisma.brand.create({
+            data: { name: item.brandCode, code: item.brandCode },
+          });
+        }
+
+        const existing = await prisma.override.findUnique({
+          where: {
+            supplierId_brandId_articleNo: {
+              supplierId: supplier.id,
+              brandId: brand.id,
+              articleNo: item.articleNo,
+            },
+          },
+          select: { id: true },
+        });
+
+        const override = await prisma.override.upsert({
+          where: {
+            supplierId_brandId_articleNo: {
+              supplierId: supplier.id,
+              brandId: brand.id,
+              articleNo: item.articleNo,
+            },
+          },
+          update: {
+            sku: item.sku,
+            ean: item.ean ?? null,
+            tecdocId: item.tecdocId ?? null,
+            oem: item.oem ?? null,
+            reason: item.reason,
+            createdBy,
+            active: true,
+          },
+          create: {
+            supplierId: supplier.id,
+            brandId: brand.id,
+            articleNo: item.articleNo,
+            sku: item.sku,
+            ean: item.ean ?? null,
+            tecdocId: item.tecdocId ?? null,
+            oem: item.oem ?? null,
+            reason: item.reason,
+            createdBy,
+          },
+        });
+
+        if (existing) {
+          updated++;
+        } else {
+          created++;
+        }
+
+        await prisma.unmatched.updateMany({
+          where: {
+            supplierId: supplier.id,
+            articleNo: item.articleNo,
+            resolvedAt: null,
+          },
+          data: {
+            resolvedAt: new Date(),
+            resolvedBy: `override:${override.id}`,
+          },
+        });
+      } catch (err) {
+        request.log.error({ err, articleNo: item.articleNo }, "Bulk override item failed");
+        errors.push({ articleNo: item.articleNo, error: err instanceof Error ? err.message : "Unknown error" });
+      }
+    }
+
+    await cacheInvalidatePattern("search", "*").catch((err) => {
+      request.log.warn({ err }, "Cache invalidation failed — stale results may persist");
+    });
+
+    return reply.code(201).send({ created, updated, errors });
+  });
+
   app.get("/overrides", async (request, reply) => {
     const querySchema = z.object({
       page: z.coerce.number().int().min(1).default(1),

@@ -291,6 +291,32 @@ export const getUnmatched = (params?: {
   return apiFetch<UnmatchedResponse>(`/api/unmatched?${qs}`);
 };
 
+export const getUnmatchedItem = (id: string) =>
+  apiFetch<UnmatchedItem>(`/api/unmatched/${id}`);
+
+export interface BulkOverrideItem {
+  supplierCode: string;
+  brandCode: string;
+  articleNo: string;
+  sku: string;
+  ean?: string;
+  tecdocId?: string;
+  oem?: string;
+  reason?: string;
+}
+
+export interface BulkOverrideResult {
+  created: number;
+  updated: number;
+  errors: Array<{ articleNo: string; error: string }>;
+}
+
+export const bulkCreateOverrides = (items: BulkOverrideItem[], createdBy = "dashboard") =>
+  apiFetch<BulkOverrideResult>("/api/override/bulk", {
+    method: "POST",
+    body: JSON.stringify({ items, createdBy }),
+  });
+
 // Overrides
 export interface Override {
   id: string;
