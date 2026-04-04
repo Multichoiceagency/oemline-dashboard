@@ -151,6 +151,17 @@ export const icCsvSyncQueue = new Queue("ic-csv-sync", {
   },
 });
 
+// AI Coordinator: Ollama-powered orchestration that decides which workers to run next
+// Runs every 30 min — analyzes platform state and triggers appropriate workers
+export const aiCoordinatorQueue = new Queue("ai-coordinator", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 20 },
+    removeOnFail: { count: 20 },
+    attempts: 1, // Don't retry — next scheduled run will handle it
+  },
+});
+
 // Swarm orchestration queue: parallel sync, matching, and pricing
 // Replaces sequential workers with 4-5x faster parallel execution
 export const swarmQueue = new Queue("swarm", {

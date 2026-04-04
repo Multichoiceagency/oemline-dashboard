@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue } from "../workers/queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue } from "../workers/queues.js";
 
 export async function jobRoutes(app: FastifyInstance) {
   // Get all job queue status
@@ -16,11 +16,13 @@ export async function jobRoutes(app: FastifyInstance) {
       getQueueCounts(swarmQueue),
     ]);
 
-    const [aiMatchCounts, oemEnrichCounts, icCatalogCounts, icEnrichCounts] = await Promise.all([
+    const [aiMatchCounts, oemEnrichCounts, icCatalogCounts, icEnrichCounts, icCsvSyncCounts, aiCoordCounts] = await Promise.all([
       getQueueCounts(aiMatchQueue),
       getQueueCounts(oemEnrichQueue),
       getQueueCounts(icCatalogQueue),
       getQueueCounts(icEnrichQueue),
+      getQueueCounts(icCsvSyncQueue),
+      getQueueCounts(aiCoordinatorQueue),
     ]);
     return {
       sync: syncCounts,
@@ -33,6 +35,8 @@ export async function jobRoutes(app: FastifyInstance) {
       oemEnrich: oemEnrichCounts,
       icCatalog: icCatalogCounts,
       icEnrich: icEnrichCounts,
+      icCsvSync: icCsvSyncCounts,
+      aiCoordinator: aiCoordCounts,
       push: pushCounts,
       swarm: swarmCounts,
     };
@@ -166,6 +170,17 @@ export async function jobRoutes(app: FastifyInstance) {
       { priority: 1 }
     );
     return { jobId: job.id, queue: "ic-csv-sync", status: "queued" };
+  });
+
+  // Manually trigger AI Coordinator (Ollama-powered worker orchestration)
+  app.post("/jobs/ai-coordinator", async (request) => {
+    const body = (request.body ?? {}) as { dryRun?: boolean };
+    const job = await aiCoordinatorQueue.add(
+      "ai-coordinator-manual",
+      { dryRun: body.dryRun ?? false },
+      { priority: 1 }
+    );
+    return { jobId: job.id, queue: "ai-coordinator", status: "queued" };
   });
 
   // IC enrichment: fix articles, SKU lookups, brand aliases, aggressive matching → 100% match
@@ -1765,6 +1780,7 @@ function getQueue(name: string) {
     case "ic-catalog": return icCatalogQueue;
     case "ic-enrich": return icEnrichQueue;
     case "ic-csv-sync": return icCsvSyncQueue;
+    case "ai-coordinator": return aiCoordinatorQueue;
     default: return null;
   }
 }

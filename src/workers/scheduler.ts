@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue } from "./queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue } from "./queues.js";
 
 /**
  * Sets up repeatable jobs for continuous sync, match, pricing, stock, and index.
@@ -20,7 +20,7 @@ export async function startScheduler(): Promise<void> {
   logger.info("Starting job scheduler...");
 
   // Clean up old repeatable jobs to avoid duplicates
-  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue]) {
+  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue]) {
     const existing = await queue.getRepeatableJobs();
     for (const job of existing) {
       await queue.removeRepeatableByKey(job.key);
@@ -73,27 +73,27 @@ export async function startScheduler(): Promise<void> {
           }
         );
 
-        // IC Match: every 2 hours (fast IC product matching, ~2-5 min per run)
+        // IC Match: every 1 hour (fast IC product matching, ~2-5 min per run)
         await icMatchQueue.add(
           `ic-match-${supplier.code}`,
           { supplierCode: supplier.code },
           {
-            repeat: { every: 2 * 60 * 60 * 1000 },
+            repeat: { every: 60 * 60 * 1000 },
             jobId: `ic-match-repeat-${supplier.code}`,
           }
         );
 
-        // Match: every 2 hours (rematch unmatched products)
+        // Match: every 1 hour (rematch unmatched products)
         await matchQueue.add(
           `match-${supplier.code}`,
           { supplierCode: supplier.code },
           {
-            repeat: { every: 2 * 60 * 60 * 1000 },
+            repeat: { every: 60 * 60 * 1000 },
             jobId: `match-repeat-${supplier.code}`,
           }
         );
 
-        // Pricing: every 1 hour (refresh prices for IC-linked products)
+        // Pricing: every 1 hour (API refresh for real-time price updates)
         await pricingQueue.add(
           `pricing-${supplier.code}`,
           { supplierCode: supplier.code },
@@ -105,7 +105,7 @@ export async function startScheduler(): Promise<void> {
 
         logger.info(
           { supplier: supplier.code, mode: "legacy" },
-          "Scheduled sync(4h), ic-match(2h), match(2h), pricing(1h)"
+          "Scheduled sync(4h), ic-match(1h), match(1h), pricing(1h)"
         );
       }
     }
@@ -173,17 +173,18 @@ export async function startScheduler(): Promise<void> {
   );
   logger.info("Scheduled OEM enrichment (6h)");
 
-  // IC catalog sync: every 24 hours — crawl all 3M+ products from IC API
+  // IC catalog sync: every 48 hours — crawl all 3M+ products from IC API
   // Fills intercars_mappings from 565K (CSV) to 3M+ (full API catalog)
+  // Takes 2-4h to complete; runs on ic-catalog or sync worker
   await icCatalogQueue.add(
     "ic-catalog-scheduled",
     { skipDetails: true },
     {
-      repeat: { every: 24 * 60 * 60 * 1000 },
+      repeat: { every: 48 * 60 * 60 * 1000 },
       jobId: "ic-catalog-repeat",
     }
   );
-  logger.info("Scheduled IC catalog sync (24h)");
+  logger.info("Scheduled IC catalog sync (48h)");
 
   // IC enrichment: DISABLED while catalog crawl is in progress.
   // IC enrich makes parallel API calls that flood the IC rate limit (60 req/min)
@@ -198,18 +199,31 @@ export async function startScheduler(): Promise<void> {
   // );
   logger.info("IC enrichment DISABLED (catalog crawl in progress)");
 
-  // IC CSV sync: daily at 4:30 AM CET — download fresh prices/stock from IC HTTPS CSVs
-  // IC generates CSVs between 3:00-5:30 AM Polish time. This replaces API-based pricing.
+  // IC CSV sync: every 6h — download fresh prices/stock from IC HTTPS CSVs
+  // IC regenerates CSVs daily at 3-5:30 AM Polish time, but we run every 6h to
+  // catch the new file as soon as it's available. Falls back to yesterday's file.
   // Zero API calls, zero rate limiting, complete data in ~2 minutes.
   await icCsvSyncQueue.add(
     "ic-csv-sync-scheduled",
     { priceStockOnly: false },
     {
-      repeat: { every: 24 * 60 * 60 * 1000 }, // Every 24 hours
+      repeat: { every: 6 * 60 * 60 * 1000 }, // Every 6 hours
       jobId: "ic-csv-sync-repeat",
     }
   );
-  logger.info("Scheduled IC CSV sync (24h — prices/stock from CSV)");
+  logger.info("Scheduled IC CSV sync (6h — prices/stock from CSV)");
+
+  // AI Coordinator: Ollama-powered orchestrator — analyzes platform state every 30 min
+  // Uses Ollama (llama3.2:3b) to decide which workers to trigger next for optimal throughput
+  await aiCoordinatorQueue.add(
+    "ai-coordinator-scheduled",
+    {},
+    {
+      repeat: { every: 30 * 60 * 1000 }, // Every 30 minutes
+      jobId: "ai-coordinator-repeat",
+    }
+  );
+  logger.info("Scheduled AI Coordinator (30m — Ollama-powered worker orchestration)");
 
   // Fire initial jobs immediately for all suppliers
   // Use jobId for deduplication — prevents duplicate jobs accumulating across restarts
@@ -271,6 +285,27 @@ export async function startScheduler(): Promise<void> {
 
   // Initial AI match (low priority — let sync/ic-match run first)
   await aiMatchQueue.add("ai-match-initial", {}, { priority: 5, jobId: "ai-match-initial-dedup" });
+
+  // Initial IC CSV sync (high priority — gets all IC prices immediately on startup)
+  await icCsvSyncQueue.add(
+    "ic-csv-sync-initial",
+    { priceStockOnly: false },
+    { priority: 1, jobId: "ic-csv-sync-initial-dedup" }
+  );
+
+  // Initial IC catalog crawl (low priority — long-running, runs after sync/match)
+  await icCatalogQueue.add(
+    "ic-catalog-initial",
+    { skipDetails: true },
+    { priority: 5, jobId: "ic-catalog-initial-dedup" }
+  );
+
+  // Initial AI coordinator run (runs immediately to assess state and trigger needed workers)
+  await aiCoordinatorQueue.add(
+    "ai-coordinator-initial",
+    {},
+    { priority: 1, jobId: "ai-coordinator-initial-dedup" }
+  );
 
   logger.info("Initial jobs enqueued for all suppliers");
 }

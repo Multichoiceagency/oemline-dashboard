@@ -19,6 +19,7 @@ import { processOemEnrichJob } from "./workers/oem-enrich.worker.js";
 import { processIcCatalogJob } from "./workers/ic-catalog.worker.js";
 import { processIcEnrichJob } from "./workers/ic-enrich.worker.js";
 import { processIcCsvSyncJob } from "./workers/ic-csv-sync.worker.js";
+import { processAiCoordinatorJob } from "./workers/ai-coordinator.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 import { sendWorkerNotification } from "./lib/notify.js";
@@ -217,6 +218,17 @@ if (handles("ic-enrich") || handles("ic-match") || handles("sync")) {
     stalledInterval: 1_800_000,  // 30 min stall check (was 10 min)
     lockDuration: 7_200_000,     // 2 hour lock (was 1 hour) — 900K lookups take hours
     maxStalledCount: 0,          // Never auto-fail on stall — this job is long-running
+  }));
+}
+
+// AI Coordinator: Ollama-powered orchestrator that decides which workers to run next
+// Runs every 30 min alongside the sync worker (always on)
+if (handles("ai-coordinator") || handles("sync")) {
+  workers.push(new Worker("ai-coordinator", processAiCoordinatorJob, {
+    connection,
+    concurrency: 1, // Single job — sequential decision making
+    stalledInterval: 120_000,
+    lockDuration: 300_000, // 5 min max
   }));
 }
 
