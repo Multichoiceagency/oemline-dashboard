@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { llmIsAvailable, llmGenerate } from "../lib/llm.js";
 import { sendWorkerNotification } from "../lib/notify.js";
+import { redis } from "../lib/redis.js";
 import {
   syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue,
   icMatchQueue, aiMatchQueue, oemEnrichQueue, icCatalogQueue,
@@ -167,14 +168,9 @@ export async function processAiCoordinatorJob(job: Job<AiCoordinatorJobData>): P
     await retryFailedJob(retry.queue, retry.reason, retry.params);
   }
 
-  // Send alert emails for unrecoverable errors
+  // Send alert emails for unrecoverable errors (max 1x per uur per queue)
   for (const alert of recommendations.alerts ?? []) {
-    await sendWorkerNotification({
-      worker: `AI Coordinator → ${alert.queue}`,
-      status: "failed",
-      errorMessage: `${alert.message}\n\nOriginele fout: ${alert.error}`,
-    });
-    logger.warn({ queue: alert.queue, error: alert.error }, "AI Coordinator: sent error alert email");
+    await sendThrottledAlert(alert.queue, `${alert.message}\n\nOriginele fout: ${alert.error}`);
   }
 
   logger.info({ actionsTriggered: sorted.length, retriesTriggered: recommendations.retries?.length ?? 0, alertsSent: recommendations.alerts?.length ?? 0 }, "AI Coordinator: completed");
@@ -335,8 +331,14 @@ async function runRuleBasedCoordinator(state: PlatformState, dryRun: boolean): P
       continue;
     }
 
-    // Transient errors: retry
-    if (["rate_limit", "timeout", "network"].includes(failed.errorType)) {
+    // Rate limit: retry with 10 minute delay to respect IC API quota
+    if (failed.errorType === "rate_limit") {
+      await retryFailedJobDelayed(failed.queue, `Auto-retry na rate limit (10 min delay)`, {}, 10 * 60 * 1000);
+      continue;
+    }
+
+    // Other transient errors: retry immediately
+    if (["timeout", "network"].includes(failed.errorType)) {
       await retryFailedJob(failed.queue, `Auto-retry (${failed.errorType})`, {});
     }
 
@@ -372,11 +374,10 @@ async function runRuleBasedCoordinator(state: PlatformState, dryRun: boolean): P
   }
 
   for (const alert of alerts) {
-    await sendWorkerNotification({
-      worker: `AI Coordinator → ${alert.queue}`,
-      status: "failed",
-      errorMessage: `Automatisch herstel niet mogelijk.\n\nFout: ${alert.error}\n\nControleer de omgevingsvariabelen en API-credentials voor de ${alert.queue} worker.`,
-    });
+    await sendThrottledAlert(
+      alert.queue,
+      `Automatisch herstel niet mogelijk.\n\nFout: ${alert.error}\n\nControleer de omgevingsvariabelen en API-credentials voor de ${alert.queue} worker.`,
+    );
   }
 }
 
@@ -429,6 +430,56 @@ async function triggerWorker(workerName: string, reason: string, params: Record<
 
 async function retryFailedJob(queueName: string, reason: string, params: Record<string, unknown> = {}): Promise<void> {
   logger.info({ queue: queueName, reason }, "AI Coordinator: retrying failed job");
-  // Re-trigger by adding a fresh job — BullMQ failed jobs aren't auto-moved back
   await triggerWorker(queueName, reason, params);
+}
+
+async function retryFailedJobDelayed(queueName: string, reason: string, params: Record<string, unknown> = {}, delayMs: number): Promise<void> {
+  logger.info({ queue: queueName, reason, delayMs }, "AI Coordinator: retrying failed job with delay");
+  try {
+    switch (queueName) {
+      case "ic-csv-sync":
+        await icCsvSyncQueue.add("ai-coord-retry-ic-csv-sync", { priceStockOnly: params.priceStockOnly ?? false }, { delay: delayMs, priority: 2 });
+        break;
+      case "ic-catalog":
+        await icCatalogQueue.add("ai-coord-retry-ic-catalog", { skipDetails: true, ...params }, { delay: delayMs, priority: 3 });
+        break;
+      case "pricing":
+        await pricingQueue.add("ai-coord-retry-pricing", {}, { delay: delayMs, priority: 2 });
+        break;
+      case "ic-match":
+        await icMatchQueue.add("ai-coord-retry-ic-match", {}, { delay: delayMs, priority: 2 });
+        break;
+      default:
+        await triggerWorker(queueName, reason, params); // fallback: no delay
+    }
+  } catch (err) {
+    logger.error({ err, queue: queueName }, "AI Coordinator: failed to schedule delayed retry");
+  }
+}
+
+/**
+ * Send an alert email at most once per hour per queue.
+ * Uses Redis SET NX EX to track whether the alert was already sent.
+ */
+async function sendThrottledAlert(queueName: string, message: string): Promise<void> {
+  const key = `ai-coord:alert:${queueName}`;
+  const HOUR = 3600;
+
+  try {
+    // SET key "1" NX EX 3600 — only succeeds if key does NOT exist
+    const set = await redis.set(key, "1", "EX", HOUR, "NX");
+    if (!set) {
+      logger.debug({ queue: queueName }, "AI Coordinator: alert suppressed (already sent < 1h ago)");
+      return;
+    }
+  } catch (err) {
+    logger.warn({ err }, "AI Coordinator: Redis throttle check failed, sending alert anyway");
+  }
+
+  await sendWorkerNotification({
+    worker: `AI Coordinator → ${queueName}`,
+    status: "failed",
+    errorMessage: message,
+  });
+  logger.warn({ queue: queueName }, "AI Coordinator: alert email sent");
 }
