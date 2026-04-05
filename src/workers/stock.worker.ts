@@ -2,7 +2,6 @@ import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { getAdapterOrLoad } from "../adapters/registry.js";
-import { sendWorkerNotification } from "../lib/notify.js";
 import { stockQueue } from "./queues.js";
 
 interface StockJobData {
@@ -72,17 +71,7 @@ export async function processStockJob(job: Job<StockJobData>): Promise<void> {
   }
 
   if (total <= SUB_JOB_SIZE) {
-    const result = await processRange(supplierCode, min_id, max_id, staleMinutes, job);
-    await sendWorkerNotification({
-      worker: "Stock",
-      status: "completed",
-      supplierCode,
-      totalProducts: total,
-      totalUpdated: result.updated,
-      totalErrors: result.errors,
-      durationMs: Date.now() - startTime,
-      throughput: result.throughputStr,
-    });
+    await processRange(supplierCode, min_id, max_id, staleMinutes, job);
     return;
   }
 
@@ -106,15 +95,6 @@ export async function processStockJob(job: Job<StockJobData>): Promise<void> {
   const durationMs = Date.now() - startTime;
   logger.info({ supplierCode, totalProducts: total, subJobs: subJobs.length, durationMs }, "Stock fan-out created");
 
-  await sendWorkerNotification({
-    worker: "Stock",
-    status: "completed",
-    supplierCode,
-    totalProducts: total,
-    subJobs: subJobs.length,
-    durationMs,
-    throughput: `${subJobs.length} sub-jobs distributed across workers`,
-  });
 }
 
 interface RangeResult { updated: number; errors: number; throughputStr: string }

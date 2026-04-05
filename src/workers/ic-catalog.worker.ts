@@ -2,7 +2,6 @@ import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { waitForIcRateLimit } from "../lib/ic-rate-limiter.js";
-import { sendSyncSummary } from "../lib/notify.js";
 
 /**
  * IC Catalog Sync Worker
@@ -373,26 +372,6 @@ export async function processIcCatalogJob(job: Job<IcCatalogJobData>): Promise<v
     leafCategories: allLeafCategories.length,
   }, "IC catalog sync completed");
 
-  // Send ONE summary email with live DB stats
-  try {
-    const [totalProducts, totalWithIcSku, stillPending] = await Promise.all([
-      prisma.productMap.count({ where: { status: "active" } }),
-      prisma.productMap.count({ where: { icSku: { not: null }, status: "active" } }),
-      prisma.productMap.count({ where: { price: null, icSku: { not: null }, status: "active" } }),
-    ]);
-    await sendSyncSummary({
-      worker: "IC Catalog Sync",
-      updated: totalInserted + totalUpdated,
-      stillPending,
-      totalWithIcSku,
-      totalProducts,
-      newMappings: totalInserted,
-      durationMs: Date.now() - startTime,
-      detail: `${totalProcessed.toLocaleString("nl-NL")} producten verwerkt in ${allLeafCategories.length} categorieën`,
-    });
-  } catch (err) {
-    logger.warn({ err }, "Failed to query stats for catalog sync summary email");
-  }
 }
 
 // ── Batch upsert ─────────────────────────────────────────────────────────

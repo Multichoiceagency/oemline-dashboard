@@ -2,8 +2,6 @@ import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { llmIsAvailable, llmGenerate } from "../lib/llm.js";
-import { sendWorkerNotification } from "../lib/notify.js";
-import { redis } from "../lib/redis.js";
 import {
   syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue,
   icMatchQueue, aiMatchQueue, oemEnrichQueue, icCatalogQueue,
@@ -168,9 +166,9 @@ export async function processAiCoordinatorJob(job: Job<AiCoordinatorJobData>): P
     await retryFailedJob(retry.queue, retry.reason, retry.params);
   }
 
-  // Send alert emails for unrecoverable errors (max 1x per uur per queue)
+  // Log unrecoverable errors (alerts suppressed)
   for (const alert of recommendations.alerts ?? []) {
-    await sendThrottledAlert(alert.queue, `${alert.message}\n\nOriginele fout: ${alert.error}`);
+    logger.warn({ queue: alert.queue, error: alert.error }, `AI Coordinator alert: ${alert.message}`);
   }
 
   logger.info({ actionsTriggered: sorted.length, retriesTriggered: recommendations.retries?.length ?? 0, alertsSent: recommendations.alerts?.length ?? 0 }, "AI Coordinator: completed");
@@ -374,10 +372,7 @@ async function runRuleBasedCoordinator(state: PlatformState, dryRun: boolean): P
   }
 
   for (const alert of alerts) {
-    await sendThrottledAlert(
-      alert.queue,
-      `Automatisch herstel niet mogelijk.\n\nFout: ${alert.error}\n\nControleer de omgevingsvariabelen en API-credentials voor de ${alert.queue} worker.`,
-    );
+    logger.warn({ queue: alert.queue, error: alert.error }, "AI Coordinator: auto-recovery not possible, manual check needed");
   }
 }
 
@@ -457,29 +452,3 @@ async function retryFailedJobDelayed(queueName: string, reason: string, params: 
   }
 }
 
-/**
- * Send an alert email at most once per hour per queue.
- * Uses Redis SET NX EX to track whether the alert was already sent.
- */
-async function sendThrottledAlert(queueName: string, message: string): Promise<void> {
-  const key = `ai-coord:alert:${queueName}`;
-  const HOUR = 3600;
-
-  try {
-    // SET key "1" NX EX 3600 — only succeeds if key does NOT exist
-    const set = await redis.set(key, "1", "EX", HOUR, "NX");
-    if (!set) {
-      logger.debug({ queue: queueName }, "AI Coordinator: alert suppressed (already sent < 1h ago)");
-      return;
-    }
-  } catch (err) {
-    logger.warn({ err }, "AI Coordinator: Redis throttle check failed, sending alert anyway");
-  }
-
-  await sendWorkerNotification({
-    worker: `AI Coordinator → ${queueName}`,
-    status: "failed",
-    errorMessage: message,
-  });
-  logger.warn({ queue: queueName }, "AI Coordinator: alert email sent");
-}

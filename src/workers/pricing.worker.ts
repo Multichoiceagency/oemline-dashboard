@@ -2,7 +2,6 @@ import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { getAdapterOrLoad } from "../adapters/registry.js";
-import { sendWorkerNotification } from "../lib/notify.js";
 import { pricingQueue } from "./queues.js";
 
 interface PricingJobData {
@@ -81,17 +80,7 @@ export async function processPricingJob(job: Job<PricingJobData>): Promise<void>
 
   // Small catalogs: process directly + send notification
   if (total <= SUB_JOB_SIZE) {
-    const result = await processRange(supplierCode, min_id, max_id, staleMinutes, job);
-    await sendWorkerNotification({
-      worker: "Pricing",
-      status: "completed",
-      supplierCode,
-      totalProducts: total,
-      totalUpdated: result.updated,
-      totalErrors: result.errors,
-      durationMs: Date.now() - startTime,
-      throughput: result.throughputStr,
-    });
+    await processRange(supplierCode, min_id, max_id, staleMinutes, job);
     return;
   }
 
@@ -119,15 +108,6 @@ export async function processPricingJob(job: Job<PricingJobData>): Promise<void>
     supplierCode, totalProducts: total, subJobs: subJobs.length, durationMs,
   }, `Pricing fan-out: ${subJobs.length} sub-jobs created for ${total} products`);
 
-  await sendWorkerNotification({
-    worker: "Pricing",
-    status: "completed",
-    supplierCode,
-    totalProducts: total,
-    subJobs: subJobs.length,
-    durationMs,
-    throughput: `${subJobs.length} sub-jobs distributed across workers`,
-  });
 }
 
 interface RangeResult { updated: number; errors: number; throughputStr: string }

@@ -1,7 +1,6 @@
 import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { sendSyncSummary } from "../lib/notify.js";
 
 /**
  * IC CSV Sync Worker
@@ -145,25 +144,6 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
     productRows: productRows.length,
   }, "IC CSV sync completed");
 
-  // Send ONE summary email with live DB stats
-  try {
-    const [totalProducts, totalWithIcSku, stillPending] = await Promise.all([
-      prisma.productMap.count({ where: { status: "active" } }),
-      prisma.productMap.count({ where: { icSku: { not: null }, status: "active" } }),
-      prisma.productMap.count({ where: { price: null, icSku: { not: null }, status: "active" } }),
-    ]);
-    await sendSyncSummary({
-      worker: "IC CSV Sync",
-      updated: totalUpdated,
-      stillPending,
-      totalWithIcSku,
-      totalProducts,
-      durationMs: Date.now() - startTime,
-      detail: `CSV datum: ${today}`,
-    });
-  } catch (err) {
-    logger.warn({ err }, "Failed to query stats for sync summary email");
-  }
 }
 
 // ── CSV types ───────────────────────────────────────────────────────────
