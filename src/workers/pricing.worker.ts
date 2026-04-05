@@ -30,7 +30,7 @@ interface ProductRow { id: number; ic_sku: string }
  * 2. BullMQ distributes sub-jobs across all worker pods
  * 3. Each sub-job: 25 parallel API calls, double-buffer pipelining, bulk DB
  * 4. Skips recently updated products (staleMinutes)
- * 5. Sends email notification on parent job completion
+ * 5. Logs summary on parent job completion
  */
 export async function processPricingJob(job: Job<PricingJobData>): Promise<void> {
   const {

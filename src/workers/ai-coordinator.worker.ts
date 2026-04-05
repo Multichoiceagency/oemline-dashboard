@@ -16,7 +16,7 @@ import {
  * 2. Sends full context to Ollama (llama3.2:3b)
  * 3. Ollama recommends which workers to trigger and which errors to recover
  * 4. Auto-retries transient errors (429, timeout, network)
- * 5. Alerts via email for persistent/unrecoverable errors
+ * 5. Logs alerts for persistent/unrecoverable errors (no email)
  */
 
 export interface AiCoordinatorJobData {

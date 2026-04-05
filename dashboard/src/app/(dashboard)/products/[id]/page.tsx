@@ -2,8 +2,8 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { getProduct, updateProduct, deleteProduct, uploadProductImage } from "@/lib/api";
-import type { Product } from "@/lib/api";
+import { getProduct, updateProduct, deleteProduct, uploadProductImage, getCategories } from "@/lib/api";
+import type { Product, Category } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,6 +38,7 @@ export default function ProductDetailPage() {
   const productId = parseInt(params.id as string, 10);
 
   const [product, setProduct] = useState<Product | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -58,15 +59,20 @@ export default function ProductDetailPage() {
     stock: "",
     genericArticle: "",
     status: "active",
+    categoryId: "none",
   });
 
   useEffect(() => {
     if (isNaN(productId)) return;
     setLoading(true);
-    getProduct(productId)
-      .then((p) => {
+    Promise.all([
+      getProduct(productId),
+      getCategories({ limit: 250 }),
+    ])
+      .then(([p, cats]) => {
         setProduct(p);
         populateForm(p);
+        setCategories(cats.items ?? []);
       })
       .catch((err) => {
         console.error("Failed to load product:", err);
@@ -90,6 +96,7 @@ export default function ProductDetailPage() {
       stock: p.stock != null ? String(p.stock) : "",
       genericArticle: p.genericArticle ?? "",
       status: p.status,
+      categoryId: p.category?.id != null ? String(p.category.id) : "none",
     });
   };
 
@@ -110,6 +117,7 @@ export default function ProductDetailPage() {
         stock: editForm.stock ? parseInt(editForm.stock, 10) : null,
         genericArticle: editForm.genericArticle || null,
         status: editForm.status,
+        categoryId: editForm.categoryId !== "none" ? parseInt(editForm.categoryId, 10) : null,
       });
       setProduct(updated);
       setEditMode(false);
@@ -217,7 +225,7 @@ export default function ProductDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left column: Image + Status */}
         <div className="space-y-4">
           <Card>
@@ -311,7 +319,23 @@ export default function ProductDetailPage() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium">Category</span>
-                <span className="text-sm text-muted-foreground">{product.category?.name ?? "-"}</span>
+                {editMode ? (
+                  <Select value={editForm.categoryId} onValueChange={(v) => setEditForm({ ...editForm, categoryId: v })}>
+                    <SelectTrigger className="w-[160px] h-8 text-xs">
+                      <SelectValue placeholder="Geen" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-64 overflow-y-auto">
+                      <SelectItem value="none">— Geen</SelectItem>
+                      {categories.map((c) => (
+                        <SelectItem key={c.id} value={String(c.id)} className="text-xs">
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <span className="text-sm text-muted-foreground">{product.category?.name ?? "-"}</span>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -334,7 +358,7 @@ export default function ProductDetailPage() {
         </div>
 
         {/* Right column: Product details */}
-        <div className="lg:col-span-2 space-y-4">
+        <div className="space-y-4">
           {/* Identifiers */}
           <Card>
             <CardHeader className="pb-2">
@@ -496,10 +520,10 @@ export default function ProductDetailPage() {
                 <div className="space-y-2">
                   {product.icMapping.map((m: any, i: number) => (
                     <div key={i} className="flex items-center gap-3 p-2 rounded border bg-muted/30 text-sm">
-                      <Badge variant="outline" className="font-mono">{m.tow_kod}</Badge>
-                      <span className="text-muted-foreground">{m.ic_manufacturer}</span>
-                      <span className="font-medium">{m.ic_description}</span>
-                      {m.ic_ean && <span className="text-xs text-muted-foreground">EAN: {m.ic_ean}</span>}
+                      <Badge variant="outline" className="font-mono">{m.towKod}</Badge>
+                      <span className="text-muted-foreground">{m.manufacturer}</span>
+                      <span className="font-medium">{m.description}</span>
+                      {m.ean && <span className="text-xs text-muted-foreground">EAN: {m.ean}</span>}
                     </div>
                   ))}
                 </div>
