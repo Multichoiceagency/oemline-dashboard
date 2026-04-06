@@ -616,7 +616,7 @@ export interface CategoriesResponse {
   totalPages: number;
 }
 
-export const getCategories = (params?: { page?: number; limit?: number; parentId?: number; q?: string }) => {
+export const getCategories = (params?: { page?: number; limit?: number; parentId?: number; q?: string; hideEmpty?: "true" | "false" }) => {
   const qs = new URLSearchParams();
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
