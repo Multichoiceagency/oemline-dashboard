@@ -180,6 +180,11 @@ export const syncSupplier = (id: string) =>
     method: "POST",
   });
 
+export const bootstrapVanWezel = () =>
+  apiFetch<{ totalTecdoc: number; upserted: number; brand: string; message: string }>("/api/jobs/bootstrap-vanwezel-from-tecdoc", {
+    method: "POST",
+  });
+
 // Search
 export interface SearchProduct {
   supplier: string;

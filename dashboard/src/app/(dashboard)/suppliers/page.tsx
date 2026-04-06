@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useApi } from "@/lib/hooks";
-import { getSuppliers, updateSupplier, syncSupplier } from "@/lib/api";
+import { getSuppliers, updateSupplier, syncSupplier, bootstrapVanWezel } from "@/lib/api";
 import type { Supplier } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatNumber } from "@/lib/utils";
-import { Plus, RefreshCw, Power, PowerOff } from "lucide-react";
+import { Plus, RefreshCw, Power, PowerOff, Download } from "lucide-react";
 
 export default function SuppliersPage() {
   const router = useRouter();
@@ -27,6 +27,7 @@ export default function SuppliersPage() {
     [page]
   );
   const [syncing, setSyncing] = useState<string | null>(null);
+  const [bootstrapping, setBootstrapping] = useState(false);
 
   const handleSync = async (id: string) => {
     setSyncing(id);
@@ -36,6 +37,20 @@ export default function SuppliersPage() {
       alert(err instanceof Error ? err.message : "Sync failed");
     } finally {
       setSyncing(null);
+    }
+  };
+
+  const handleBootstrapVanWezel = async () => {
+    if (!confirm("Bootstrap Van Wezel vanuit TecDoc? Dit kopieert alle TecDoc Van Wezel producten naar de Van Wezel supplier. Bestaande producten worden bijgewerkt (upsert).")) return;
+    setBootstrapping(true);
+    try {
+      const result = await bootstrapVanWezel();
+      alert(`Bootstrap klaar! ${result.upserted.toLocaleString()} producten gekopieerd van TecDoc (${result.brand}).`);
+      refetch();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Bootstrap mislukt");
+    } finally {
+      setBootstrapping(false);
     }
   };
 
@@ -109,6 +124,19 @@ export default function SuppliersPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right space-x-1 sm:space-x-2">
+                      {s.adapterType === "vanwezel" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleBootstrapVanWezel}
+                          disabled={bootstrapping}
+                          title="Kopieer alle Van Wezel producten vanuit TecDoc"
+                          className="min-h-[44px] sm:min-h-0"
+                        >
+                          <Download className={`h-3 w-3 mr-1 ${bootstrapping ? "animate-pulse" : ""}`} />
+                          <span className="hidden sm:inline">Bootstrap</span>
+                        </Button>
+                      )}
                       <Button
                         variant="outline"
                         size="sm"
