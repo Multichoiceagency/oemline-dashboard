@@ -62,27 +62,34 @@ You are the OEMline platform AI coordinator. You manage a European automotive pa
 
 PLATFORM ARCHITECTURE:
 - TecDoc adapter: syncs 1M+ automotive parts from TecDoc API
-- IC CSV sync: downloads daily price/stock CSV from IC (~2 min, covers ~600K products)
-- IC catalog: crawls ALL 3M+ IC products into mapping table (slow, 2-4h)
-- IC match: maps TecDoc articles to IC SKUs via brand+articleNumber matching
-- Match worker: rematch unmatched TecDoc products
-- Pricing worker: real-time IC API price quotes
+- ic-csv-sync: downloads IC's daily CSV files (ProductInformation + WholesalePricing + Stock).
+  Fills intercars_mappings with IC's COMPLETE assortment (~600K+ rows). Zero API calls, ~2 min.
+  After completing, automatically triggers ic-match.
+- ic-match: maps TecDoc articles to IC SKUs by reading intercars_mappings. Sets ic_sku on product_maps.
+  Once ic_sku is set, next ic-csv-sync run fills price/stock automatically.
+- ic-catalog: DISABLED — was crawling IC's live API (3M+ products) but gets stuck on rate limiting
+  (30 req/min × 3M products = 16+ hours). CSV covers the same data. DO NOT trigger ic-catalog.
+- Match worker: rematch unmatched TecDoc products via brand/article/EAN
+- Pricing worker: real-time IC API price quotes for individual SKUs (use sparingly — rate limited)
 - AI match: Ollama brand alias discovery (e.g. KAYABA=KYB)
-- OEM enrich: fetches OEM cross-references from TecDoc API
+- OEM enrich: fetches OEM cross-references from TecDoc API for Phase 2B matching
 - Index worker: rebuilds Meilisearch search index
 
-ORCHESTRATION RULES:
-1. products_without_price > 100000 AND ic_csv_sync.active = 0 → trigger ic-csv-sync (URGENT)
-2. products_without_ic_sku > 50000 AND ic_match.active = 0 → trigger ic-match
-3. ic_catalog.completed = 0 AND ic_catalog.active = 0 → trigger ic-catalog
-4. sync.active = 0 AND no recent sync → trigger sync
-5. index.active = 0 AND sync or match recently finished → trigger index
+ORCHESTRATION RULES (priority order):
+1. products_without_price > 100000 AND ic_csv_sync.active = 0 AND ic_csv_sync.waiting = 0 → trigger ic-csv-sync (URGENT)
+2. products_without_ic_sku > 10000 AND ic_match.active = 0 AND ic_match.waiting = 0 → trigger ic-match
+3. ic_csv_sync failed with error_type=data → retry ic-csv-sync with priceStockOnly=true
+4. sync.active = 0 AND sync.waiting = 0 AND last sync > 4h ago → trigger sync
+5. index.active = 0 AND index.waiting = 0 AND (sync or match recently finished) → trigger index
+6. products_without_ic_sku > 50000 AND oem_enrich.active = 0 → trigger oem-enrich (improves Phase 2B match rate)
+7. NEVER trigger ic-catalog — it gets stuck on rate limits. Use ic-csv-sync instead.
 
 ERROR RECOVERY RULES:
-- error_type=rate_limit → retry with lower priority (IC API 429 = temporary)
-- error_type=timeout → retry once (network hiccup)
-- error_type=network → retry once
-- error_type=data → retry with priceStockOnly=true (skip broken CSV file)
+- error_type=rate_limit on ic-catalog → DO NOT retry ic-catalog. Trigger ic-csv-sync instead.
+- error_type=rate_limit on pricing/stock → retry with 10 min delay
+- error_type=timeout → retry once immediately
+- error_type=network → retry once immediately
+- error_type=data on ic-csv-sync → retry with priceStockOnly=true
 - error_type=auth → DO NOT retry, add to alerts (needs human fix)
 - error_type=unknown AND attemptsMade < 2 → retry once
 - error_type=unknown AND attemptsMade >= 2 → add to alerts
@@ -93,7 +100,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
     { "worker": "ic-csv-sync", "priority": 1, "reason": "...", "params": {} }
   ],
   "retries": [
-    { "queue": "ic-catalog", "jobId": "123", "reason": "...", "params": { "skipDetails": true } }
+    { "queue": "ic-match", "jobId": "123", "reason": "...", "params": {} }
   ],
   "alerts": [
     { "queue": "pricing", "error": "...", "message": "Handmatige interventie nodig: ..." }
@@ -101,7 +108,8 @@ Respond ONLY with valid JSON (no markdown, no explanation):
   "summary": "One line summary of state, actions and errors"
 }
 
-Available worker names: sync, match, index, pricing, stock, ic-match, ai-match, oem-enrich, ic-catalog, ic-enrich, ic-csv-sync`;
+Available worker names: sync, match, index, pricing, stock, ic-match, ai-match, oem-enrich, ic-enrich, ic-csv-sync
+FORBIDDEN worker names (never trigger): ic-catalog`;
 
 export async function processAiCoordinatorJob(job: Job<AiCoordinatorJobData>): Promise<void> {
   const dryRun = job.data.dryRun ?? false;
@@ -329,7 +337,14 @@ async function runRuleBasedCoordinator(state: PlatformState, dryRun: boolean): P
       continue;
     }
 
-    // Rate limit: retry with 10 minute delay to respect IC API quota
+    // Rate limit on ic-catalog: do NOT retry — switch to CSV approach instead
+    if (failed.errorType === "rate_limit" && failed.queue === "ic-catalog") {
+      logger.info("AI Coordinator: ic-catalog rate-limited → switching to ic-csv-sync");
+      await icCsvSyncQueue.add("ai-coord-csv-instead-of-catalog", { priceStockOnly: false }, { priority: 1 });
+      continue;
+    }
+
+    // Rate limit on other queues: retry with 10 minute delay
     if (failed.errorType === "rate_limit") {
       await retryFailedJobDelayed(failed.queue, `Auto-retry na rate limit (10 min delay)`, {}, 10 * 60 * 1000);
       continue;
@@ -356,8 +371,11 @@ async function runRuleBasedCoordinator(state: PlatformState, dryRun: boolean): P
     actions.push({ worker: "ic-match", reason: `${db.productsWithoutIcSku.toLocaleString()} producten zonder IC SKU` });
   }
 
-  if (qMap["ic-catalog"]?.completed === 0 && qMap["ic-catalog"]?.active === 0 && qMap["ic-catalog"]?.waiting === 0) {
-    actions.push({ worker: "ic-catalog", reason: "IC catalog nooit gecrawld", params: { skipDetails: true } });
+  // ic-catalog is DISABLED (rate limit stuck) — ic-csv-sync covers the same data
+  // If ic-match has many unmatched products but intercars_mappings is small → refresh via CSV
+  if (db.productsWithoutIcSku > 50_000 && db.totalIntercarsMappings < 500_000
+      && qMap["ic-csv-sync"]?.active === 0 && qMap["ic-csv-sync"]?.waiting === 0) {
+    actions.push({ worker: "ic-csv-sync", reason: `intercars_mappings klein (${db.totalIntercarsMappings.toLocaleString()} rows) — CSV refresh nodig voor betere IC matching` });
   }
 
   if (db.productsWithoutPrice > 50_000 && qMap["pricing"]?.active === 0 && qMap["pricing"]?.waiting === 0) {
