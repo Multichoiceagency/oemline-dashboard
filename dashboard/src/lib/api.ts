@@ -665,6 +665,19 @@ export const mergeCategories = (data: {
     body: JSON.stringify(data),
   });
 
+export const resetCategoryProducts = (data: {
+  categoryIds?: number[];
+  nameContains?: string;
+}) =>
+  apiFetch<{
+    categoriesReset: Array<{ id: number; name: string }>;
+    productsReset: number;
+    message: string;
+  }>("/api/categories/reset-products", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
 // File Uploads
 export const uploadProductImage = async (productId: number, file: File): Promise<{ url: string; images: string[] }> => {
   const formData = new FormData();

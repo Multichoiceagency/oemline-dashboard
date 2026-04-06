@@ -380,6 +380,54 @@ export async function categoryRoutes(app: FastifyInstance) {
     };
   });
 
+  // Reset product categories: set category_id = NULL for products in the given categories.
+  // Use this to fix wrong TecDoc cross-categorization (e.g. AUGER products in "Spiegels").
+  // After reset, re-run /categories/link-products so products get reassigned from scratch.
+  app.post("/categories/reset-products", async (request, reply) => {
+    const schema = z.object({
+      // Either provide category IDs directly, or search by name fragment (case-insensitive)
+      categoryIds: z.array(z.number().int()).optional(),
+      nameContains: z.string().optional(),
+    }).refine(d => d.categoryIds?.length || d.nameContains, {
+      message: "Geef categoryIds of nameContains op",
+    });
+
+    const body = schema.parse(request.body);
+
+    let targetIds: number[] = body.categoryIds ?? [];
+
+    if (body.nameContains) {
+      const found = await prisma.$queryRaw<Array<{ id: number; name: string }>>`
+        SELECT id, name FROM categories
+        WHERE LOWER(name) LIKE ${'%' + body.nameContains.toLowerCase() + '%'}
+      `;
+      targetIds = [...new Set([...targetIds, ...found.map(c => c.id)])];
+    }
+
+    if (targetIds.length === 0) {
+      return reply.code(404).send({ error: "Geen categorieën gevonden" });
+    }
+
+    // Get category names for the response
+    const categories = await prisma.category.findMany({
+      where: { id: { in: targetIds } },
+      select: { id: true, name: true },
+    });
+
+    const reset = await prisma.$executeRawUnsafe(
+      `UPDATE product_maps SET category_id = NULL WHERE category_id = ANY($1::int[])`,
+      targetIds
+    );
+
+    logger.info({ targetIds, reset }, "Category reset: product category_id cleared");
+
+    return {
+      categoriesReset: categories,
+      productsReset: Number(reset),
+      message: "Voer nu /categories/link-products uit om categorieën opnieuw toe te wijzen",
+    };
+  });
+
   // Update category
   // Create manual category
   app.post("/categories", async (request, reply) => {

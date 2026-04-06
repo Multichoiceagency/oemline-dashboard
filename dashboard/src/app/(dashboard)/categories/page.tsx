@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useApi } from "@/lib/hooks";
-import { getCategories, syncTecDocCategories, mergeCategories } from "@/lib/api";
+import { getCategories, syncTecDocCategories, mergeCategories, resetCategoryProducts } from "@/lib/api";
 import type { Category } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,7 @@ import {
   Merge,
   CheckCheck,
   Trash2,
+  AlertTriangle,
 } from "lucide-react";
 
 export default function CategoriesPage() {
@@ -189,6 +190,24 @@ export default function CategoriesPage() {
     }
   };
 
+  // Reset selected categories (unlink all products → category_id = NULL)
+  const [resetting, setResetting] = useState(false);
+  const handleResetSelected = async () => {
+    if (selected.size === 0) return;
+    if (!confirm(`Weet je zeker dat je de categoriekoppeling wilt verwijderen voor alle producten in ${selected.size} categorie(ën)?`)) return;
+    setResetting(true);
+    try {
+      const result = await resetCategoryProducts({ categoryIds: [...selected] });
+      alert(`${result.productsReset} producten losgekoppeld van categorie. ${result.message}`);
+      setSelected(new Set());
+      refetch();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Reset mislukt");
+    } finally {
+      setResetting(false);
+    }
+  };
+
   const selectedCategories = data?.items.filter((c) => selected.has(c.id)) ?? [];
   const allSelected = (data?.items.length ?? 0) > 0 && selected.size === (data?.items.length ?? 0);
 
@@ -245,6 +264,10 @@ export default function CategoriesPage() {
           <Button size="sm" onClick={openMerge}>
             <Merge className="h-3.5 w-3.5 mr-1.5" />
             Samenvoegen tot één categorie
+          </Button>
+          <Button size="sm" variant="outline" className="text-orange-600 border-orange-300 hover:bg-orange-50" onClick={handleResetSelected} disabled={resetting}>
+            {resetting ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <AlertTriangle className="h-3.5 w-3.5 mr-1.5" />}
+            Categorie resetten
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
             <X className="h-3.5 w-3.5 mr-1" /> Deselecteer

@@ -200,7 +200,7 @@ async function batchUpsertProducts(supplierId: number, items: SupplierCatalogIte
     ON CONFLICT (supplier_id, sku)
     DO UPDATE SET
       brand_id    = EXCLUDED.brand_id,
-      category_id = COALESCE(EXCLUDED.category_id, product_maps.category_id),
+      category_id = COALESCE(product_maps.category_id, EXCLUDED.category_id),
       article_no  = EXCLUDED.article_no,
       ean         = COALESCE(EXCLUDED.ean,         product_maps.ean),
       tecdoc_id   = COALESCE(EXCLUDED.tecdoc_id,   product_maps.tecdoc_id),
