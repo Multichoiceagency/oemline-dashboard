@@ -995,3 +995,55 @@ export const getMatchLogs = (params?: {
   }
   return apiFetch<MatchLogsResponse>(`/api/trace/logs?${qs}`);
 };
+
+// Unmatched Products (product_maps WHERE ic_sku IS NULL — never attempted IC match)
+export interface UnmatchedProductItem {
+  id: number;
+  sku: string;
+  articleNo: string;
+  description: string;
+  price: number | null;
+  stock: number | null;
+  currency: string;
+  imageUrl: string | null;
+  ean: string | null;
+  tecdocId: string | null;
+  brand: { id: number; name: string; code: string };
+  supplier: { id: number; name: string; code: string };
+  updatedAt: string;
+}
+
+export interface UnmatchedProductsResponse {
+  items: UnmatchedProductItem[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export const getUnmatchedProducts = (params?: {
+  page?: number;
+  limit?: number;
+  q?: string;
+  brandId?: number;
+  withPrice?: "true" | "false";
+}) => {
+  const qs = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    });
+  }
+  return apiFetch<UnmatchedProductsResponse>(`/api/unmatched-products?${qs}`);
+};
+
+export const updateUnmatchedProduct = (id: number, data: {
+  price?: number | null;
+  stock?: number | null;
+  currency?: string;
+  description?: string;
+}) =>
+  apiFetch<{ id: number; price: number | null; stock: number | null; currency: string | null; description: string }>(`/api/unmatched-products/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });

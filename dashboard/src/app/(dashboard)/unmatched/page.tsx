@@ -3,8 +3,8 @@
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useApi } from "@/lib/hooks";
-import { getUnmatched, bulkCreateOverrides } from "@/lib/api";
-import type { UnmatchedItem, BulkOverrideItem } from "@/lib/api";
+import { getUnmatched, bulkCreateOverrides, getUnmatchedProducts, updateUnmatchedProduct } from "@/lib/api";
+import type { UnmatchedItem, BulkOverrideItem, UnmatchedProductItem } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -31,22 +31,20 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { formatDate } from "@/lib/utils";
-import { AlertTriangle, Link2, Link2Off, Loader2, CheckCheck, Save, X } from "lucide-react";
+import { formatDate, formatNumber } from "@/lib/utils";
+import { AlertTriangle, Link2, Link2Off, Loader2, CheckCheck, Save, X, PackageX, Euro, Search } from "lucide-react";
 
-export default function UnmatchedPage() {
+// ─── Tab 1: IC Match failures ─────────────────────────────────────────────────
+
+function MatchFailuresTab() {
   const router = useRouter();
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState("false");
 
-  // Inline IC SKU edits per row: id → sku
   const [inlineSkus, setInlineSkus] = useState<Record<string, string>>({});
   const [savingRow, setSavingRow] = useState<string | null>(null);
 
-  // Bulk select
   const [selected, setSelected] = useState<Set<string>>(new Set());
-
-  // Bulk modal
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkSku, setBulkSku] = useState("");
   const [bulkSaving, setBulkSaving] = useState(false);
@@ -124,20 +122,13 @@ export default function UnmatchedPage() {
   const allSelected = unresolvedCount > 0 && selected.size === unresolvedCount;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-2">
-            <Link2Off className="h-6 w-6 text-orange-500" />
-            Niet gekoppeld
-          </h2>
-          <p className="text-muted-foreground text-sm">
-            Producten die niet automatisch aan een IC-artikel gekoppeld konden worden
-          </p>
-        </div>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-sm text-muted-foreground">
+          Producten waarbij de IC-koppeling mislukt is — koppel ze handmatig aan een IC SKU.
+        </p>
         <Select value={filter} onValueChange={(v) => { setFilter(v); setPage(1); setSelected(new Set()); }}>
-          <SelectTrigger className="w-full sm:w-[160px]">
+          <SelectTrigger className="w-[160px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -148,7 +139,6 @@ export default function UnmatchedPage() {
         </Select>
       </div>
 
-      {/* Success banner */}
       {bulkResult && (
         <div className="flex items-center gap-3 p-3 rounded-lg bg-green-50 border border-green-200 text-sm text-green-800">
           <CheckCheck className="h-4 w-4 shrink-0 text-green-600" />
@@ -156,7 +146,6 @@ export default function UnmatchedPage() {
             <strong>{bulkResult.created}</strong> nieuw gekoppeld,{" "}
             <strong>{bulkResult.updated}</strong> bijgewerkt
             {bulkResult.errors > 0 && <>, <strong>{bulkResult.errors}</strong> fouten</>}.
-            {" "}Producten zijn direct beschikbaar in de Finalized API.
           </span>
           <button onClick={() => setBulkResult(null)} className="ml-auto text-green-600 hover:text-green-800">
             <X className="h-4 w-4" />
@@ -164,7 +153,6 @@ export default function UnmatchedPage() {
         </div>
       )}
 
-      {/* Bulk action bar */}
       {selected.size > 0 && (
         <div className="flex items-center gap-3 p-3 rounded-lg bg-blue-50 border border-blue-200">
           <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">{selected.size} geselecteerd</Badge>
@@ -183,7 +171,7 @@ export default function UnmatchedPage() {
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <AlertTriangle className="h-4 w-4 text-orange-500" />
-            {filter === "false" ? "Onopgeloste" : filter === "true" ? "Opgeloste" : "Alle"} items
+            {filter === "false" ? "Onopgeloste" : filter === "true" ? "Opgeloste" : "Alle"} match-pogingen
             <Badge variant="outline" className="ml-1 font-normal">{data?.total ?? 0}</Badge>
           </CardTitle>
         </CardHeader>
@@ -206,18 +194,12 @@ export default function UnmatchedPage() {
                   <TableRow>
                     {filter !== "true" && (
                       <TableHead className="w-10 pl-4">
-                        <input
-                          type="checkbox"
-                          checked={allSelected}
-                          onChange={toggleAll}
-                          className="h-4 w-4 rounded border-gray-300 cursor-pointer"
-                        />
+                        <input type="checkbox" checked={allSelected} onChange={toggleAll} className="h-4 w-4 rounded border-gray-300 cursor-pointer" />
                       </TableHead>
                     )}
                     <TableHead>Artikelnummer</TableHead>
                     <TableHead>Merk</TableHead>
                     <TableHead className="hidden sm:table-cell">Leverancier</TableHead>
-                    <TableHead className="hidden lg:table-cell">Query</TableHead>
                     <TableHead className="hidden md:table-cell">Pogingen</TableHead>
                     <TableHead className="hidden xl:table-cell">Aangemaakt</TableHead>
                     <TableHead>Status</TableHead>
@@ -231,41 +213,25 @@ export default function UnmatchedPage() {
                       {filter !== "true" && (
                         <TableCell className="pl-4">
                           {!item.resolvedAt && (
-                            <input
-                              type="checkbox"
-                              checked={selected.has(item.id)}
-                              onChange={() => toggleSelect(item.id)}
-                              className="h-4 w-4 rounded border-gray-300 cursor-pointer"
-                            />
+                            <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggleSelect(item.id)} className="h-4 w-4 rounded border-gray-300 cursor-pointer" />
                           )}
                         </TableCell>
                       )}
-                      <TableCell className="font-mono text-xs font-semibold">
-                        {item.articleNo ?? item.query}
-                      </TableCell>
+                      <TableCell className="font-mono text-xs font-semibold">{item.articleNo ?? item.query}</TableCell>
                       <TableCell className="text-sm">{item.brand?.name ?? "—"}</TableCell>
                       <TableCell className="hidden sm:table-cell">
                         <Badge variant="outline" className="text-xs">{item.supplier?.name ?? "—"}</Badge>
                       </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground hidden lg:table-cell">
-                        {item.query}
-                      </TableCell>
                       <TableCell className="hidden md:table-cell">
-                        <Badge variant={item.attempts > 3 ? "destructive" : "secondary"} className="text-xs">
-                          {item.attempts}×
-                        </Badge>
+                        <Badge variant={item.attempts > 3 ? "destructive" : "secondary"} className="text-xs">{item.attempts}×</Badge>
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground hidden xl:table-cell">
-                        {formatDate(item.createdAt)}
-                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground hidden xl:table-cell">{formatDate(item.createdAt)}</TableCell>
                       <TableCell>
                         {item.resolvedAt
                           ? <Badge variant="success" className="text-xs">Gekoppeld</Badge>
                           : <Badge variant="destructive" className="text-xs">Wachtend</Badge>
                         }
                       </TableCell>
-
-                      {/* Inline IC SKU input */}
                       {filter !== "true" && (
                         <TableCell>
                           {!item.resolvedAt && (
@@ -278,34 +244,18 @@ export default function UnmatchedPage() {
                                 onKeyDown={(e) => e.key === "Enter" && saveRow(item)}
                               />
                               {inlineSkus[item.id]?.trim() && (
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-7 w-7 p-0 shrink-0"
-                                  onClick={() => saveRow(item)}
-                                  disabled={savingRow === item.id}
-                                >
-                                  {savingRow === item.id
-                                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                    : <Save className="h-3.5 w-3.5 text-green-600" />
-                                  }
+                                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" onClick={() => saveRow(item)} disabled={savingRow === item.id}>
+                                  {savingRow === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5 text-green-600" />}
                                 </Button>
                               )}
                             </div>
                           )}
                         </TableCell>
                       )}
-
                       <TableCell className="text-right pr-4">
                         {!item.resolvedAt && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 text-xs"
-                            onClick={() => router.push(`/unmatched/${item.id}`)}
-                          >
-                            <Link2 className="h-3 w-3 mr-1" />
-                            Detail
+                          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => router.push(`/unmatched/${item.id}`)}>
+                            <Link2 className="h-3 w-3 mr-1" /> Detail
                           </Button>
                         )}
                       </TableCell>
@@ -318,23 +268,16 @@ export default function UnmatchedPage() {
 
           {data && data.totalPages > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t">
-              <p className="text-xs text-muted-foreground">
-                Pagina {data.page} van {data.totalPages} &middot; {data.total} items
-              </p>
+              <p className="text-xs text-muted-foreground">Pagina {data.page} van {data.totalPages} &middot; {data.total} items</p>
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-                  Vorige
-                </Button>
-                <Button variant="outline" size="sm" disabled={page >= data.totalPages} onClick={() => setPage(page + 1)}>
-                  Volgende
-                </Button>
+                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Vorige</Button>
+                <Button variant="outline" size="sm" disabled={page >= data.totalPages} onClick={() => setPage(page + 1)}>Volgende</Button>
               </div>
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Bulk match modal */}
       <Dialog open={bulkModalOpen} onOpenChange={(open) => { setBulkModalOpen(open); if (!open) setBulkSku(""); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -346,18 +289,10 @@ export default function UnmatchedPage() {
           <div className="space-y-4 py-2">
             <p className="text-sm text-muted-foreground">
               Vul één IC SKU (TOW_KOD) in die aan alle geselecteerde items wordt gekoppeld.
-              Na opslaan zijn ze direct beschikbaar in de Finalized API.
             </p>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">IC SKU / TOW_KOD</label>
-              <Input
-                placeholder="bijv. H17R23"
-                value={bulkSku}
-                onChange={(e) => setBulkSku(e.target.value)}
-                className="font-mono"
-                autoFocus
-                onKeyDown={(e) => e.key === "Enter" && !bulkSaving && bulkSku.trim() && handleBulkSave()}
-              />
+              <Input placeholder="bijv. H17R23" value={bulkSku} onChange={(e) => setBulkSku(e.target.value)} className="font-mono" autoFocus onKeyDown={(e) => e.key === "Enter" && !bulkSaving && bulkSku.trim() && handleBulkSave()} />
             </div>
             <div className="max-h-40 overflow-y-auto rounded border divide-y text-xs">
               {data?.items.filter((i) => selected.has(i.id)).map((i) => (
@@ -370,18 +305,271 @@ export default function UnmatchedPage() {
             </div>
           </div>
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => { setBulkModalOpen(false); setBulkSku(""); }}>
-              Annuleren
-            </Button>
+            <Button variant="outline" onClick={() => { setBulkModalOpen(false); setBulkSku(""); }}>Annuleren</Button>
             <Button onClick={handleBulkSave} disabled={!bulkSku.trim() || bulkSaving}>
-              {bulkSaving
-                ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Bezig...</>
-                : <><Link2 className="h-4 w-4 mr-2" />Koppelen</>
-              }
+              {bulkSaving ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Bezig...</> : <><Link2 className="h-4 w-4 mr-2" />Koppelen</>}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// ─── Tab 2: Products without IC coupling (handmatig prijs/voorraad instellen) ─
+
+function NoCouplingTab() {
+  const [page, setPage] = useState(1);
+  const [q, setQ] = useState("");
+  const [withPrice, setWithPrice] = useState<"" | "true" | "false">("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+
+  // Inline editing state: productId → field edits
+  const [edits, setEdits] = useState<Record<number, { price?: string; stock?: string; description?: string }>>({});
+  const [saving, setSaving] = useState<number | null>(null);
+  const [savedRows, setSavedRows] = useState<Set<number>>(new Set());
+
+  const { data, loading, refetch } = useApi(
+    () => getUnmatchedProducts({
+      page,
+      limit: 50,
+      q: debouncedQ || undefined,
+      withPrice: withPrice || undefined,
+    }),
+    [page, debouncedQ, withPrice]
+  );
+
+  const handleSearch = (v: string) => {
+    setQ(v);
+    // Debounce via setTimeout trick — simple and effective
+    clearTimeout((handleSearch as any)._timer);
+    (handleSearch as any)._timer = setTimeout(() => {
+      setDebouncedQ(v);
+      setPage(1);
+    }, 400);
+  };
+
+  const setEdit = (id: number, field: string, value: string) => {
+    setEdits((prev) => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
+  };
+
+  const saveProduct = async (item: UnmatchedProductItem) => {
+    const row = edits[item.id];
+    if (!row) return;
+    setSaving(item.id);
+    try {
+      const payload: Record<string, unknown> = {};
+      if (row.price !== undefined) payload.price = row.price === "" ? null : parseFloat(row.price);
+      if (row.stock !== undefined) payload.stock = row.stock === "" ? null : parseInt(row.stock, 10);
+      if (row.description !== undefined) payload.description = row.description;
+      await updateUnmatchedProduct(item.id, payload);
+      setEdits((prev) => { const n = { ...prev }; delete n[item.id]; return n; });
+      setSavedRows((prev) => new Set(prev).add(item.id));
+      setTimeout(() => setSavedRows((prev) => { const n = new Set(prev); n.delete(item.id); return n; }), 2000);
+      refetch();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Opslaan mislukt");
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const hasEdit = (id: number) => {
+    const row = edits[id];
+    return row && Object.values(row).some((v) => v !== undefined);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+        <p className="text-sm text-muted-foreground flex-1">
+          Producten zonder IC-koppeling — stel handmatig prijs, voorraad of omschrijving in voor de storefront.
+        </p>
+        <div className="flex gap-2 shrink-0">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Zoeken..."
+              value={q}
+              onChange={(e) => handleSearch(e.target.value)}
+              className="pl-8 h-8 w-44 text-sm"
+            />
+          </div>
+          <Select value={withPrice || "all"} onValueChange={(v) => { setWithPrice(v === "all" ? "" : v as "true" | "false"); setPage(1); }}>
+            <SelectTrigger className="h-8 w-36 text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Alle</SelectItem>
+              <SelectItem value="true">Met prijs</SelectItem>
+              <SelectItem value="false">Zonder prijs</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <PackageX className="h-4 w-4 text-amber-500" />
+            Niet-gekoppelde producten
+            <Badge variant="outline" className="ml-1 font-normal">{data?.total ?? 0}</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : !data?.items.length ? (
+            <div className="flex flex-col items-center py-12 gap-2 text-muted-foreground">
+              <PackageX className="h-8 w-8" />
+              <p className="text-sm">Geen producten gevonden.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Artikel</TableHead>
+                    <TableHead>Merk</TableHead>
+                    <TableHead className="hidden sm:table-cell">Leverancier</TableHead>
+                    <TableHead>Prijs (€)</TableHead>
+                    <TableHead>Voorraad</TableHead>
+                    <TableHead className="hidden lg:table-cell min-w-[200px]">Omschrijving</TableHead>
+                    <TableHead className="hidden xl:table-cell">Bijgewerkt</TableHead>
+                    <TableHead className="text-right pr-4">Opslaan</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.items.map((item) => {
+                    const row = edits[item.id] ?? {};
+                    const dirty = hasEdit(item.id);
+                    const isSaving = saving === item.id;
+                    const justSaved = savedRows.has(item.id);
+                    return (
+                      <TableRow key={item.id} className={dirty ? "bg-amber-50/40" : justSaved ? "bg-green-50/40" : undefined}>
+                        <TableCell>
+                          <div className="font-mono text-xs font-semibold">{item.articleNo}</div>
+                          {item.ean && <div className="text-[10px] text-muted-foreground">{item.ean}</div>}
+                        </TableCell>
+                        <TableCell className="text-sm">{item.brand.name}</TableCell>
+                        <TableCell className="hidden sm:table-cell">
+                          <Badge variant="outline" className="text-xs">{item.supplier.name}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder={item.price != null ? String(item.price) : "—"}
+                            value={row.price ?? (item.price != null ? String(item.price) : "")}
+                            onChange={(e) => setEdit(item.id, "price", e.target.value)}
+                            className="h-7 w-24 text-xs"
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            type="number"
+                            step="1"
+                            min="0"
+                            placeholder={item.stock != null ? String(item.stock) : "—"}
+                            value={row.stock ?? (item.stock != null ? String(item.stock) : "")}
+                            onChange={(e) => setEdit(item.id, "stock", e.target.value)}
+                            className="h-7 w-20 text-xs"
+                          />
+                        </TableCell>
+                        <TableCell className="hidden lg:table-cell">
+                          <Input
+                            placeholder={item.description || "Omschrijving..."}
+                            value={row.description ?? item.description}
+                            onChange={(e) => setEdit(item.id, "description", e.target.value)}
+                            className="h-7 text-xs min-w-[180px]"
+                          />
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground hidden xl:table-cell">
+                          {formatDate(item.updatedAt)}
+                        </TableCell>
+                        <TableCell className="text-right pr-4">
+                          {justSaved ? (
+                            <CheckCheck className="h-4 w-4 text-green-500 ml-auto" />
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant={dirty ? "default" : "ghost"}
+                              className="h-7 text-xs"
+                              disabled={!dirty || isSaving}
+                              onClick={() => saveProduct(item)}
+                            >
+                              {isSaving
+                                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                : <><Save className="h-3.5 w-3.5 mr-1" />Opslaan</>
+                              }
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {data && data.totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t">
+              <p className="text-xs text-muted-foreground">Pagina {data.page} van {data.totalPages} &middot; {formatNumber(data.total)} producten</p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Vorige</Button>
+                <Button variant="outline" size="sm" disabled={page >= data.totalPages} onClick={() => setPage(page + 1)}>Volgende</Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ─── Main page with tabs ───────────────────────────────────────────────────────
+
+export default function UnmatchedPage() {
+  const [tab, setTab] = useState<"failures" | "no-coupling">("failures");
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-2">
+            <Link2Off className="h-6 w-6 text-orange-500" />
+            Niet gekoppeld
+          </h2>
+          <p className="text-muted-foreground text-sm">
+            Producten zonder IC-koppeling — handmatig beheren of koppelen
+          </p>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 border-b">
+        <button
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${tab === "failures" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          onClick={() => setTab("failures")}
+        >
+          <AlertTriangle className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />
+          Match-mislukkingen
+        </button>
+        <button
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${tab === "no-coupling" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          onClick={() => setTab("no-coupling")}
+        >
+          <Euro className="h-3.5 w-3.5 inline mr-1.5 -mt-0.5" />
+          Prijs / Voorraad instellen
+        </button>
+      </div>
+
+      {tab === "failures" ? <MatchFailuresTab /> : <NoCouplingTab />}
     </div>
   );
 }
