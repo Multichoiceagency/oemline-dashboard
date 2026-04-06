@@ -197,7 +197,7 @@ export async function storefrontRoutes(app: FastifyInstance) {
     };
   });
 
-  // ─── GET /storefront/categories ─── Category tree
+  // ─── GET /storefront/categories ─── Category tree (3 levels deep)
   app.get("/storefront/categories", async (request) => {
     const { parentId } = z.object({ parentId: z.coerce.number().int().optional() }).parse(request.query);
 
@@ -207,9 +207,11 @@ export async function storefrontRoutes(app: FastifyInstance) {
     } else {
       where.parentId = null;
     }
+    // Include root categories that have products anywhere in their subtree (3 levels)
     where.OR = [
       { products: { some: {} } },
       { children: { some: { products: { some: {} } } } },
+      { children: { some: { children: { some: { products: { some: {} } } } } } },
     ];
 
     const categories = await prisma.category.findMany({
@@ -220,9 +222,22 @@ export async function storefrontRoutes(app: FastifyInstance) {
         children: {
           take: 500,
           orderBy: { name: "asc" },
-          where: { products: { some: {} } },
+          where: {
+            OR: [
+              { products: { some: {} } },
+              { children: { some: { products: { some: {} } } } },
+            ],
+          },
           include: {
             _count: { select: { products: true, children: true } },
+            children: {
+              take: 200,
+              orderBy: { name: "asc" },
+              where: { products: { some: {} } },
+              include: {
+                _count: { select: { products: true, children: true } },
+              },
+            },
           },
         },
       },
@@ -235,13 +250,23 @@ export async function storefrontRoutes(app: FastifyInstance) {
         code: c.code,
         parentId: c.parentId,
         productCount: c._count.products,
-        childCount: c.children.length,
+        childCount: c._count.children,
         children: c.children.map((ch) => ({
           id: ch.id,
           name: ch.name,
           code: ch.code,
+          parentId: c.id,
           productCount: ch._count.products,
           childCount: ch._count.children,
+          children: ch.children.map((gch) => ({
+            id: gch.id,
+            name: gch.name,
+            code: gch.code,
+            parentId: ch.id,
+            productCount: gch._count.products,
+            childCount: gch._count.children,
+            children: [],
+          })),
         })),
       })),
       total: categories.length,
