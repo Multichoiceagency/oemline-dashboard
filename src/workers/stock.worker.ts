@@ -217,7 +217,7 @@ async function bulkUpdateStock(
 ): Promise<void> {
   if (updates.length === 0) return;
   const valuesList = updates
-    .map((u) => `(${u.id}, ${u.price ?? "NULL"}, ${u.stock}, '${u.currency.replace(/'/g, "''")}')`)
+    .map((u) => `(${u.id}::int, ${u.price != null ? u.price : "NULL::double precision"}, ${u.stock}::int, '${u.currency.replace(/'/g, "''")}')`)
     .join(",\n");
   await prisma.$executeRawUnsafe(
     `UPDATE product_maps AS pm SET
