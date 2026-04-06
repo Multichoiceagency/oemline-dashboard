@@ -588,6 +588,20 @@ export const updateBrand = (id: number, data: { name?: string; logoUrl?: string 
     body: JSON.stringify(data),
   });
 
+export interface BrandIcCoverage {
+  brandId: number;
+  name: string;
+  code: string;
+  tecdocId: number | null;
+  total: number;
+  coupled: number;
+  uncoupled: number;
+  pct: number;
+}
+
+export const getBrandIcCoverage = () =>
+  apiFetch<BrandIcCoverage[]>("/api/brands/ic-coverage");
+
 export const syncBrandsFromTecDoc = () =>
   apiFetch<{ fetched: number; upserted: number; totalInDb: number; brands: Array<{ id: number; name: string; articleCount?: number }> }>(
     "/api/tecdoc/sync-brands",

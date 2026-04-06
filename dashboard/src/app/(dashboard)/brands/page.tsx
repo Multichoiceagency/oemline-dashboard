@@ -3,14 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useApi, useInterval } from "@/lib/hooks";
-import { getBrands, syncBrandsFromTecDoc } from "@/lib/api";
-import type { Brand } from "@/lib/api";
+import { getBrands, syncBrandsFromTecDoc, getBrandIcCoverage } from "@/lib/api";
+import type { Brand, BrandIcCoverage } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { formatNumber } from "@/lib/utils";
-import { Search, Tag, X, Loader2, Pencil, CheckCircle2, RefreshCw } from "lucide-react";
+import { Search, Tag, X, Loader2, Pencil, CheckCircle2, RefreshCw, Link2, Link2Off, ArrowUpDown } from "lucide-react";
 
 function BrandLogo({ brand }: { brand: Brand }) {
   const [imgFailed, setImgFailed] = useState(false);
@@ -30,11 +30,36 @@ function BrandLogo({ brand }: { brand: Brand }) {
   );
 }
 
+type SortKey = "name" | "total" | "coupled" | "uncoupled" | "pct";
+
 export default function BrandsPage() {
   const router = useRouter();
   const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [coverageSortKey, setCoverageSortKey] = useState<SortKey>("total");
+  const [coverageSortDir, setCoverageSortDir] = useState<"asc" | "desc">("desc");
+
+  const { data: coverageData, loading: coverageLoading } = useApi(getBrandIcCoverage, []);
+
+  const sortedCoverage = coverageData
+    ? [...coverageData].sort((a, b) => {
+        const v = (x: BrandIcCoverage) => coverageSortKey === "name" ? x.name : x[coverageSortKey];
+        const av = v(a), bv = v(b);
+        if (av < bv) return coverageSortDir === "asc" ? -1 : 1;
+        if (av > bv) return coverageSortDir === "asc" ? 1 : -1;
+        return 0;
+      })
+    : [];
+
+  const toggleSort = (key: SortKey) => {
+    if (coverageSortKey === key) {
+      setCoverageSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setCoverageSortKey(key);
+      setCoverageSortDir("desc");
+    }
+  };
 
   const { data, loading, refetch } = useApi(
     () => getBrands({ page, limit: 50, q: searchQuery || undefined }),
@@ -176,6 +201,80 @@ export default function BrandsPage() {
                 </div>
               )}
             </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* IC Coverage per brand */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Link2 className="h-5 w-5" />
+            IC-koppeling per merk
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Percentage producten met InterCars SKU. Merken met 0% worden nooit via IC geprijsd of geleverd.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {coverageLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : !sortedCoverage.length ? (
+            <p className="text-muted-foreground text-center py-6">Geen data</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-muted-foreground">
+                    {(["name", "total", "coupled", "uncoupled", "pct"] as SortKey[]).map((key) => (
+                      <th
+                        key={key}
+                        className="pb-2 pr-4 text-left font-medium cursor-pointer hover:text-foreground select-none whitespace-nowrap"
+                        onClick={() => toggleSort(key)}
+                      >
+                        <span className="flex items-center gap-1">
+                          {key === "name" ? "Merk" : key === "total" ? "Totaal" : key === "coupled" ? "Gekoppeld" : key === "uncoupled" ? "Niet gekoppeld" : "Dekking"}
+                          <ArrowUpDown className="h-3 w-3 opacity-50" />
+                        </span>
+                      </th>
+                    ))}
+                    <th className="pb-2 text-left font-medium w-32">Voortgang</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedCoverage.map((r) => (
+                    <tr key={r.brandId} className="border-b last:border-0 hover:bg-muted/30">
+                      <td className="py-2 pr-4 font-medium">
+                        <button
+                          className="hover:underline text-left"
+                          onClick={() => router.push(`/brands/${r.brandId}`)}
+                        >
+                          {r.name}
+                        </button>
+                      </td>
+                      <td className="py-2 pr-4 tabular-nums">{formatNumber(r.total)}</td>
+                      <td className="py-2 pr-4 tabular-nums text-green-600">{formatNumber(r.coupled)}</td>
+                      <td className="py-2 pr-4 tabular-nums text-orange-500">{formatNumber(r.uncoupled)}</td>
+                      <td className="py-2 pr-4">
+                        <Badge variant={r.pct === 0 ? "destructive" : r.pct < 50 ? "secondary" : "default"}>
+                          {r.pct}%
+                        </Badge>
+                      </td>
+                      <td className="py-2 w-32">
+                        <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-green-500 transition-all"
+                            style={{ width: `${r.pct}%` }}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </CardContent>
       </Card>

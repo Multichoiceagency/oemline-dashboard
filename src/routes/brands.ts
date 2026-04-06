@@ -65,6 +65,45 @@ export async function brandRoutes(app: FastifyInstance) {
     };
   });
 
+  // IC coupling coverage per brand
+  app.get("/brands/ic-coverage", async () => {
+    const rows = await prisma.$queryRaw<Array<{
+      brand_id: number;
+      brand_name: string;
+      brand_code: string;
+      tecdoc_id: number | null;
+      total: bigint;
+      coupled: bigint;
+    }>>`
+      SELECT
+        b.id          AS brand_id,
+        b.name        AS brand_name,
+        b.code        AS brand_code,
+        b.tecdoc_id,
+        COUNT(pm.id)  AS total,
+        COUNT(pm.ic_sku) AS coupled
+      FROM brands b
+      JOIN product_maps pm ON pm.brand_id = b.id AND pm.status = 'active'
+      GROUP BY b.id, b.name, b.code, b.tecdoc_id
+      ORDER BY COUNT(pm.id) DESC
+    `;
+
+    return rows.map((r) => {
+      const total = Number(r.total);
+      const coupled = Number(r.coupled);
+      return {
+        brandId:   r.brand_id,
+        name:      r.brand_name,
+        code:      r.brand_code,
+        tecdocId:  r.tecdoc_id,
+        total,
+        coupled,
+        uncoupled: total - coupled,
+        pct: total > 0 ? Math.round((coupled / total) * 100) : 0,
+      };
+    });
+  });
+
   // Get single brand with top products
   app.get("/brands/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
