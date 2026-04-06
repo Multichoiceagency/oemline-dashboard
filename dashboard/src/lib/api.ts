@@ -649,6 +649,22 @@ export const syncTecDocCategories = () =>
     method: "POST",
   });
 
+export const mergeCategories = (data: {
+  targetCategoryId?: number;
+  newCategory?: { name: string; code?: string; parentId?: number | null };
+  sourceCategoryIds: number[];
+  deleteSource?: boolean;
+}) =>
+  apiFetch<{
+    targetCategory: Category;
+    productsMoved: number;
+    sourceCategories: number;
+    deleted: number;
+  }>("/api/categories/merge", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
 // File Uploads
 export const uploadProductImage = async (productId: number, file: File): Promise<{ url: string; images: string[] }> => {
   const formData = new FormData();

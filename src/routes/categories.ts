@@ -434,6 +434,94 @@ export async function categoryRoutes(app: FastifyInstance) {
     return { success: true };
   });
 
+  // Merge categories: verplaats alle producten van bronnen naar doelcategorie
+  app.post("/categories/merge", async (request, reply) => {
+    const schema = z.object({
+      targetCategoryId: z.number().int().optional(),
+      newCategory: z.object({
+        name: z.string().min(1).max(200),
+        code: z.string().min(1).max(100).optional(),
+        parentId: z.number().int().nullable().optional(),
+      }).optional(),
+      sourceCategoryIds: z.array(z.number().int()).min(1).max(100),
+      deleteSource: z.boolean().default(false),
+    }).refine((d) => d.targetCategoryId != null || d.newCategory != null, {
+      message: "Geef targetCategoryId of newCategory op",
+    });
+
+    const body = schema.parse(request.body);
+
+    // Bepaal / maak doelcategorie aan
+    let targetId: number;
+
+    if (body.targetCategoryId != null) {
+      const target = await prisma.category.findUnique({ where: { id: body.targetCategoryId } });
+      if (!target) return reply.code(404).send({ error: "Doelcategorie niet gevonden" });
+      targetId = target.id;
+    } else {
+      const nc = body.newCategory!;
+      const code = nc.code?.trim() ||
+        nc.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const existing = await prisma.category.findUnique({ where: { code } });
+      if (existing) return reply.code(409).send({ error: `Categorie code '${code}' bestaat al` });
+      let level = 0;
+      if (nc.parentId) {
+        const parent = await prisma.category.findUnique({ where: { id: nc.parentId } });
+        level = (parent?.level ?? 0) + 1;
+      }
+      const created = await prisma.category.create({
+        data: { name: nc.name, code, parentId: nc.parentId ?? null, level },
+      });
+      targetId = created.id;
+    }
+
+    // Verwijder de doelcategorie zelf uit de bronnenlijst (voorkomt zelf-merge)
+    const sourceIds = body.sourceCategoryIds.filter((id) => id !== targetId);
+    if (sourceIds.length === 0) {
+      return reply.code(400).send({ error: "Geen bronnen om samen te voegen" });
+    }
+
+    // Verplaats alle producten van bronnen naar doel
+    const productsMoved = await prisma.$executeRawUnsafe(
+      `UPDATE product_maps SET category_id = $1 WHERE category_id = ANY($2::int[])`,
+      targetId,
+      sourceIds
+    );
+
+    // Verplaats subcategorieën van bronnen naar doel
+    await prisma.$executeRawUnsafe(
+      `UPDATE categories SET parent_id = $1 WHERE parent_id = ANY($2::int[]) AND id != $1`,
+      targetId,
+      sourceIds
+    );
+
+    // Verwijder lege broncategorieën indien gewenst
+    let deleted = 0;
+    if (body.deleteSource) {
+      for (const srcId of sourceIds) {
+        const src = await prisma.category.findUnique({
+          where: { id: srcId },
+          include: { _count: { select: { products: true, children: true } } },
+        });
+        if (src && src._count.products === 0 && src._count.children === 0) {
+          await prisma.category.delete({ where: { id: srcId } }).catch(() => {});
+          deleted++;
+        }
+      }
+    }
+
+    const target = await prisma.category.findUnique({ where: { id: targetId } });
+
+    logger.info({ targetId, sourceIds, productsMoved: Number(productsMoved), deleted }, "Categories merged");
+
+    return {
+      targetCategory: target,
+      productsMoved: Number(productsMoved),
+      sourceCategories: sourceIds.length,
+      deleted,
+    };
+  });
+
   app.patch("/categories/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = updateCategorySchema.parse(request.body);
