@@ -345,12 +345,16 @@ export default function ProductDetailPage() {
             <Card>
               <CardContent className="pt-4">
                 <a
-                  href={`https://oemline.eu/nl/producten/${encodeURIComponent(product.articleNo)}`}
+                  href={
+                    product.brand?.tecdocId
+                      ? `https://oemline.eu/parts/tecdoc/${product.brand.tecdocId}/${encodeURIComponent(product.articleNo)}`
+                      : `https://oemline.eu/shop?q=${encodeURIComponent(product.articleNo)}`
+                  }
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 transition-colors"
                 >
-                  <ExternalLink className="h-4 w-4" /> View on Storefront
+                  <ExternalLink className="h-4 w-4" /> Bekijk op storefront
                 </a>
               </CardContent>
             </Card>
