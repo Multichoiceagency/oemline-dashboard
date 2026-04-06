@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { Worker } from "bullmq";
 import { redisConfig } from "./lib/redis.js";
-import { disconnectPrisma, validateConnection } from "./lib/prisma.js";
+import { disconnectPrisma, validateConnection, ensureNormalizedIndexes } from "./lib/prisma.js";
 import { disconnectRedis } from "./lib/redis.js";
 import { ensureProductsIndex } from "./lib/meilisearch.js";
 import { logger } from "./lib/logger.js";
@@ -305,6 +305,15 @@ try {
     ),
   ]).catch((err) => {
     logger.warn({ err }, "Meilisearch init failed — workers will retry indexing later");
+  });
+
+  await Promise.race([
+    ensureNormalizedIndexes(),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("ensureNormalizedIndexes timeout")), 30_000)
+    ),
+  ]).catch((err) => {
+    logger.warn({ err }, "ensureNormalizedIndexes failed — ic-match may have degraded matching");
   });
 
   logger.info(
