@@ -346,8 +346,8 @@ export default function ProductDetailPage() {
               <CardContent className="pt-4">
                 <a
                   href={
-                    product.brand?.tecdocId
-                      ? `https://oemline.eu/parts/tecdoc/${product.brand.tecdocId}/${encodeURIComponent(product.articleNo)}`
+                    (product.brand as any)?.tecdocId
+                      ? `https://oemline.eu/parts/tecdoc/${(product.brand as any).tecdocId}/${encodeURIComponent(product.articleNo)}`
                       : `https://oemline.eu/shop?q=${encodeURIComponent(product.articleNo)}`
                   }
                   target="_blank"
