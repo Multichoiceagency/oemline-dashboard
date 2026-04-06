@@ -32,7 +32,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { formatDate, formatNumber } from "@/lib/utils";
-import { AlertTriangle, Link2, Link2Off, Loader2, CheckCheck, Save, X, PackageX, Euro, Search } from "lucide-react";
+import { AlertTriangle, Link2, Link2Off, Loader2, CheckCheck, Save, X, PackageX, Euro, Search, Pencil, ImageIcon } from "lucide-react";
 
 // ─── Tab 1: IC Match failures ─────────────────────────────────────────────────
 
@@ -319,6 +319,7 @@ function MatchFailuresTab() {
 // ─── Tab 2: Products without IC coupling (handmatig prijs/voorraad instellen) ─
 
 function NoCouplingTab() {
+  const router = useRouter();
   const [page, setPage] = useState(1);
   const [q, setQ] = useState("");
   const [withPrice, setWithPrice] = useState<"" | "true" | "false">("");
@@ -328,6 +329,16 @@ function NoCouplingTab() {
   const [edits, setEdits] = useState<Record<number, { price?: string; stock?: string; description?: string }>>({});
   const [saving, setSaving] = useState<number | null>(null);
   const [savedRows, setSavedRows] = useState<Set<number>>(new Set());
+
+  // Bulk selection
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  // Bulk edit dialog
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkPrice, setBulkPrice] = useState("");
+  const [bulkStock, setBulkStock] = useState("");
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkDone, setBulkDone] = useState<{ count: number } | null>(null);
 
   const { data, loading, refetch } = useApi(
     () => getUnmatchedProducts({
@@ -341,7 +352,6 @@ function NoCouplingTab() {
 
   const handleSearch = (v: string) => {
     setQ(v);
-    // Debounce via setTimeout trick — simple and effective
     clearTimeout((handleSearch as any)._timer);
     (handleSearch as any)._timer = setTimeout(() => {
       setDebouncedQ(v);
@@ -379,11 +389,54 @@ function NoCouplingTab() {
     return row && Object.values(row).some((v) => v !== undefined);
   };
 
+  // Bulk select helpers
+  const allIds = data?.items.map((i) => i.id) ?? [];
+  const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
+
+  const toggleSelect = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(allIds));
+  };
+
+  // Bulk save
+  const handleBulkSave = async () => {
+    if (!bulkPrice && !bulkStock) return;
+    setBulkSaving(true);
+    let count = 0;
+    for (const id of selected) {
+      try {
+        const payload: Record<string, unknown> = {};
+        if (bulkPrice) payload.price = parseFloat(bulkPrice);
+        if (bulkStock) payload.stock = parseInt(bulkStock, 10);
+        await updateUnmatchedProduct(id, payload);
+        count++;
+      } catch {
+        // continue on error
+      }
+    }
+    setBulkSaving(false);
+    setBulkDone({ count });
+    setBulkOpen(false);
+    setBulkPrice("");
+    setBulkStock("");
+    setSelected(new Set());
+    refetch();
+  };
+
   return (
     <div className="space-y-4">
+      {/* Filters row */}
       <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
         <p className="text-sm text-muted-foreground flex-1">
-          Producten zonder IC-koppeling — stel handmatig prijs, voorraad of omschrijving in voor de storefront.
+          Producten zonder IC-koppeling — stel handmatig prijs, voorraad of omschrijving in.
         </p>
         <div className="flex gap-2 shrink-0">
           <div className="relative">
@@ -408,6 +461,30 @@ function NoCouplingTab() {
         </div>
       </div>
 
+      {/* Success banner */}
+      {bulkDone && (
+        <div className="flex items-center gap-3 p-3 rounded-lg bg-green-50 border border-green-200 text-sm text-green-800">
+          <CheckCheck className="h-4 w-4 shrink-0 text-green-600" />
+          <span><strong>{bulkDone.count}</strong> producten bijgewerkt.</span>
+          <button onClick={() => setBulkDone(null)} className="ml-auto text-green-600 hover:text-green-800"><X className="h-4 w-4" /></button>
+        </div>
+      )}
+
+      {/* Bulk action bar */}
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 p-3 rounded-lg bg-blue-50 border border-blue-200">
+          <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">{selected.size} geselecteerd</Badge>
+          <Button size="sm" onClick={() => setBulkOpen(true)}>
+            <Euro className="h-3.5 w-3.5 mr-1.5" />
+            Bulk prijs/voorraad
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+            <X className="h-3.5 w-3.5 mr-1" />
+            Deselecteren
+          </Button>
+        </div>
+      )}
+
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
@@ -431,14 +508,17 @@ function NoCouplingTab() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10 pl-4">
+                      <input type="checkbox" checked={allSelected} onChange={toggleAll} className="h-4 w-4 rounded border-gray-300 cursor-pointer" />
+                    </TableHead>
+                    <TableHead className="w-12">Foto</TableHead>
                     <TableHead>Artikel</TableHead>
                     <TableHead>Merk</TableHead>
                     <TableHead className="hidden sm:table-cell">Leverancier</TableHead>
                     <TableHead>Prijs (€)</TableHead>
                     <TableHead>Voorraad</TableHead>
                     <TableHead className="hidden lg:table-cell min-w-[200px]">Omschrijving</TableHead>
-                    <TableHead className="hidden xl:table-cell">Bijgewerkt</TableHead>
-                    <TableHead className="text-right pr-4">Opslaan</TableHead>
+                    <TableHead className="text-right pr-4">Acties</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -447,16 +527,42 @@ function NoCouplingTab() {
                     const dirty = hasEdit(item.id);
                     const isSaving = saving === item.id;
                     const justSaved = savedRows.has(item.id);
+                    const isSelected = selected.has(item.id);
                     return (
-                      <TableRow key={item.id} className={dirty ? "bg-amber-50/40" : justSaved ? "bg-green-50/40" : undefined}>
+                      <TableRow key={item.id} className={isSelected ? "bg-blue-50/60" : dirty ? "bg-amber-50/40" : justSaved ? "bg-green-50/40" : undefined}>
+                        {/* Checkbox */}
+                        <TableCell className="pl-4">
+                          <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(item.id)} className="h-4 w-4 rounded border-gray-300 cursor-pointer" />
+                        </TableCell>
+
+                        {/* Image thumbnail */}
+                        <TableCell>
+                          {item.imageUrl ? (
+                            <img
+                              src={item.imageUrl}
+                              alt={item.articleNo}
+                              className="h-10 w-10 object-contain rounded border bg-white"
+                              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                            />
+                          ) : (
+                            <div className="h-10 w-10 rounded border bg-muted flex items-center justify-center">
+                              <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                            </div>
+                          )}
+                        </TableCell>
+
+                        {/* Article info */}
                         <TableCell>
                           <div className="font-mono text-xs font-semibold">{item.articleNo}</div>
                           {item.ean && <div className="text-[10px] text-muted-foreground">{item.ean}</div>}
                         </TableCell>
+
                         <TableCell className="text-sm">{item.brand.name}</TableCell>
                         <TableCell className="hidden sm:table-cell">
                           <Badge variant="outline" className="text-xs">{item.supplier.name}</Badge>
                         </TableCell>
+
+                        {/* Inline price */}
                         <TableCell>
                           <Input
                             type="number"
@@ -468,6 +574,8 @@ function NoCouplingTab() {
                             className="h-7 w-24 text-xs"
                           />
                         </TableCell>
+
+                        {/* Inline stock */}
                         <TableCell>
                           <Input
                             type="number"
@@ -479,6 +587,8 @@ function NoCouplingTab() {
                             className="h-7 w-20 text-xs"
                           />
                         </TableCell>
+
+                        {/* Inline description */}
                         <TableCell className="hidden lg:table-cell">
                           <Input
                             placeholder={item.description || "Omschrijving..."}
@@ -487,26 +597,36 @@ function NoCouplingTab() {
                             className="h-7 text-xs min-w-[180px]"
                           />
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground hidden xl:table-cell">
-                          {formatDate(item.updatedAt)}
-                        </TableCell>
+
+                        {/* Actions: save + edit */}
                         <TableCell className="text-right pr-4">
-                          {justSaved ? (
-                            <CheckCheck className="h-4 w-4 text-green-500 ml-auto" />
-                          ) : (
+                          <div className="flex items-center justify-end gap-1.5">
+                            {justSaved ? (
+                              <CheckCheck className="h-4 w-4 text-green-500" />
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant={dirty ? "default" : "ghost"}
+                                className="h-7 text-xs"
+                                disabled={!dirty || isSaving}
+                                onClick={() => saveProduct(item)}
+                              >
+                                {isSaving
+                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  : <Save className="h-3.5 w-3.5" />
+                                }
+                              </Button>
+                            )}
                             <Button
                               size="sm"
-                              variant={dirty ? "default" : "ghost"}
+                              variant="outline"
                               className="h-7 text-xs"
-                              disabled={!dirty || isSaving}
-                              onClick={() => saveProduct(item)}
+                              onClick={() => router.push(`/products/${item.id}`)}
                             >
-                              {isSaving
-                                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                : <><Save className="h-3.5 w-3.5 mr-1" />Opslaan</>
-                              }
+                              <Pencil className="h-3 w-3 mr-1" />
+                              Bewerken
                             </Button>
-                          )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
@@ -527,6 +647,57 @@ function NoCouplingTab() {
           )}
         </CardContent>
       </Card>
+
+      {/* Bulk edit dialog */}
+      <Dialog open={bulkOpen} onOpenChange={(open) => { setBulkOpen(open); if (!open) { setBulkPrice(""); setBulkStock(""); } }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Euro className="h-4 w-4" />
+              Bulk bewerken — {selected.size} {selected.size === 1 ? "product" : "producten"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Vul de velden in die je wilt toepassen op alle geselecteerde producten. Lege velden worden overgeslagen.
+            </p>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Prijs (€)</label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="bijv. 12.50"
+                value={bulkPrice}
+                onChange={(e) => setBulkPrice(e.target.value)}
+                className="font-mono"
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Voorraad</label>
+              <Input
+                type="number"
+                step="1"
+                min="0"
+                placeholder="bijv. 10"
+                value={bulkStock}
+                onChange={(e) => setBulkStock(e.target.value)}
+                className="font-mono"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setBulkOpen(false)}>Annuleren</Button>
+            <Button onClick={handleBulkSave} disabled={(!bulkPrice && !bulkStock) || bulkSaving}>
+              {bulkSaving
+                ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Bezig...</>
+                : <><Save className="h-4 w-4 mr-2" />Opslaan</>
+              }
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
