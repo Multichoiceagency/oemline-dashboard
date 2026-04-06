@@ -2,7 +2,22 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { config } from "../config.js";
 import { searchProducts } from "../services/search.js";
+
+function revalidateStorefront(productId: number | string): void {
+  const url = config.STOREFRONT_URL;
+  const secret = config.STOREFRONT_REVALIDATE_SECRET;
+  if (!url || !secret) return;
+  fetch(`${url}/api/revalidate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-webhook-secret": secret },
+    body: JSON.stringify({ contentType: "dashboard_product", contentId: String(productId) }),
+    signal: AbortSignal.timeout(5_000),
+  }).catch((err) => {
+    logger.debug({ err: err?.message, productId }, "Storefront revalidation failed (non-critical)");
+  });
+}
 
 const searchQuerySchema = z.object({
   q: z.string().min(1).max(200),
@@ -224,6 +239,7 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
     });
 
     logger.info({ productId, price, stock }, "Manual price/stock set on non-IC product");
+    revalidateStorefront(updated.id);
     return reply.send({ id: updated.id, price: updated.price, stock: updated.stock, currency: updated.currency, description: updated.description });
   });
 

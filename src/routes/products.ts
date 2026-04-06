@@ -2,6 +2,24 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { config } from "../config.js";
+
+/** Fire-and-forget: invalidates Next.js ISR cache on the storefront for a product. */
+function revalidateStorefront(productId: number | string, articleNo?: string): void {
+  const url = config.STOREFRONT_URL;
+  const secret = config.STOREFRONT_REVALIDATE_SECRET;
+  if (!url || !secret) return;
+
+  const body = JSON.stringify({ contentType: "dashboard_product", contentId: String(productId) });
+  fetch(`${url}/api/revalidate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-webhook-secret": secret },
+    body,
+    signal: AbortSignal.timeout(5_000),
+  }).catch((err) => {
+    logger.debug({ err: err?.message, productId }, "Storefront revalidation failed (non-critical)");
+  });
+}
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -382,6 +400,7 @@ export async function productRoutes(app: FastifyInstance) {
       },
     });
 
+    revalidateStorefront(product.id, product.articleNo);
     return product;
   });
 

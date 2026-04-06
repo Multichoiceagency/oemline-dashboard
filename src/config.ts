@@ -41,6 +41,10 @@ const envSchema = z.object({
   AUTH_CODE_TTL: z.coerce.number().default(300),
   AUTH_SESSION_TTL: z.coerce.number().default(86400),
 
+  // Storefront revalidation (Next.js on-demand ISR)
+  STOREFRONT_URL: z.string().default("https://oemline.eu"),
+  STOREFRONT_REVALIDATE_SECRET: z.string().default(""),
+
   // MinIO / S3
   MINIO_ENDPOINT: z.string().default("minio-yosss0scgggwcco0cw4s0ck4.oemline.eu"),
   MINIO_PORT: z.coerce.number().default(443),
