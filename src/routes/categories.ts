@@ -440,12 +440,22 @@ export async function categoryRoutes(app: FastifyInstance) {
     const body = schema.parse(request.body);
 
     // Auto-generate code from name if not provided
-    const code = body.code?.trim() ||
+    const baseCode = body.code?.trim() ||
       body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
-    const existing = await prisma.category.findUnique({ where: { code } });
-    if (existing) {
-      return reply.code(409).send({ error: `Categorie code '${code}' bestaat al` });
+    // If user explicitly provided a code and it conflicts → error
+    if (body.code?.trim()) {
+      const existing = await prisma.category.findUnique({ where: { code: baseCode } });
+      if (existing) {
+        return reply.code(409).send({ error: `Categorie code '${baseCode}' bestaat al` });
+      }
+    }
+
+    // Auto-generated code: add suffix -2, -3, … until unique
+    let code = baseCode;
+    let suffix = 2;
+    while (await prisma.category.findUnique({ where: { code } })) {
+      code = `${baseCode}-${suffix++}`;
     }
 
     // Determine level from parent
