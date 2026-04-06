@@ -3,14 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useApi, useInterval } from "@/lib/hooks";
-import { getBrands, syncBrandsFromTecDoc, getBrandIcCoverage } from "@/lib/api";
+import { getBrands, syncBrandsFromTecDoc, getBrandIcCoverage, syncTecDocBrands } from "@/lib/api";
 import type { Brand, BrandIcCoverage } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { formatNumber } from "@/lib/utils";
-import { Search, Tag, X, Loader2, Pencil, CheckCircle2, RefreshCw, Link2, Link2Off, ArrowUpDown } from "lucide-react";
+import { Search, Tag, X, Loader2, Pencil, CheckCircle2, RefreshCw, Link2, ArrowUpDown, Download } from "lucide-react";
 
 function BrandLogo({ brand }: { brand: Brand }) {
   const [imgFailed, setImgFailed] = useState(false);
@@ -39,6 +39,10 @@ export default function BrandsPage() {
   const [searchInput, setSearchInput] = useState("");
   const [coverageSortKey, setCoverageSortKey] = useState<SortKey>("total");
   const [coverageSortDir, setCoverageSortDir] = useState<"asc" | "desc">("desc");
+
+  const [selectedBrandIds, setSelectedBrandIds] = useState<Set<number>>(new Set());
+  const [syncingBrands, setSyncingBrands] = useState(false);
+  const [syncBrandsResult, setSyncBrandsResult] = useState<string | null>(null);
 
   const { data: coverageData, loading: coverageLoading } = useApi(getBrandIcCoverage, []);
 
@@ -91,6 +95,43 @@ export default function BrandsPage() {
   const handleSearch = () => {
     setSearchQuery(searchInput);
     setPage(1);
+  };
+
+  const toggleBrand = (brandId: number) => {
+    setSelectedBrandIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(brandId)) next.delete(brandId);
+      else next.add(brandId);
+      return next;
+    });
+  };
+
+  const selectAllWithTecdoc = () => {
+    const ids = (coverageData ?? []).filter((r) => r.tecdocId).map((r) => r.tecdocId!);
+    setSelectedBrandIds(new Set(ids));
+  };
+
+  const handleSyncSelectedBrands = async () => {
+    const tecdocIds = (coverageData ?? [])
+      .filter((r) => r.tecdocId && selectedBrandIds.has(r.brandId))
+      .map((r) => r.tecdocId!);
+    if (tecdocIds.length === 0) {
+      alert("Geen merken met TecDoc ID geselecteerd.");
+      return;
+    }
+    if (!confirm(`${tecdocIds.length} merk(en) opnieuw syncing vanuit TecDoc? Dit kan enkele minuten per merk duren.`)) return;
+    setSyncingBrands(true);
+    setSyncBrandsResult(null);
+    try {
+      const result = await syncTecDocBrands(tecdocIds);
+      setSyncBrandsResult(`${result.queued} sync job(s) aangemaakt voor ${tecdocIds.length} merk(en).`);
+      setSelectedBrandIds(new Set());
+      setTimeout(() => setSyncBrandsResult(null), 10000);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Sync mislukt");
+    } finally {
+      setSyncingBrands(false);
+    }
   };
 
   return (
@@ -208,12 +249,36 @@ export default function BrandsPage() {
       {/* IC Coverage per brand */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Link2 className="h-5 w-5" />
-            IC-koppeling per merk
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Percentage producten met InterCars SKU. Merken met 0% worden nooit via IC geprijsd of geleverd.
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <CardTitle className="flex items-center gap-2">
+              <Link2 className="h-5 w-5" />
+              IC-koppeling per merk
+            </CardTitle>
+            <div className="flex items-center gap-2 flex-wrap">
+              {syncBrandsResult && (
+                <span className="text-xs text-green-600 flex items-center gap-1">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {syncBrandsResult}
+                </span>
+              )}
+              {selectedBrandIds.size > 0 && (
+                <Button size="sm" variant="default" disabled={syncingBrands} onClick={handleSyncSelectedBrands}>
+                  {syncingBrands ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Download className="mr-2 h-3.5 w-3.5" />}
+                  Sync {selectedBrandIds.size} merk{selectedBrandIds.size !== 1 ? "en" : ""}
+                </Button>
+              )}
+              <Button size="sm" variant="outline" onClick={selectAllWithTecdoc}>
+                Alles selecteren
+              </Button>
+              {selectedBrandIds.size > 0 && (
+                <Button size="sm" variant="ghost" onClick={() => setSelectedBrandIds(new Set())}>
+                  Deselecteer
+                </Button>
+              )}
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground mt-1">
+            Percentage producten met InterCars SKU. Selecteer merken en klik &quot;Sync&quot; om TecDoc opnieuw te synchroniseren.
           </p>
         </CardHeader>
         <CardContent>
@@ -228,6 +293,7 @@ export default function BrandsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-muted-foreground">
+                    <th className="pb-2 pr-2 w-8"></th>
                     {(["name", "total", "coupled", "uncoupled", "pct"] as SortKey[]).map((key) => (
                       <th
                         key={key}
@@ -245,7 +311,20 @@ export default function BrandsPage() {
                 </thead>
                 <tbody>
                   {sortedCoverage.map((r) => (
-                    <tr key={r.brandId} className="border-b last:border-0 hover:bg-muted/30">
+                    <tr
+                      key={r.brandId}
+                      className={`border-b last:border-0 hover:bg-muted/30 ${selectedBrandIds.has(r.brandId) ? "bg-primary/5" : ""}`}
+                    >
+                      <td className="py-2 pr-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedBrandIds.has(r.brandId)}
+                          onChange={() => toggleBrand(r.brandId)}
+                          disabled={!r.tecdocId}
+                          className="cursor-pointer"
+                          title={r.tecdocId ? `TecDoc ID: ${r.tecdocId}` : "Geen TecDoc ID"}
+                        />
+                      </td>
                       <td className="py-2 pr-4 font-medium">
                         <button
                           className="hover:underline text-left"
@@ -253,6 +332,7 @@ export default function BrandsPage() {
                         >
                           {r.name}
                         </button>
+                        {!r.tecdocId && <span className="text-xs text-muted-foreground ml-1">(geen TecDoc)</span>}
                       </td>
                       <td className="py-2 pr-4 tabular-nums">{formatNumber(r.total)}</td>
                       <td className="py-2 pr-4 tabular-nums text-green-600">{formatNumber(r.coupled)}</td>

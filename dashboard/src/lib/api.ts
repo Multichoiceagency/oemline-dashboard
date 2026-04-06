@@ -185,6 +185,12 @@ export const bootstrapVanWezel = () =>
     method: "POST",
   });
 
+export const syncTecDocBrands = (brandIds: number[]) =>
+  apiFetch<{ queued: number; brandIds: number[]; jobIds: string[]; message: string }>("/api/jobs/sync-tecdoc-brands", {
+    method: "POST",
+    body: JSON.stringify({ brandIds }),
+  });
+
 // Search
 export interface SearchProduct {
   supplier: string;

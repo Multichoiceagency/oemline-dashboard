@@ -73,6 +73,38 @@ export async function jobRoutes(app: FastifyInstance) {
     return { jobId: job.id, queue: "sync", supplierCode, status: "queued" };
   });
 
+  /**
+   * Trigger a targeted TecDoc sync for specific brand IDs.
+   * Each brand is synced in its own job so assembly groups stay brand-specific
+   * (avoids the 10,000-product truncation that happens when many brands are mixed).
+   *
+   * Body: { brandIds: number[] }  — TecDoc dataSupplierId values (e.g. [36, 123, 456])
+   */
+  app.post("/jobs/sync-tecdoc-brands", async (request) => {
+    const schema = z.object({
+      brandIds: z.array(z.number().int().positive()).min(1).max(50),
+    });
+    const { brandIds } = schema.parse(request.body);
+
+    const jobs = await Promise.all(
+      brandIds.map((brandId) =>
+        syncQueue.add(
+          `sync-tecdoc-brand-${brandId}`,
+          { supplierCode: "tecdoc", brandIds: [brandId] },
+          { priority: 2, jobId: `sync-tecdoc-brand-${brandId}-${Date.now()}` }
+        )
+      )
+    );
+
+    return {
+      queued: jobs.length,
+      brandIds,
+      jobIds: jobs.map((j) => j.id),
+      status: "queued",
+      message: `${jobs.length} per-merk sync job(s) aangemaakt. Elk merk synct zijn eigen assembly groups.`,
+    };
+  });
+
   // Manually trigger a match job for a supplier
   app.post("/jobs/match", async (request) => {
     const schema = z.object({ supplierCode: z.string().min(1) });

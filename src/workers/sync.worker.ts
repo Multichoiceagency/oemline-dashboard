@@ -9,6 +9,9 @@ import type { SupplierCatalogItem } from "../types/index.js";
 interface SyncJobData {
   supplierCode: string;
   cursor?: string;
+  /** Optional TecDoc brand IDs to sync. When set, only these brands are fetched
+   *  (overrides tecdoc_brand_filter_ids setting for this specific job). */
+  brandIds?: number[];
 }
 
 // Larger batch = fewer DB round-trips. PostgreSQL handles 2000-row INSERT fine.
@@ -21,7 +24,7 @@ const MAX_PARALLEL_CHUNKS = 4;
 const LOCK_EXTEND_EVERY = 5;
 
 export async function processSyncJob(job: Job<SyncJobData>): Promise<void> {
-  const { supplierCode, cursor } = job.data;
+  const { supplierCode, cursor, brandIds } = job.data;
   const adapter = await getAdapterOrLoad(supplierCode);
 
   if (!adapter) {
@@ -36,12 +39,15 @@ export async function processSyncJob(job: Job<SyncJobData>): Promise<void> {
     throw new Error(`Supplier not in database: ${supplierCode}`);
   }
 
-  logger.info({ supplier: supplierCode, cursor }, "Starting catalog sync");
+  logger.info({ supplier: supplierCode, cursor, brandIds }, "Starting catalog sync");
 
   let totalProcessed = 0;
   let batchCount = 0;
 
-  const catalogIterator = adapter.syncCatalog(cursor);
+  // Pass brandIds to the adapter if provided (TecDoc adapter will use it to override the brand filter)
+  const catalogIterator = (adapter as any).syncCatalogWithOptions
+    ? (adapter as any).syncCatalogWithOptions(cursor, { brandIds })
+    : adapter.syncCatalog(cursor);
 
   for await (const batch of catalogIterator) {
     batchCount++;

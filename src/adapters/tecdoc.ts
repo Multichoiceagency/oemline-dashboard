@@ -285,21 +285,42 @@ export class TecDocAdapter extends BaseSupplierAdapter {
    *
    * Cursor format: "groupIndex:page" for resume capability
    */
+  /**
+   * syncCatalogWithOptions allows passing brandIds directly (overrides the DB setting).
+   * Used by the sync worker when a targeted per-brand sync is requested.
+   */
+  async *syncCatalogWithOptions(
+    cursor?: string,
+    opts?: { brandIds?: number[] }
+  ): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
+    yield* this.syncCatalogInternal(cursor, opts?.brandIds);
+  }
+
   async *syncCatalog(cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
+    yield* this.syncCatalogInternal(cursor);
+  }
+
+  private async *syncCatalogInternal(
+    cursor?: string,
+    overrideBrandIds?: number[]
+  ): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
     try {
-      // Load brand filter from DB settings (null = sync all brands)
-      let dataSupplierIds: number[] | undefined;
-      try {
-        const { prisma } = await import("../lib/prisma.js");
-        const row = await prisma.setting.findUnique({ where: { key: "tecdoc_brand_filter_ids" } });
-        if (row?.value) {
-          const ids = JSON.parse(row.value) as number[];
-          if (Array.isArray(ids) && ids.length > 0) dataSupplierIds = ids;
-        }
-      } catch { /* ignore — proceed without filter */ }
+      // Load brand filter: job-level override takes priority, then DB setting
+      let dataSupplierIds: number[] | undefined = overrideBrandIds;
+
+      if (!dataSupplierIds) {
+        try {
+          const { prisma } = await import("../lib/prisma.js");
+          const row = await prisma.setting.findUnique({ where: { key: "tecdoc_brand_filter_ids" } });
+          if (row?.value) {
+            const ids = JSON.parse(row.value) as number[];
+            if (Array.isArray(ids) && ids.length > 0) dataSupplierIds = ids;
+          }
+        } catch { /* ignore — proceed without filter */ }
+      }
 
       if (dataSupplierIds) {
-        logger.info({ supplier: this.code, brandCount: dataSupplierIds.length }, "TecDoc sync: brand filter active");
+        logger.info({ supplier: this.code, brandCount: dataSupplierIds.length, fromOverride: !!overrideBrandIds }, "TecDoc sync: brand filter active");
       }
 
       // Step 1: Discover assembly groups using facets
