@@ -173,18 +173,10 @@ export async function startScheduler(): Promise<void> {
   );
   logger.info("Scheduled OEM enrichment (6h)");
 
-  // IC catalog sync: every 48 hours — crawl all 3M+ products from IC API
-  // Fills intercars_mappings from 565K (CSV) to 3M+ (full API catalog)
-  // Takes 2-4h to complete; runs on ic-catalog or sync worker
-  await icCatalogQueue.add(
-    "ic-catalog-scheduled",
-    { skipDetails: true },
-    {
-      repeat: { every: 48 * 60 * 60 * 1000 },
-      jobId: "ic-catalog-repeat",
-    }
-  );
-  logger.info("Scheduled IC catalog sync (48h)");
+  // IC catalog sync via API: DISABLED — gets stuck on rate limiting (30 req/min × 3M+ products).
+  // The ic-csv-sync worker fills intercars_mappings from the daily ProductInformation CSV
+  // (same data, zero API calls, completes in ~2 min). ic-catalog API crawl is redundant.
+  logger.info("IC catalog API sync DISABLED — CSV worker handles intercars_mappings");
 
   // IC enrichment: DISABLED while catalog crawl is in progress.
   // IC enrich makes parallel API calls that flood the IC rate limit (60 req/min)

@@ -1,6 +1,7 @@
 import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { icMatchQueue } from "./queues.js";
 
 /**
  * IC CSV Sync Worker
@@ -143,6 +144,21 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
     stockProducts: stockMap.size,
     productRows: productRows.length,
   }, "IC CSV sync completed");
+
+  // Trigger ic-match after CSV import so new intercars_mappings rows get matched immediately.
+  // Only when ProductInformation was imported (new mapping data available).
+  if (productRows.length > 0) {
+    try {
+      await icMatchQueue.add(
+        "ic-match-after-csv",
+        { supplierCode: "intercars" },
+        { priority: 2, jobId: `ic-match-after-csv-${Date.now()}` }
+      );
+      logger.info("Queued ic-match after CSV import");
+    } catch (err) {
+      logger.warn({ err }, "Failed to queue ic-match after CSV (non-fatal)");
+    }
+  }
 
 }
 
