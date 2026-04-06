@@ -100,7 +100,7 @@ export default function EditCategoryPage() {
             <h2 className="text-2xl font-bold tracking-tight truncate">{category.name}</h2>
             <p className="text-muted-foreground text-sm">
               {category.tecdocId ? `TecDoc ID: ${category.tecdocId}` : "Handmatige categorie"}
-              {category.parent && <> &middot; Onder: <strong>{(category as any).parent.name}</strong></>}
+              {(category as any).parent && <> &middot; Onder: <strong>{(category as any).parent.name}</strong></>}
             </p>
           </div>
         </div>
