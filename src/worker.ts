@@ -181,7 +181,7 @@ if (handles("brand")) {
 if (handles("oem-enrich") || handles("sync")) {
   workers.push(new Worker("oem-enrich", processOemEnrichJob, {
     connection,
-    concurrency: 1, // Single job at a time — heavy API usage
+    concurrency: 3, // 3 parallel — TecDoc allows more parallelism
     stalledInterval: 600_000,
     lockDuration: 1_800_000,
   }));
@@ -192,7 +192,7 @@ if (handles("oem-enrich") || handles("sync")) {
 if (handles("ic-catalog") || handles("sync")) {
   workers.push(new Worker("ic-catalog", processIcCatalogJob, {
     connection,
-    concurrency: 1, // Single job — long-running crawl
+    concurrency: 2, // 2 parallel catalog crawls
     stalledInterval: 600_000,
     lockDuration: 7_200_000, // 2 hours — full crawl takes 2-4h
   }));
@@ -202,7 +202,7 @@ if (handles("ic-catalog") || handles("sync")) {
 if (handles("ic-csv-sync") || handles("pricing") || handles("sync")) {
   workers.push(new Worker("ic-csv-sync", processIcCsvSyncJob, {
     connection,
-    concurrency: 1,
+    concurrency: 2,
     stalledInterval: 600_000,
     lockDuration: 600_000, // 10 min — CSV sync is fast
   }));
@@ -213,10 +213,10 @@ if (handles("ic-csv-sync") || handles("pricing") || handles("sync")) {
 if (handles("ic-enrich") || handles("ic-match") || handles("sync")) {
   workers.push(new Worker("ic-enrich", processIcEnrichJob, {
     connection,
-    concurrency: 1, // Single job — heavy API + DB usage
-    stalledInterval: 1_800_000,  // 30 min stall check (was 10 min)
-    lockDuration: 7_200_000,     // 2 hour lock (was 1 hour) — 900K lookups take hours
-    maxStalledCount: 0,          // Never auto-fail on stall — this job is long-running
+    concurrency: 3, // 3 parallel enrichment jobs
+    stalledInterval: 1_800_000,
+    lockDuration: 7_200_000,
+    maxStalledCount: 0,
   }));
 }
 
