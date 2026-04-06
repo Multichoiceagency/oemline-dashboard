@@ -739,11 +739,13 @@ export const getStorageFiles = (prefix?: string) => {
 export const getStorageStats = () =>
   apiFetch<StorageStats>("/api/uploads/stats");
 
-export const uploadGenericFile = async (file: File, folder = "misc"): Promise<{ url: string; objectName: string }> => {
+export const uploadGenericFile = async (file: File, folder = "files"): Promise<{ url: string; objectName: string; filename: string; size: number }> => {
   const formData = new FormData();
   formData.append("file", file);
 
-  const url = `${API_BASE}/api/uploads/file?folder=${encodeURIComponent(folder)}`;
+  // Use /uploads/general — preserves original filename and uses folder path directly
+  // (avoids double images/ prefix that /uploads/file generates via generateObjectName)
+  const url = `${API_BASE}/api/uploads/general?folder=${encodeURIComponent(folder)}`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "X-API-Key": API_KEY },
@@ -752,7 +754,7 @@ export const uploadGenericFile = async (file: File, folder = "misc"): Promise<{ 
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as Record<string, string>).error || `Upload failed: ${res.status}`);
+    throw new Error((body as Record<string, string>).error || `Upload mislukt: HTTP ${res.status}`);
   }
 
   return res.json();

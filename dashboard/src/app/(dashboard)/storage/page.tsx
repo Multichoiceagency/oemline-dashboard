@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef } from "react";
 import { useApi } from "@/lib/hooks";
 import {
   getStorageFiles,
@@ -57,7 +57,7 @@ function formatBytes(bytes: number): string {
 }
 
 function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString("en-US", {
+  return new Date(dateStr).toLocaleDateString("nl-NL", {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -84,14 +84,25 @@ function isImageFile(name: string): boolean {
   return ["jpg", "jpeg", "png", "webp", "gif", "svg"].includes(ext);
 }
 
+// Quick-filter tabs
+const QUICK_FILTERS = [
+  { label: "Alle bestanden", prefix: "" },
+  { label: "Afbeeldingen", prefix: "images/" },
+  { label: "Product afbeeldingen", prefix: "images/products/" },
+  { label: "Merklogo's", prefix: "images/brands/" },
+  { label: "Bestanden", prefix: "files/" },
+  { label: "Data", prefix: "data/" },
+];
+
 export default function StoragePage() {
-  const [prefix, setPrefix] = useState("");
+  const [prefix, setPrefix] = useState("images/");
   const [searchInput, setSearchInput] = useState("");
-  const [uploadFolder, setUploadFolder] = useState("files");
+  const [uploadFolder, setUploadFolder] = useState("images/products");
   const [uploading, setUploading] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<StorageFile | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const {
@@ -110,12 +121,15 @@ export default function StoragePage() {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
+    setUploadError(null);
     try {
       await uploadGenericFile(file, uploadFolder);
+      // After upload, navigate to the folder we uploaded to
+      setPrefix(uploadFolder.endsWith("/") ? uploadFolder : uploadFolder + "/");
       refetchFiles();
       refetchStats();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Upload failed");
+      setUploadError(err instanceof Error ? err.message : "Upload mislukt");
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -123,14 +137,14 @@ export default function StoragePage() {
   };
 
   const handleDelete = async (objectName: string) => {
-    if (!confirm(`Delete ${objectName}?`)) return;
+    if (!confirm(`Bestand verwijderen: ${objectName}?`)) return;
     setDeleting(objectName);
     try {
       await deleteStorageFile(objectName);
       refetchFiles();
       refetchStats();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Delete failed");
+      alert(err instanceof Error ? err.message : "Verwijderen mislukt");
     } finally {
       setDeleting(null);
     }
@@ -153,17 +167,18 @@ export default function StoragePage() {
     setPrefix(parts.length > 0 ? parts.join("/") + "/" : "");
   };
 
-  // Get unique top-level folders from current view
+  // Build folder/file lists from current level
   const folders = new Set<string>();
   const files: StorageFile[] = [];
 
   if (filesData?.items) {
     for (const item of filesData.items) {
       const relativePath = prefix ? item.name.slice(prefix.length) : item.name;
+      if (!relativePath) continue; // skip the prefix itself if it appears
       const slashIdx = relativePath.indexOf("/");
       if (slashIdx > 0) {
         folders.add(relativePath.slice(0, slashIdx));
-      } else {
+      } else if (slashIdx === -1) {
         files.push(item);
       }
     }
@@ -178,12 +193,15 @@ export default function StoragePage() {
 
   const sortedFolders = Array.from(folders).sort();
 
+  // Active quick filter
+  const activeQuickFilter = QUICK_FILTERS.find((f) => f.prefix === prefix)?.label ?? null;
+
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Storage</h2>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Opslag</h2>
         <p className="text-muted-foreground text-sm">
-          Manage files in MinIO object storage
+          Beheer bestanden in MinIO objectopslag
         </p>
       </div>
 
@@ -196,13 +214,9 @@ export default function StoragePage() {
                 <HardDrive className="h-5 w-5 text-blue-600 dark:text-blue-400" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Total Files</p>
+                <p className="text-sm text-muted-foreground">Totaal bestanden</p>
                 <p className="text-2xl font-bold">
-                  {loadingStats ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  ) : (
-                    stats?.totalFiles ?? 0
-                  )}
+                  {loadingStats ? <Loader2 className="h-5 w-5 animate-spin" /> : (stats?.totalFiles ?? 0)}
                 </p>
               </div>
             </div>
@@ -215,13 +229,9 @@ export default function StoragePage() {
                 <Download className="h-5 w-5 text-green-600 dark:text-green-400" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Total Size</p>
+                <p className="text-sm text-muted-foreground">Totale grootte</p>
                 <p className="text-2xl font-bold">
-                  {loadingStats ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  ) : (
-                    formatBytes(stats?.totalSize ?? 0)
-                  )}
+                  {loadingStats ? <Loader2 className="h-5 w-5 animate-spin" /> : formatBytes(stats?.totalSize ?? 0)}
                 </p>
               </div>
             </div>
@@ -234,13 +244,9 @@ export default function StoragePage() {
                 <FolderOpen className="h-5 w-5 text-purple-600 dark:text-purple-400" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Folders</p>
+                <p className="text-sm text-muted-foreground">Mappen</p>
                 <p className="text-2xl font-bold">
-                  {loadingStats ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                  ) : (
-                    Object.keys(stats?.folders ?? {}).length
-                  )}
+                  {loadingStats ? <Loader2 className="h-5 w-5 animate-spin" /> : Object.keys(stats?.folders ?? {}).length}
                 </p>
               </div>
             </div>
@@ -248,31 +254,20 @@ export default function StoragePage() {
         </Card>
       </div>
 
-      {/* Folder Stats */}
-      {stats?.folders && Object.keys(stats.folders).length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Folders Overview</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-2">
-              {Object.entries(stats.folders)
-                .sort(([, a], [, b]) => b.size - a.size)
-                .map(([folder, info]) => (
-                  <Badge
-                    key={folder}
-                    variant="secondary"
-                    className="cursor-pointer hover:bg-accent"
-                    onClick={() => navigateToFolder(folder)}
-                  >
-                    <FolderOpen className="h-3 w-3 mr-1" />
-                    {folder} ({info.count} files, {formatBytes(info.size)})
-                  </Badge>
-                ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Quick filter tabs */}
+      <div className="flex flex-wrap gap-2">
+        {QUICK_FILTERS.map((f) => (
+          <Button
+            key={f.prefix}
+            size="sm"
+            variant={prefix === f.prefix ? "default" : "outline"}
+            onClick={() => { setPrefix(f.prefix); setSearchInput(""); }}
+          >
+            {f.prefix.startsWith("images") ? <ImageIcon className="h-3.5 w-3.5 mr-1.5" /> : <FolderOpen className="h-3.5 w-3.5 mr-1.5" />}
+            {f.label}
+          </Button>
+        ))}
+      </div>
 
       {/* Upload + Search */}
       <Card>
@@ -280,17 +275,13 @@ export default function StoragePage() {
           <div className="flex flex-col sm:flex-row gap-3">
             <div className="flex gap-2 flex-1">
               <Input
-                placeholder="Search files..."
+                placeholder="Zoek bestanden..."
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 className="max-w-sm"
               />
               {searchInput && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setSearchInput("")}
-                >
+                <Button variant="ghost" size="sm" onClick={() => setSearchInput("")}>
                   <X className="h-4 w-4" />
                 </Button>
               )}
@@ -301,9 +292,10 @@ export default function StoragePage() {
                 onChange={(e) => setUploadFolder(e.target.value)}
                 className="rounded-md border px-3 py-2 text-sm bg-background"
               >
-                <option value="files">files/</option>
                 <option value="images/products">images/products/</option>
                 <option value="images/brands">images/brands/</option>
+                <option value="images/general">images/general/</option>
+                <option value="files">files/</option>
                 <option value="data">data/</option>
                 <option value="backups">backups/</option>
               </select>
@@ -313,29 +305,22 @@ export default function StoragePage() {
                 className="hidden"
                 onChange={handleUpload}
               />
-              <Button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-              >
-                {uploading ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Upload className="mr-2 h-4 w-4" />
-                )}
+              <Button onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
                 Upload
               </Button>
               <Button
                 variant="outline"
                 size="icon"
-                onClick={() => {
-                  refetchFiles();
-                  refetchStats();
-                }}
+                onClick={() => { refetchFiles(); refetchStats(); }}
               >
                 <RefreshCw className="h-4 w-4" />
               </Button>
             </div>
           </div>
+          {uploadError && (
+            <p className="mt-2 text-sm text-destructive">{uploadError}</p>
+          )}
         </CardContent>
       </Card>
 
@@ -344,52 +329,38 @@ export default function StoragePage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <HardDrive className="h-5 w-5" />
-            {prefix ? (
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 px-1"
-                  onClick={() => setPrefix("")}
-                >
-                  root
-                </Button>
-                {prefix
-                  .split("/")
-                  .filter(Boolean)
-                  .map((part, i, arr) => (
-                    <span key={i} className="flex items-center">
-                      <span className="text-muted-foreground">/</span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 px-1"
-                        onClick={() =>
-                          navigateToFolder(arr.slice(0, i + 1).join("/"))
-                        }
-                      >
-                        {part}
-                      </Button>
-                    </span>
-                  ))}
-              </div>
-            ) : (
-              "All Files"
-            )}
+            {/* Breadcrumb */}
+            <div className="flex items-center gap-1 flex-wrap">
+              <button
+                className="hover:underline text-sm font-normal text-muted-foreground"
+                onClick={() => setPrefix("")}
+              >
+                root
+              </button>
+              {prefix
+                .split("/")
+                .filter(Boolean)
+                .map((part, i, arr) => (
+                  <span key={i} className="flex items-center">
+                    <span className="text-muted-foreground text-sm">/</span>
+                    <button
+                      className="hover:underline text-sm px-1"
+                      onClick={() => navigateToFolder(arr.slice(0, i + 1).join("/"))}
+                    >
+                      {part}
+                    </button>
+                  </span>
+                ))}
+            </div>
             <Badge variant="outline" className="ml-auto">
-              {filesData?.total ?? 0} objects
+              {filesData?.total ?? 0} bestanden
             </Badge>
           </CardTitle>
         </CardHeader>
         <CardContent>
           {prefix && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="mb-3"
-              onClick={goUp}
-            >
-              <ArrowLeft className="h-4 w-4 mr-1" /> Back
+            <Button variant="ghost" size="sm" className="mb-3" onClick={goUp}>
+              <ArrowLeft className="h-4 w-4 mr-1" /> Terug
             </Button>
           )}
 
@@ -399,109 +370,105 @@ export default function StoragePage() {
             </div>
           ) : !filesData?.items.length ? (
             <p className="text-muted-foreground text-center py-8">
-              No files found
+              Geen bestanden gevonden
             </p>
           ) : (
             <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-8"></TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Size</TableHead>
-                  <TableHead className="hidden sm:table-cell">Modified</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {/* Folders */}
-                {sortedFolders.map((folder) => (
-                  <TableRow
-                    key={`folder-${folder}`}
-                    className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => navigateToFolder(prefix + folder)}
-                  >
-                    <TableCell>
-                      <FolderOpen className="h-4 w-4 text-yellow-500" />
-                    </TableCell>
-                    <TableCell className="font-medium">{folder}/</TableCell>
-                    <TableCell className="text-muted-foreground">-</TableCell>
-                    <TableCell className="text-muted-foreground hidden sm:table-cell">-</TableCell>
-                    <TableCell></TableCell>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-8"></TableHead>
+                    <TableHead>Naam</TableHead>
+                    <TableHead>Grootte</TableHead>
+                    <TableHead className="hidden sm:table-cell">Gewijzigd</TableHead>
+                    <TableHead className="text-right">Acties</TableHead>
                   </TableRow>
-                ))}
-
-                {/* Files */}
-                {filteredFiles.map((file) => {
-                  const displayName = prefix
-                    ? file.name.slice(prefix.length)
-                    : file.name;
-                  return (
-                    <TableRow key={file.name}>
-                      <TableCell>{getFileIcon(file.name)}</TableCell>
+                </TableHeader>
+                <TableBody>
+                  {/* Folders */}
+                  {sortedFolders.map((folder) => (
+                    <TableRow
+                      key={`folder-${folder}`}
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => navigateToFolder(prefix + folder)}
+                    >
                       <TableCell>
-                        <button
-                          className="font-mono text-xs hover:underline text-left"
-                          onClick={() =>
-                            isImageFile(file.name)
-                              ? setPreviewFile(file)
-                              : window.open(file.url, "_blank")
-                          }
-                        >
-                          {displayName}
-                        </button>
+                        <FolderOpen className="h-4 w-4 text-yellow-500" />
                       </TableCell>
-                      <TableCell className="text-sm">
-                        {formatBytes(file.size)}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground hidden sm:table-cell">
-                        {formatDate(file.lastModified)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex gap-1 justify-end">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 w-7 p-0"
-                            onClick={() => copyUrl(file.url)}
-                            title="Copy URL"
-                          >
-                            {copiedUrl === file.url ? (
-                              <Check className="h-3 w-3 text-green-500" />
-                            ) : (
-                              <Copy className="h-3 w-3" />
-                            )}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 w-7 p-0"
-                            onClick={() => window.open(file.url, "_blank")}
-                            title="Download"
-                          >
-                            <Download className="h-3 w-3" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                            onClick={() => handleDelete(file.name)}
-                            disabled={deleting === file.name}
-                            title="Delete"
-                          >
-                            {deleting === file.name ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-3 w-3" />
-                            )}
-                          </Button>
-                        </div>
-                      </TableCell>
+                      <TableCell className="font-medium">{folder}/</TableCell>
+                      <TableCell className="text-muted-foreground">—</TableCell>
+                      <TableCell className="text-muted-foreground hidden sm:table-cell">—</TableCell>
+                      <TableCell></TableCell>
                     </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+                  ))}
+
+                  {/* Files */}
+                  {filteredFiles.map((file) => {
+                    const displayName = prefix ? file.name.slice(prefix.length) : file.name;
+                    return (
+                      <TableRow key={file.name}>
+                        <TableCell>{getFileIcon(file.name)}</TableCell>
+                        <TableCell>
+                          <button
+                            className="font-mono text-xs hover:underline text-left break-all"
+                            onClick={() =>
+                              isImageFile(file.name)
+                                ? setPreviewFile(file)
+                                : window.open(file.url, "_blank")
+                            }
+                          >
+                            {displayName}
+                          </button>
+                        </TableCell>
+                        <TableCell className="text-sm">{formatBytes(file.size)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground hidden sm:table-cell">
+                          {formatDate(file.lastModified)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex gap-1 justify-end">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0"
+                              onClick={() => copyUrl(file.url)}
+                              title="Kopieer URL"
+                            >
+                              {copiedUrl === file.url ? (
+                                <Check className="h-3 w-3 text-green-500" />
+                              ) : (
+                                <Copy className="h-3 w-3" />
+                              )}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0"
+                              onClick={() => window.open(file.url, "_blank")}
+                              title="Openen"
+                            >
+                              <Download className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                              onClick={() => handleDelete(file.name)}
+                              disabled={deleting === file.name}
+                              title="Verwijderen"
+                            >
+                              {deleting === file.name ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3 w-3" />
+                              )}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             </div>
           )}
         </CardContent>
@@ -510,9 +477,7 @@ export default function StoragePage() {
       {/* Image Preview Dialog */}
       <Dialog
         open={!!previewFile}
-        onOpenChange={(open) => {
-          if (!open) setPreviewFile(null);
-        }}
+        onOpenChange={(open) => { if (!open) setPreviewFile(null); }}
       >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -531,42 +496,27 @@ export default function StoragePage() {
               </div>
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
-                  <p className="text-xs text-muted-foreground">Size</p>
+                  <p className="text-xs text-muted-foreground">Grootte</p>
                   <p>{formatBytes(previewFile.size)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Modified</p>
+                  <p className="text-xs text-muted-foreground">Gewijzigd</p>
                   <p>{formatDate(previewFile.lastModified)}</p>
                 </div>
               </div>
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">URL</p>
                 <div className="flex gap-2">
-                  <Input
-                    readOnly
-                    value={previewFile.url}
-                    className="font-mono text-xs"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => copyUrl(previewFile.url)}
-                  >
-                    {copiedUrl === previewFile.url ? (
-                      <Check className="h-4 w-4" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
+                  <Input readOnly value={previewFile.url} className="font-mono text-xs" />
+                  <Button variant="outline" size="sm" onClick={() => copyUrl(previewFile.url)}>
+                    {copiedUrl === previewFile.url ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                   </Button>
                 </div>
               </div>
             </div>
           )}
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => window.open(previewFile?.url, "_blank")}
-            >
+            <Button variant="outline" onClick={() => window.open(previewFile?.url, "_blank")}>
               <Download className="mr-2 h-4 w-4" /> Download
             </Button>
             <Button
@@ -578,7 +528,7 @@ export default function StoragePage() {
                 }
               }}
             >
-              <Trash2 className="mr-2 h-4 w-4" /> Delete
+              <Trash2 className="mr-2 h-4 w-4" /> Verwijderen
             </Button>
           </DialogFooter>
         </DialogContent>
