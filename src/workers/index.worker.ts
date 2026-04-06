@@ -72,8 +72,15 @@ export async function processIndexJob(job: Job<IndexJobData>): Promise<void> {
       const oemNumbers = Array.isArray(p.oemNumbers) ? (p.oemNumbers as string[]) : [];
       const images = Array.isArray(p.images) ? (p.images as string[]) : [];
 
+      // Normalized article key for deduplication (brand + articleNo, lowercase, no special chars).
+      // Meilisearch distinctAttribute returns only 1 result per articleKey.
+      // Products prefer: has price > has image > has description (via ranking rules).
+      const normalizedArticle = (p.articleNo ?? p.sku).toLowerCase().replace(/[^a-z0-9]/g, "");
+      const articleKey = `${p.brand.code}_${normalizedArticle}`;
+
       return {
         id: sanitizeDocId(`${p.supplier.code}_${p.sku}`),
+        articleKey,  // used for deduplication (distinctAttribute)
         supplier: p.supplier.code,
         supplierName: p.supplier.name,
         sku: p.sku,

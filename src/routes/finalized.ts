@@ -105,12 +105,23 @@ export async function finalizedRoutes(app: FastifyInstance) {
       }
     }
 
-    const [items, total] = await Promise.all([
+    // When searching (q is set): fetch extra rows and deduplicate in memory.
+    // Same brand+articleNo can exist from multiple suppliers (TecDoc, IC, VanWezel, etc.)
+    // Keep the "best" version: has price > has image > most recently updated.
+    const isSearchQuery = !!q;
+    const fetchLimit = isSearchQuery ? Math.min(limit * 4, 500) : limit;
+    const fetchSkip = isSearchQuery ? 0 : skip; // dedup pagination is approximated for q-searches
+
+    const [rawItems, total] = await Promise.all([
       prisma.productMap.findMany({
         where,
-        skip,
-        take: limit,
-        orderBy: { updatedAt: "desc" },
+        skip: fetchSkip,
+        take: fetchLimit,
+        orderBy: [
+          { price: { sort: "desc", nulls: "last" } }, // prefer products with price
+          { imageUrl: { sort: "desc", nulls: "last" } }, // then with image
+          { updatedAt: "desc" },
+        ],
         include: {
           brand: { select: { id: true, name: true, code: true, logoUrl: true } },
           category: { select: { id: true, name: true, code: true } },
@@ -119,6 +130,23 @@ export async function finalizedRoutes(app: FastifyInstance) {
       }),
       prisma.productMap.count({ where }),
     ]);
+
+    // Deduplicate: keep 1 product per brand + normalized articleNo
+    let items: typeof rawItems;
+    let deduplicatedTotal = total;
+    if (isSearchQuery) {
+      const seen = new Map<string, typeof rawItems[0]>();
+      for (const item of rawItems) {
+        const key = `${item.brandId}_${(item.articleNo ?? item.sku).toUpperCase().replace(/[^A-Z0-9]/g, "")}`;
+        if (!seen.has(key)) seen.set(key, item);
+      }
+      const allDeduped = Array.from(seen.values());
+      const pageStart = skip; // use original skip for the deduped array
+      items = allDeduped.slice(pageStart, pageStart + limit);
+      deduplicatedTotal = allDeduped.length;
+    } else {
+      items = rawItems;
+    }
 
     // Fetch IC mappings for returned products via LATERAL join (one mapping per product)
     let icMappings = new Map<number, IcMappingRow>();
@@ -221,10 +249,10 @@ export async function finalizedRoutes(app: FastifyInstance) {
 
     const result = {
       items: finalizedItems,
-      total,
+      total: deduplicatedTotal,
       page,
       limit,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.ceil(deduplicatedTotal / limit),
       pricing: {
         taxRate: taxRate * 100,
         marginPercentage: marginPct * 100,

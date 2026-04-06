@@ -30,6 +30,7 @@ export async function ensureProductsIndex(): Promise<void> {
       "supplier",
       "brand",
       "brandCode",
+      "articleKey",
       "ean",
       "tecdocId",
       "oem",
@@ -53,8 +54,16 @@ export async function ensureProductsIndex(): Promise<void> {
       "typo",
       "proximity",
       "attribute",
+      // Price > 0 first (prefer products with a known price)
+      "price:desc",
+      // Higher stock first (prefer products in stock)
+      "stock:desc",
       "sort",
       "exactness",
     ],
+    // Dedupliceren: 1 resultaat per uniek brand+articleNo combinatie.
+    // Voorkomt dat hetzelfde product van meerdere suppliers dubbel verschijnt.
+    // Meilisearch kiest het hoogst gerankte document (met prijs > zonder prijs).
+    distinctAttribute: "articleKey",
   });
 }
