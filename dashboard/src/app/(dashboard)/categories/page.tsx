@@ -69,13 +69,13 @@ export default function CategoriesPage() {
   const [mergeResult, setMergeResult] = useState<{ targetCategory: { name: string }; productsMoved: number; deleted: number } | null>(null);
 
   const { data, loading, refetch } = useApi(
-    () => getCategories({ page, limit: 100, parentId, q: searchQuery || undefined }),
+    () => getCategories({ page, limit: 100, parentId, q: searchQuery || undefined, hideEmpty: "false" }),
     [page, parentId, searchQuery]
   );
 
   // All categories for "existing" target dropdown
   const { data: allCats } = useApi(
-    () => getCategories({ limit: 250, q: "" }),
+    () => getCategories({ limit: 250, q: "", hideEmpty: "false" }),
     []
   );
 
