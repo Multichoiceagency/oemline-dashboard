@@ -390,6 +390,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
       let totalYielded = 0;
       const perPage = 100;
       const MAX_PAGES_PER_GROUP = 100; // TecDoc's hard limit
+      const PAGE_LIMIT_THRESHOLD = perPage * MAX_PAGES_PER_GROUP; // 10,000
       let fetchDelay = 50; // Adaptive delay — starts low, increases on errors
 
       for (let gi = startGroupIdx; gi < groups.length; gi++) {
@@ -399,6 +400,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
         let page = gi === startGroupIdx ? startPage : 1;
         let groupYielded = 0;
         let consecutiveErrors = 0;
+        let groupHitPageLimit = false;
 
         while (page <= MAX_PAGES_PER_GROUP) {
           try {
@@ -431,6 +433,11 @@ export class TecDocAdapter extends BaseSupplierAdapter {
             const groupTotal = result.totalMatchingArticles ?? 0;
             if (groupTotal > 0 && page * perPage >= groupTotal) break;
 
+            // Detect if this group exceeds the page limit (has more articles than 10K)
+            if (page === MAX_PAGES_PER_GROUP && groupTotal > PAGE_LIMIT_THRESHOLD) {
+              groupHitPageLimit = true;
+            }
+
             page++;
             await new Promise((r) => setTimeout(r, fetchDelay));
           } catch (err) {
@@ -456,6 +463,56 @@ export class TecDocAdapter extends BaseSupplierAdapter {
               "TecDoc group skipped after repeated failures"
             );
             break;
+          }
+        }
+
+        // If this group hit the 10K page limit and we have brand IDs,
+        // re-fetch per brand to get the remaining articles beyond 10K.
+        if (groupHitPageLimit && dataSupplierIds && dataSupplierIds.length > 1) {
+          logger.info(
+            { supplier: this.code, group: group.assemblyGroupName, groupYielded },
+            "Group hit 10K page limit — sub-partitioning by brand to fetch remaining articles"
+          );
+
+          for (const brandId of dataSupplierIds) {
+            let brandPage = 1;
+            let brandYielded = 0;
+
+            while (brandPage <= MAX_PAGES_PER_GROUP) {
+              try {
+                const result = (await this.tecdocRequest("getArticles", {
+                  assemblyGroupNodeIds: [group.assemblyGroupNodeId],
+                  dataSupplierIds: [brandId],
+                  perPage,
+                  page: brandPage,
+                  includeOemNumbers: true,
+                  includeEanNumbers: true,
+                  includeImages: true,
+                })) as GetArticlesResponse;
+
+                const articles = result.articles ?? [];
+                if (articles.length === 0) break;
+
+                const items = this.mapArticlesToCatalogItems(articles, group.assemblyGroupNodeId);
+                yield items;
+                brandYielded += items.length;
+                totalYielded += items.length;
+
+                if (articles.length < perPage) break;
+
+                const brandTotal = result.totalMatchingArticles ?? 0;
+                if (brandTotal > 0 && brandPage * perPage >= brandTotal) break;
+
+                brandPage++;
+                await new Promise((r) => setTimeout(r, fetchDelay));
+              } catch {
+                break;
+              }
+            }
+
+            if (brandYielded > 0) {
+              groupYielded += brandYielded;
+            }
           }
         }
 
