@@ -534,7 +534,7 @@ async function searchIcByIndex(index: string): Promise<IcProduct | null> {
 // No abbreviation guessing — each entry is a verified name difference.
 const MANUAL_ALIASES_FULL: Record<string, string> = {
   // Verified different names (IC name → TecDoc name)
-  "BLIC": "DIEDERICHS",                // BLIC is IC house brand for DIEDERICHS parts
+  // "BLIC": "DIEDERICHS" — removed: Diederichs has its own API, should not be linked to InterCars
   "KAYABA": "KYB",                     // KYB was formerly Kayaba (company renamed)
   "HANS PRIES": "HP",                  // Hans Pries is the full name, HP is the TecDoc brand
   "LEMFOERDER": "LEMFÖRDER",           // Umlaut difference (oe vs ö)

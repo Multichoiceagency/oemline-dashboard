@@ -694,7 +694,7 @@ export async function intercarsRoutes(app: FastifyInstance) {
       { icBrand: "BLUE PRINT ADL", tecdocName: "BLUE PRINT" },
       { icBrand: "CHAMPION LABS", tecdocName: "CHAMPION" },
       // Body parts / lighting brands (map to closest TecDoc brand if same products)
-      { icBrand: "BLIC", tecdocName: "DIEDERICHS" },
+      // NOTE: BLIC → DIEDERICHS removed — Diederichs has its own API and should not be linked to InterCars
       { icBrand: "DEPO", tecdocName: "TYC" },
       // FAG variants → Schaeffler FAG
       { icBrand: "FAG ZAWIESZENIE", tecdocName: "Schaeffler FAG" },
