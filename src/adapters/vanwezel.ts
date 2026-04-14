@@ -111,21 +111,28 @@ export class VanWezelAdapter extends BaseSupplierAdapter {
 
     const data = (await response.json()) as {
       Stock?: {
-        ArticleId?: string;
-        Qty?: string | number;
-        Price?: string | number;
-        Success?: number | string;
-        ErrorMessage?: string;
+        // API returns both PascalCase and kebab-case depending on format
+        ArticleId?: string; "product-id"?: string;
+        Qty?: string | number; amount?: string | number;
+        Price?: string | number; price?: string | number;
+        Success?: number | string; success?: number | string;
+        ErrorMessage?: string; "error-message"?: string;
       };
     };
 
     const s = data?.Stock;
-    if (!s || String(s.Success) === "0" || !s.Success) return null;
+    if (!s) return null;
 
-    const qty = typeof s.Qty === "string" ? parseInt(s.Qty, 10) : (s.Qty ?? 0);
-    const rawPrice = typeof s.Price === "string" ? parseFloat(s.Price) : (s.Price ?? null);
-    const price = rawPrice && rawPrice > 0 ? Math.round(rawPrice * 100) / 100 : null;
+    const success = String(s.Success ?? s.success ?? "0");
+    const rawQty = s.Qty ?? s.amount ?? 0;
+    const qty = typeof rawQty === "string" ? parseInt(rawQty, 10) : (rawQty ?? 0);
+    const rawPrice = s.Price ?? s.price ?? null;
+    const priceNum = rawPrice != null ? (typeof rawPrice === "string" ? parseFloat(rawPrice) : rawPrice) : null;
+    const price = priceNum != null && priceNum > 0 ? Math.round(priceNum * 100) / 100 : null;
 
+    // Always return price+stock — even when Success=0 (out of stock),
+    // the API still returns the gross price per the VWA docs.
+    if (success === "0" && !price) return null; // truly unknown article (error 3)
     return { price, stock: Math.max(0, Number(qty) || 0) };
   }
 

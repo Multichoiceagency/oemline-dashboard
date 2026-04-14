@@ -16,10 +16,10 @@ import { logger } from "../lib/logger.js";
  * Protocol: SOAP 1.1 with SOAPAction header
  *
  * Supported operations:
- *   - GetArticleInformation: batch stock query (up to 500 items per call)
+ *   - GetArticleInformation: batch stock + price query (up to 500 items per call)
+ *     Returns Warehouses (stock), Prices (Value, VAT, Rebate, PriceCode), AvailState
  *
  * NOT supported via API (requires FTP manual import):
- *   - Prices (negotiated, updated every ~3 months via FTP)
  *   - Catalog sync (product list from FTP)
  */
 export class DiederichsAdapter extends BaseSupplierAdapter {
@@ -45,9 +45,9 @@ export class DiederichsAdapter extends BaseSupplierAdapter {
   }
 
   /**
-   * Fetch stock for a batch of Diederichs WholesalerArticleNumbers.
+   * Fetch stock + price for a batch of Diederichs WholesalerArticleNumbers.
    * Returns a Map of articleNo → { price, currency, stock }.
-   * Price is always null — prices come from FTP, not the API.
+   * Prices are parsed from the DVSE Prices array in the GetArticleInformation response.
    */
   async fetchQuoteBatch(
     articleNumbers: string[]
@@ -117,9 +117,16 @@ export class DiederichsAdapter extends BaseSupplierAdapter {
     return [];
   }
 
-  async getPrice(_sku: string): Promise<{ price: number; currency: string } | null> {
-    // Prices are loaded from FTP price files, not real-time API
-    return null;
+  async getPrice(sku: string): Promise<{ price: number; currency: string } | null> {
+    try {
+      const result = await this.fetchQuoteBatch([sku]);
+      const item = result.get(sku);
+      if (!item?.price) return null;
+      return { price: item.price, currency: item.currency };
+    } catch (err) {
+      logger.error({ err, supplier: this.code, sku }, "Diederichs getPrice failed");
+      return null;
+    }
   }
 
   async getStock(sku: string): Promise<{ quantity: number; available: boolean } | null> {
@@ -172,6 +179,15 @@ function extractText(xml: string, tag: string): string | undefined {
  *             <Quantities><Quantity><Value>N</Value></Quantity></Quantities>
  *           </Warehouse>
  *         </Warehouses>
+ *         <Prices>
+ *           <Price>
+ *             <Value>12.34</Value>
+ *             <VAT>19</VAT>
+ *             <TaxIncluded>false</TaxIncluded>
+ *             <CurrencyCode>EUR</CurrencyCode>
+ *             <PriceCode>1</PriceCode>
+ *           </Price>
+ *         </Prices>
  *       </Item>
  *     </Items>
  *     <ErrorCode>0</ErrorCode>
@@ -224,7 +240,6 @@ function parseArticleInformationResponse(
         const whXml = warehousesXml.slice(wStart + 11, wEnd);
         wSearch = wEnd + 12;
 
-        // Sum quantities within this warehouse
         let qSearch = 0;
         while (true) {
           const qStart = whXml.indexOf("<Quantity>", qSearch);
@@ -240,6 +255,34 @@ function parseArticleInformationResponse(
       }
     }
 
-    result.set(articleNo, { price: null, currency: "EUR", stock: Math.floor(totalStock) });
+    // Extract best price from Prices array
+    // PriceCode meanings vary per supplier; pick the first price with a positive Value
+    let bestPrice: number | null = null;
+    let currency = "EUR";
+    const pricesStart = itemXml.indexOf("<Prices>");
+    const pricesEnd = itemXml.indexOf("</Prices>");
+    if (pricesStart !== -1 && pricesEnd !== -1) {
+      const pricesXml = itemXml.slice(pricesStart + 8, pricesEnd);
+      let pSearch = 0;
+      while (true) {
+        const pStart = pricesXml.indexOf("<Price>", pSearch);
+        if (pStart === -1) break;
+        const pEnd = pricesXml.indexOf("</Price>", pStart);
+        if (pEnd === -1) break;
+        const pXml = pricesXml.slice(pStart + 7, pEnd);
+        pSearch = pEnd + 8;
+
+        const valStr = extractText(pXml, "Value");
+        const val = valStr ? parseFloat(valStr) : 0;
+        if (val > 0) {
+          const currCode = extractText(pXml, "CurrencyCode");
+          if (currCode) currency = currCode;
+          // Use the first valid price (typically the net/purchase price)
+          if (bestPrice === null) bestPrice = Math.round(val * 100) / 100;
+        }
+      }
+    }
+
+    result.set(articleNo, { price: bestPrice, currency, stock: Math.floor(totalStock) });
   }
 }
