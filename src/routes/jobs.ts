@@ -135,16 +135,19 @@ export async function jobRoutes(app: FastifyInstance) {
 
   // Manually trigger a stock refresh job for a supplier
   app.post("/jobs/stock", async (request) => {
-    const schema = z.object({ supplierCode: z.string().min(1).default("intercars") });
-    const { supplierCode } = schema.parse(request.body ?? {});
+    const schema = z.object({
+      supplierCode: z.string().min(1).default("intercars"),
+      staleMinutes: z.coerce.number().int().min(0).default(20),
+    });
+    const { supplierCode, staleMinutes } = schema.parse(request.body ?? {});
 
     const job = await stockQueue.add(
       `stock-manual-${supplierCode}`,
-      { supplierCode },
+      { supplierCode, staleMinutes },
       { priority: 1 }
     );
 
-    return { jobId: job.id, queue: "stock", supplierCode, status: "queued" };
+    return { jobId: job.id, queue: "stock", supplierCode, staleMinutes, status: "queued" };
   });
 
   // Manually trigger IC match job for a supplier
