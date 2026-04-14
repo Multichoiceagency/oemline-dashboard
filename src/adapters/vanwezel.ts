@@ -35,7 +35,7 @@ export class VanWezelAdapter extends BaseSupplierAdapter {
 
   // Service-level Basic auth — fixed per VWA docs
   private static readonly SERVICE_AUTH =
-    "Basic " + Buffer.from("WebSVWA: VanWezelAutoparts2024WS").toString("base64");
+    "Basic " + Buffer.from("WebSVWA:VanWezelAutoparts2024WS").toString("base64");
 
   private static readonly CONCURRENCY = 10;
 
@@ -109,31 +109,32 @@ export class VanWezelAdapter extends BaseSupplierAdapter {
 
     if (!response.ok) return null;
 
-    const data = (await response.json()) as {
-      Stock?: {
-        // API returns both PascalCase and kebab-case depending on format
-        ArticleId?: string; "product-id"?: string;
-        Qty?: string | number; amount?: string | number;
-        Price?: string | number; price?: string | number;
-        Success?: number | string; success?: number | string;
-        ErrorMessage?: string; "error-message"?: string;
-      };
-    };
+    // VWA API returns flat JSON (no wrapper): {"product-id":"...","amount":"0","price":"73,95","success":1}
+    // Price uses European comma format (e.g. "73,95" not "73.95")
+    const data = (await response.json()) as Record<string, unknown>;
 
-    const s = data?.Stock;
+    // Handle both wrapped (legacy {Stock:{...}}) and flat response formats
+    const s = (data?.Stock ?? data) as Record<string, unknown>;
     if (!s) return null;
 
-    const success = String(s.Success ?? s.success ?? "0");
-    const rawQty = s.Qty ?? s.amount ?? 0;
-    const qty = typeof rawQty === "string" ? parseInt(rawQty, 10) : (rawQty ?? 0);
-    const rawPrice = s.Price ?? s.price ?? null;
-    const priceNum = rawPrice != null ? (typeof rawPrice === "string" ? parseFloat(rawPrice) : rawPrice) : null;
-    const price = priceNum != null && priceNum > 0 ? Math.round(priceNum * 100) / 100 : null;
+    const success = String(s.Success ?? s.success ?? s["success"] ?? "0");
+    const rawQty = s.Qty ?? s.amount ?? s["amount"] ?? 0;
+    const qty = typeof rawQty === "string" ? parseInt(rawQty, 10) : (Number(rawQty) || 0);
 
-    // Always return price+stock — even when Success=0 (out of stock),
-    // the API still returns the gross price per the VWA docs.
-    if (success === "0" && !price) return null; // truly unknown article (error 3)
-    return { price, stock: Math.max(0, Number(qty) || 0) };
+    const rawPrice = s.Price ?? s.price ?? s["price"] ?? null;
+    let priceNum: number | null = null;
+    if (rawPrice != null) {
+      // European comma format: "73,95" → 73.95
+      const priceStr = String(rawPrice).replace(",", ".");
+      priceNum = parseFloat(priceStr);
+      if (!Number.isFinite(priceNum) || priceNum <= 0) priceNum = null;
+    }
+    const price = priceNum != null ? Math.round(priceNum * 100) / 100 : null;
+
+    // Return price+stock even when out of stock — VWA always returns price for valid articles.
+    // Only return null for truly unknown articles (success=0 AND no price).
+    if (success === "0" && !price) return null;
+    return { price, stock: Math.max(0, qty) };
   }
 
   /**
