@@ -856,6 +856,16 @@ export async function jobRoutes(app: FastifyInstance) {
       const supplier = await prisma.supplier.findUnique({ where: { code: "diederichs" } });
       if (!supplier) return { error: "Diederichs supplier not found" };
 
+      // Debug: check product count and sample SKUs
+      const [{ count: totalProducts }] = await prisma.$queryRawUnsafe<[{ count: bigint }]>(
+        `SELECT COUNT(*) as count FROM product_maps WHERE supplier_id = $1`, supplier.id
+      );
+      const sampleSkus = await prisma.$queryRawUnsafe<Array<{ sku: string; image_url: string | null }>>(
+        `SELECT sku, image_url FROM product_maps WHERE supplier_id = $1 LIMIT 5`, supplier.id
+      );
+      const sampleImageKeys = Object.keys(imageMap).slice(0, 5);
+      logger.info({ supplierId: supplier.id, totalProducts: Number(totalProducts), sampleDbSkus: sampleSkus, sampleImageKeys }, "Debug: supplier and SKU info");
+
       const BATCH = 500;
       const entries = Object.entries(imageMap);
       let updated = 0;
