@@ -759,11 +759,17 @@ export async function jobRoutes(app: FastifyInstance) {
       // Semicolon-separated, fields may be quoted
       const parts = line.split(";").map((p) => p.replace(/^"|"$/g, "").trim());
       const sku         = parts[0] ?? "";
-      const description = parts[4] ?? ""; // Bezeichnung
+      const manufacturer = parts[1] ?? ""; // Hersteller (car brand: VW, BMW, etc.)
+      const typ         = parts[2] ?? ""; // Typ (part name + vehicle: "STREBE-FRONTMASKE GOLF 7,")
+      const artGroup    = parts[3] ?? ""; // Art.Gruppe Txt (category: "KAROSSERIETEILE")
+      const bezeichnung = parts[4] ?? ""; // Bezeichnung (year range: "2012-2019")
       const status      = parts[6] ?? ""; // Status: "01" = active
       const priceRaw    = parts[7] ?? ""; // Nettopreis Handel (German comma decimal)
       const oeNumber    = parts[11] ?? ""; // OE-Nummer
       const ean         = parts[12] ?? "";
+      // Build a meaningful description from Typ + manufacturer + Bezeichnung
+      const descParts = [typ, manufacturer, bezeichnung].map(s => s.replace(/,\s*$/, "").trim()).filter(Boolean);
+      const description = descParts.join(" - ") || artGroup;
 
       if (!sku || !ean || !/^\d{8,14}$/.test(ean)) continue;
       if (status && status !== "01") continue; // skip inactive
