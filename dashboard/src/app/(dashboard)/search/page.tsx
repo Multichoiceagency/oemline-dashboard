@@ -146,7 +146,7 @@ export default function SearchPage() {
                       <TableHead className="hidden sm:table-cell">SKU</TableHead>
                       <TableHead>Brand</TableHead>
                       <TableHead>Article No.</TableHead>
-                      <TableHead className="hidden md:table-cell">Description</TableHead>
+                      <TableHead className="hidden md:table-cell">Product Title</TableHead>
                       <TableHead className="hidden lg:table-cell">EAN</TableHead>
                       <TableHead>Price</TableHead>
                       <TableHead>Stock</TableHead>

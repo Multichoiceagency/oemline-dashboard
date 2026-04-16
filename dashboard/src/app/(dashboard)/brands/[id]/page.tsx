@@ -390,7 +390,7 @@ export default function BrandDetailPage() {
                       <TableHead>Image</TableHead>
                       <TableHead>Article No.</TableHead>
                       <TableHead className="hidden md:table-cell">EAN</TableHead>
-                      <TableHead className="hidden sm:table-cell">Description</TableHead>
+                      <TableHead className="hidden sm:table-cell">Product Title</TableHead>
                       <TableHead>Price</TableHead>
                       <TableHead className="hidden sm:table-cell">Supplier</TableHead>
                     </TableRow>
@@ -427,8 +427,13 @@ export default function BrandDetailPage() {
                         <TableCell className="font-mono text-xs hidden md:table-cell">
                           {p.ean ?? "-"}
                         </TableCell>
-                        <TableCell className="max-w-[200px] truncate text-sm hidden sm:table-cell">
-                          {p.description || "-"}
+                        <TableCell className="max-w-[250px] text-sm hidden sm:table-cell">
+                          <div className="truncate font-medium">
+                            {[p.genericArticle, p.category?.name].filter(Boolean).join(" — ") || p.brand?.name || "-"}
+                          </div>
+                          {p.description && (
+                            <div className="truncate text-xs text-muted-foreground">{p.description}</div>
+                          )}
                         </TableCell>
                         <TableCell className="font-mono text-xs">
                           {p.price != null

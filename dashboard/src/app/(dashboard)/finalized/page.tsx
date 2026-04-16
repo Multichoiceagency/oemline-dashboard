@@ -499,7 +499,7 @@ export default function FinalizedPage() {
                       <TableHead className="w-[60px]">{t("filter.image")}</TableHead>
                       <TableHead>{t("finalized.articleNo")}</TableHead>
                       <TableHead>{t("finalized.brand")}</TableHead>
-                      <TableHead>{t("finalized.description")}</TableHead>
+                      <TableHead>Product Title</TableHead>
                       <TableHead>{t("filter.price")}</TableHead>
                       <TableHead>{t("finalized.stock")}</TableHead>
                       <TableHead>{t("finalized.supplier")}</TableHead>
@@ -651,8 +651,13 @@ function ProductRow({
           <span className="text-sm">{product.brand?.name}</span>
         </div>
       </TableCell>
-      <TableCell className="max-w-[250px] truncate text-sm">
-        {product.description}
+      <TableCell className="max-w-[250px] text-sm">
+        <div className="truncate font-medium">
+          {[product.genericArticle, product.category?.name].filter(Boolean).join(" — ") || product.brand?.name || "-"}
+        </div>
+        {product.description && (
+          <div className="truncate text-xs text-muted-foreground">{product.description}</div>
+        )}
       </TableCell>
       <TableCell>
         {product.price != null ? (

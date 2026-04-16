@@ -382,7 +382,7 @@ export default function ProductsPage() {
                   <TableHead>Article No.</TableHead>
                   <TableHead>Brand</TableHead>
                   <TableHead>Supplier</TableHead>
-                  <TableHead className="hidden md:table-cell">Description</TableHead>
+                  <TableHead className="hidden md:table-cell">Product Title</TableHead>
                   <TableHead>Price</TableHead>
                   <TableHead>Stock</TableHead>
                   <TableHead className="hidden lg:table-cell">Updated</TableHead>
@@ -414,8 +414,13 @@ export default function ProductsPage() {
                     <TableCell>
                       <Badge variant="secondary">{p.supplier?.name ?? "-"}</Badge>
                     </TableCell>
-                    <TableCell className="max-w-[200px] truncate text-sm hidden md:table-cell">
-                      {p.description || "-"}
+                    <TableCell className="max-w-[250px] text-sm hidden md:table-cell">
+                      <div className="truncate font-medium">
+                        {[p.genericArticle, p.category?.name].filter(Boolean).join(" — ") || p.brand?.name || "-"}
+                      </div>
+                      {p.description && (
+                        <div className="truncate text-xs text-muted-foreground">{p.description}</div>
+                      )}
                     </TableCell>
                     <TableCell>
                       {p.price != null ? (
