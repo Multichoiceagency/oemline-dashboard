@@ -834,8 +834,8 @@ export async function jobRoutes(app: FastifyInstance) {
 
   /**
    * Enrich Diederichs products with TecDoc images.
-   * Paginates through all Diederichs articles in TecDoc (dataSupplierId=253),
-   * extracts image URLs, and updates matching product_maps.
+   * Uses assemblyGroupFacets to partition queries (TecDoc limits to 10K per query)
+   * and paginates through all ~70K Diederichs articles.
    */
   app.post("/jobs/enrich-diederichs-images", {
     onRequest: async (request) => { request.raw.socket.setTimeout(900_000); },
@@ -851,77 +851,98 @@ export async function jobRoutes(app: FastifyInstance) {
     const supplier = await prisma.supplier.findUnique({ where: { code: "diederichs" } });
     if (!supplier) return { error: "Diederichs supplier not found" };
 
-    // Count products without images
-    const [{ count: noImageCount }] = await prisma.$queryRawUnsafe<[{ count: bigint }]>(
-      `SELECT COUNT(*) as count FROM product_maps WHERE supplier_id = $1 AND (image_url IS NULL OR image_url = '')`,
-      supplier.id
-    );
-    logger.info({ noImageCount: Number(noImageCount) }, "Diederichs products without images");
+    type TecDocArticle = {
+      articleNumber?: string;
+      genericArticleDescription?: string;
+      images?: Array<{ imageURL800?: string; imageURL400?: string }>;
+    };
+    type TecDocResponse = {
+      totalMatchingArticles?: number;
+      maxAllowedPage?: number;
+      articles?: TecDocArticle[];
+      status?: number;
+      assemblyGroupFacets?: { counts?: Array<{ assemblyGroupNodeId: number; assemblyGroupName: string; count: number }> };
+    };
 
-    // Paginate TecDoc to build articleNumber → imageUrl map
-    const imageMap = new Map<string, string>();
-    let page = 1;
-    let total = 0;
-
-    while (true) {
+    async function tecdocQuery(body: Record<string, unknown>): Promise<TecDocResponse> {
       const resp = await fetch(TECDOC_URL, {
         method: "POST",
         headers: { "X-Api-Key": config.TECDOC_API_KEY, "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok) return { status: resp.status };
+      return resp.json() as Promise<TecDocResponse>;
+    }
+
+    // Step 1: Get assembly group facets to partition queries
+    logger.info("Fetching Diederichs assembly group facets from TecDoc...");
+    const facetResp = await tecdocQuery({
+      getArticles: {
+        articleCountry: "NL", lang: "nl", providerId: 22691,
+        dataSupplierIds: [DIEDERICHS_SUPPLIER_ID],
+        perPage: 0,
+        assemblyGroupFacetOptions: { enabled: true, assemblyGroupType: "P" },
+      },
+    });
+
+    const groups = facetResp.assemblyGroupFacets?.counts ?? [];
+    // Deduplicate: same group can appear at multiple tree levels with same count
+    const seen = new Set<number>();
+    const uniqueGroups = groups.filter((g) => {
+      if (seen.has(g.assemblyGroupNodeId)) return false;
+      seen.add(g.assemblyGroupNodeId);
+      return g.count > 0;
+    });
+    // Sort largest first for better progress feedback
+    uniqueGroups.sort((a, b) => b.count - a.count);
+
+    logger.info({ groups: uniqueGroups.length, totalArticles: facetResp.totalMatchingArticles }, "Assembly group facets loaded");
+
+    // Step 2: Paginate each group to collect all images
+    const imageMap = new Map<string, string>();
+    let groupsDone = 0;
+    let articlesScanned = 0;
+
+    for (const group of uniqueGroups) {
+      let page = 1;
+      while (true) {
+        const data = await tecdocQuery({
           getArticles: {
-            articleCountry: "NL",
-            lang: "nl",
-            providerId: 22691,
+            articleCountry: "NL", lang: "nl", providerId: 22691,
             dataSupplierIds: [DIEDERICHS_SUPPLIER_ID],
+            assemblyGroupNodeIds: [group.assemblyGroupNodeId],
             includeImages: true,
             perPage: PER_PAGE,
             page,
           },
-        }),
-      });
+        });
 
-      if (!resp.ok) {
-        logger.warn({ status: resp.status, page }, "TecDoc request failed");
-        break;
+        if (data.status !== 200 || !data.articles?.length) break;
+
+        for (const art of data.articles) {
+          if (!art.articleNumber) continue;
+          articlesScanned++;
+          const img = art.images?.[0];
+          const url = img?.imageURL800 ?? img?.imageURL400;
+          if (url) imageMap.set(art.articleNumber, url);
+        }
+
+        if (data.articles.length < PER_PAGE) break;
+        page++;
+        await new Promise((r) => setTimeout(r, 30));
       }
 
-      const data = await resp.json() as {
-        totalMatchingArticles?: number;
-        articles?: Array<{
-          articleNumber?: string;
-          genericArticleDescription?: string;
-          images?: Array<{ imageURL800?: string; imageURL400?: string }>;
-          eanNumbers?: Array<{ eanNumber?: string }>;
-        }>;
-        status?: number;
-      };
-
-      if (data.status !== 200 || !data.articles?.length) break;
-
-      if (page === 1) total = data.totalMatchingArticles ?? 0;
-
-      for (const art of data.articles) {
-        const artNo = art.articleNumber;
-        if (!artNo) continue;
-        const img = art.images?.[0];
-        const url = img?.imageURL800 ?? img?.imageURL400;
-        if (url) imageMap.set(artNo, url);
+      groupsDone++;
+      if (groupsDone % 20 === 0) {
+        logger.info({ groupsDone, totalGroups: uniqueGroups.length, articlesScanned, imagesFound: imageMap.size }, "TecDoc image scan progress");
       }
-
-      if (page % 50 === 0) {
-        logger.info({ page, imagesFound: imageMap.size, total }, "TecDoc Diederichs image fetch progress");
-      }
-
-      if (data.articles.length < PER_PAGE || page >= 10000) break;
-      page++;
-      await new Promise((r) => setTimeout(r, 50));
     }
 
-    logger.info({ totalPages: page, imagesFound: imageMap.size }, "TecDoc image fetch complete");
+    logger.info({ groupsDone, articlesScanned, imagesFound: imageMap.size }, "TecDoc image scan complete");
 
     if (imageMap.size === 0) return { error: "No images found in TecDoc for Diederichs" };
 
-    // Batch update product_maps with images
+    // Step 3: Batch update product_maps with images
     const BATCH = 500;
     const entries = Array.from(imageMap.entries());
     let updated = 0;
@@ -949,7 +970,7 @@ export async function jobRoutes(app: FastifyInstance) {
     }
 
     logger.info({ imagesFound: imageMap.size, updated }, "Diederichs image enrichment completed");
-    return { totalTecDoc: total, imagesFound: imageMap.size, updated };
+    return { totalGroups: uniqueGroups.length, articlesScanned, imagesFound: imageMap.size, updated };
   });
 
   /**
