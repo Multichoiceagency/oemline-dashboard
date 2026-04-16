@@ -833,6 +833,126 @@ export async function jobRoutes(app: FastifyInstance) {
   });
 
   /**
+   * Enrich Diederichs products with TecDoc images.
+   * Paginates through all Diederichs articles in TecDoc (dataSupplierId=253),
+   * extracts image URLs, and updates matching product_maps.
+   */
+  app.post("/jobs/enrich-diederichs-images", {
+    onRequest: async (request) => { request.raw.socket.setTimeout(900_000); },
+  }, async () => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { logger } = await import("../lib/logger.js");
+    const { config } = await import("../config.js");
+
+    const DIEDERICHS_SUPPLIER_ID = 253;
+    const PER_PAGE = 100;
+    const TECDOC_URL = "https://webservice.tecalliance.services/pegasus-3-0/services/TecdocToCatDLB.jsonEndpoint";
+
+    const supplier = await prisma.supplier.findUnique({ where: { code: "diederichs" } });
+    if (!supplier) return { error: "Diederichs supplier not found" };
+
+    // Count products without images
+    const [{ count: noImageCount }] = await prisma.$queryRawUnsafe<[{ count: bigint }]>(
+      `SELECT COUNT(*) as count FROM product_maps WHERE supplier_id = $1 AND (image_url IS NULL OR image_url = '')`,
+      supplier.id
+    );
+    logger.info({ noImageCount: Number(noImageCount) }, "Diederichs products without images");
+
+    // Paginate TecDoc to build articleNumber → imageUrl map
+    const imageMap = new Map<string, string>();
+    let page = 1;
+    let total = 0;
+
+    while (true) {
+      const resp = await fetch(TECDOC_URL, {
+        method: "POST",
+        headers: { "X-Api-Key": config.TECDOC_API_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          getArticles: {
+            articleCountry: "NL",
+            lang: "nl",
+            providerId: 22691,
+            dataSupplierIds: [DIEDERICHS_SUPPLIER_ID],
+            includeImages: true,
+            perPage: PER_PAGE,
+            page,
+          },
+        }),
+      });
+
+      if (!resp.ok) {
+        logger.warn({ status: resp.status, page }, "TecDoc request failed");
+        break;
+      }
+
+      const data = await resp.json() as {
+        totalMatchingArticles?: number;
+        articles?: Array<{
+          articleNumber?: string;
+          genericArticleDescription?: string;
+          images?: Array<{ imageURL800?: string; imageURL400?: string }>;
+          eanNumbers?: Array<{ eanNumber?: string }>;
+        }>;
+        status?: number;
+      };
+
+      if (data.status !== 200 || !data.articles?.length) break;
+
+      if (page === 1) total = data.totalMatchingArticles ?? 0;
+
+      for (const art of data.articles) {
+        const artNo = art.articleNumber;
+        if (!artNo) continue;
+        const img = art.images?.[0];
+        const url = img?.imageURL800 ?? img?.imageURL400;
+        if (url) imageMap.set(artNo, url);
+      }
+
+      if (page % 50 === 0) {
+        logger.info({ page, imagesFound: imageMap.size, total }, "TecDoc Diederichs image fetch progress");
+      }
+
+      if (data.articles.length < PER_PAGE || page >= 10000) break;
+      page++;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    logger.info({ totalPages: page, imagesFound: imageMap.size }, "TecDoc image fetch complete");
+
+    if (imageMap.size === 0) return { error: "No images found in TecDoc for Diederichs" };
+
+    // Batch update product_maps with images
+    const BATCH = 500;
+    const entries = Array.from(imageMap.entries());
+    let updated = 0;
+
+    for (let i = 0; i < entries.length; i += BATCH) {
+      const batch = entries.slice(i, i + BATCH);
+      const skus = batch.map(([sku]) => sku);
+      const caseLines = batch.map(([sku, url]) =>
+        `WHEN sku = '${sku.replace(/'/g, "''")}' THEN '${url.replace(/'/g, "''")}'`
+      ).join(" ");
+
+      await prisma.$executeRawUnsafe(`
+        UPDATE product_maps SET
+          image_url = CASE ${caseLines} END,
+          updated_at = NOW()
+        WHERE supplier_id = ${supplier.id}
+          AND sku = ANY($1::text[])
+          AND (image_url IS NULL OR image_url = '')
+      `, skus);
+
+      updated += batch.length;
+      if (i % 5000 === 0 && i > 0) {
+        logger.info({ processed: i, updated }, "Diederichs image update progress");
+      }
+    }
+
+    logger.info({ imagesFound: imageMap.size, updated }, "Diederichs image enrichment completed");
+    return { totalTecDoc: total, imagesFound: imageMap.size, updated };
+  });
+
+  /**
    * Import Van Wezel product catalog from a CSV file stored in MinIO.
    *
    * Upload the catalog file to MinIO at vanwezel/catalog.csv first,
