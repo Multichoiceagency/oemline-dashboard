@@ -130,21 +130,39 @@ async function processRange(
   let pendingDbWrite: Promise<void> | null = null;
 
   while (lastId < maxId) {
+    // Join with intercars_mappings to get NUMERIC tow_kod (IC API requires numeric SKUs,
+    // not the alphanumeric codes from the catalog API stored in ic_sku)
     const products = await prisma.$queryRawUnsafe<ProductRow[]>(
-      `SELECT id, ic_sku FROM product_maps
-       WHERE ic_sku IS NOT NULL
-         AND status = 'active'
-         AND id > $1 AND id <= $2
-         AND updated_at < NOW() - INTERVAL '${staleMinutes} minutes'
-       ORDER BY id ASC
+      `SELECT DISTINCT pm.id, im.tow_kod AS ic_sku
+       FROM product_maps pm
+       JOIN brands b ON b.id = pm.brand_id
+       JOIN intercars_mappings im
+         ON UPPER(REGEXP_REPLACE(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
+            = UPPER(REGEXP_REPLACE(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+         AND UPPER(REGEXP_REPLACE(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+            = UPPER(REGEXP_REPLACE(b.name, '[^a-zA-Z0-9]', '', 'g'))
+       WHERE pm.status = 'active'
+         AND pm.id > $1 AND pm.id <= $2
+         AND pm.updated_at < NOW() - INTERVAL '${staleMinutes} minutes'
+         AND im.tow_kod ~ '^[0-9]+$'
+       ORDER BY pm.id ASC
        LIMIT $3`,
       lastId, maxId, DB_PAGE_SIZE
     );
 
     if (products.length === 0) {
       const remaining = await prisma.$queryRawUnsafe<[{ next_id: number | null }]>(
-        `SELECT MIN(id) AS next_id FROM product_maps
-         WHERE id > $1 AND id <= $2 AND ic_sku IS NOT NULL AND status = 'active'`,
+        `SELECT MIN(pm.id) AS next_id FROM product_maps pm
+         WHERE pm.id > $1 AND pm.id <= $2 AND pm.status = 'active'
+         AND EXISTS (
+           SELECT 1 FROM intercars_mappings im
+           JOIN brands b ON b.id = pm.brand_id
+           WHERE UPPER(REGEXP_REPLACE(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
+                 = UPPER(REGEXP_REPLACE(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+             AND UPPER(REGEXP_REPLACE(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                 = UPPER(REGEXP_REPLACE(b.name, '[^a-zA-Z0-9]', '', 'g'))
+             AND im.tow_kod ~ '^[0-9]+$'
+         )`,
         lastId, maxId
       );
       if (!remaining[0].next_id) break;

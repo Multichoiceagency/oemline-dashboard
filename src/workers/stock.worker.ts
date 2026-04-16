@@ -118,13 +118,23 @@ async function processRange(
   let pendingDbWrite: Promise<void> | null = null;
 
   while (lastId < maxId) {
+    // For IC-linked products: join with intercars_mappings to get NUMERIC tow_kod
+    // (IC pricing/stock API requires numeric SKUs, not alphanumeric catalog codes)
     const products = await (isIcLinked
       ? prisma.$queryRawUnsafe<ProductRow[]>(
-          `SELECT id, ic_sku FROM product_maps
-           WHERE ic_sku IS NOT NULL AND status = 'active'
-             AND id > $1 AND id <= $2
-             AND updated_at < NOW() - INTERVAL '${staleMinutes} minutes'
-           ORDER BY id ASC LIMIT $3`,
+          `SELECT DISTINCT pm.id, im.tow_kod AS ic_sku
+           FROM product_maps pm
+           JOIN brands b ON b.id = pm.brand_id
+           JOIN intercars_mappings im
+             ON UPPER(REGEXP_REPLACE(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
+                = UPPER(REGEXP_REPLACE(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+             AND UPPER(REGEXP_REPLACE(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                = UPPER(REGEXP_REPLACE(b.name, '[^a-zA-Z0-9]', '', 'g'))
+           WHERE pm.status = 'active'
+             AND pm.id > $1 AND pm.id <= $2
+             AND pm.updated_at < NOW() - INTERVAL '${staleMinutes} minutes'
+             AND im.tow_kod ~ '^[0-9]+$'
+           ORDER BY pm.id ASC LIMIT $3`,
           lastId, maxId, DB_PAGE_SIZE
         )
       : prisma.$queryRawUnsafe<ProductRow[]>(
