@@ -839,10 +839,44 @@ export async function jobRoutes(app: FastifyInstance) {
    */
   app.post("/jobs/enrich-diederichs-images", {
     onRequest: async (request) => { request.raw.socket.setTimeout(900_000); },
-  }, async () => {
+  }, async (request) => {
     const { prisma } = await import("../lib/prisma.js");
     const { logger } = await import("../lib/logger.js");
     const { config } = await import("../config.js");
+    const body = (request.body ?? {}) as { minioKey?: string };
+
+    // If a pre-computed image map JSON exists in MinIO, use it directly
+    if (body.minioKey) {
+      const { getObjectStream } = await import("../lib/minio.js");
+      const stream = await getObjectStream(body.minioKey);
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const imageMap = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, string>;
+
+      const supplier = await prisma.supplier.findUnique({ where: { code: "diederichs" } });
+      if (!supplier) return { error: "Diederichs supplier not found" };
+
+      const BATCH = 500;
+      const entries = Object.entries(imageMap);
+      let updated = 0;
+      for (let i = 0; i < entries.length; i += BATCH) {
+        const batch = entries.slice(i, i + BATCH);
+        const skus = batch.map(([sku]) => sku);
+        const caseLines = batch.map(([sku, url]) =>
+          `WHEN sku = '${sku.replace(/'/g, "''")}' THEN '${url.replace(/'/g, "''")}'`
+        ).join(" ");
+        const result = await prisma.$executeRawUnsafe(`
+          UPDATE product_maps SET
+            image_url = CASE ${caseLines} END, updated_at = NOW()
+          WHERE supplier_id = ${supplier.id} AND sku = ANY($1::text[])
+            AND (image_url IS NULL OR image_url = '')
+        `, skus);
+        updated += Number(result);
+        if (i % 5000 === 0 && i > 0) logger.info({ processed: i, updated }, "Image update progress");
+      }
+      logger.info({ total: entries.length, updated }, "Diederichs image import from MinIO completed");
+      return { source: "minio", total: entries.length, updated };
+    }
 
     const DIEDERICHS_SUPPLIER_ID = 253;
     const PER_PAGE = 100;
