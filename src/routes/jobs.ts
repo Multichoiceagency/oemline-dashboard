@@ -867,9 +867,8 @@ export async function jobRoutes(app: FastifyInstance) {
         ).join(" ");
         const result = await prisma.$executeRawUnsafe(`
           UPDATE product_maps SET
-            image_url = CASE ${caseLines} END, updated_at = NOW()
+            image_url = CASE ${caseLines} ELSE image_url END, updated_at = NOW()
           WHERE supplier_id = ${supplier.id} AND sku = ANY($1::text[])
-            AND (image_url IS NULL OR image_url = '')
         `, skus);
         updated += Number(result);
         if (i % 5000 === 0 && i > 0) logger.info({ processed: i, updated }, "Image update progress");
