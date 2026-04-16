@@ -59,12 +59,14 @@ export async function processPricingJob(job: Job<PricingJobData>): Promise<void>
   // One-time migration: replace alphanumeric ic_sku with numeric tow_kod from CSV mappings
   // IC pricing API requires numeric SKUs (e.g. 205853), not catalog API codes (e.g. H0W8RH)
   try {
+    // Match via ic_index (consistent between CSV and catalog imports)
+    // CSV: tow_kod=205853 (numeric), ic_index="LE2526.00"
+    // Catalog: tow_kod=H0W8RH (alpha), ic_index="LE2526.00"
     const migrated = await prisma.$executeRawUnsafe(`
       UPDATE product_maps pm SET ic_sku = im_csv.tow_kod
       FROM intercars_mappings im_alpha
       JOIN intercars_mappings im_csv
-        ON UPPER(im_csv.article_number) = UPPER(im_alpha.article_number)
-        AND UPPER(im_csv.manufacturer) = UPPER(im_alpha.manufacturer)
+        ON im_csv.ic_index = im_alpha.ic_index
         AND im_csv.tow_kod ~ '^[0-9]+$'
         AND im_csv.tow_kod != im_alpha.tow_kod
       WHERE im_alpha.tow_kod = pm.ic_sku
@@ -72,7 +74,7 @@ export async function processPricingJob(job: Job<PricingJobData>): Promise<void>
         AND pm.status = 'active'
     `);
     if (Number(migrated) > 0) {
-      logger.info({ migrated: Number(migrated) }, "Migrated alphanumeric ic_skus to numeric tow_kods");
+      logger.info({ migrated: Number(migrated) }, "Migrated alphanumeric ic_skus to numeric tow_kods via ic_index");
     }
   } catch (err) {
     logger.warn({ err }, "ic_sku migration failed (non-fatal)");
