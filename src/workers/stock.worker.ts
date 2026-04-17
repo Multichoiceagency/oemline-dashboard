@@ -121,7 +121,7 @@ async function processRange(
     const products = await (isIcLinked
       ? prisma.$queryRawUnsafe<ProductRow[]>(
           `SELECT id, ic_sku FROM product_maps
-           WHERE ic_sku IS NOT NULL AND ic_sku ~ '^[0-9]+$'
+           WHERE ic_sku IS NOT NULL
              AND status = 'active'
              AND id > $1 AND id <= $2
              AND updated_at < NOW() - INTERVAL '${staleMinutes} minutes'
