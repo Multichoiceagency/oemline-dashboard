@@ -134,6 +134,245 @@ export async function jobRoutes(app: FastifyInstance) {
   });
 
   /**
+   * Bulk import IC CSV data: pricing, stock, and product info.
+   * Reads from MinIO or local path. Updates existing products, never deletes.
+   *
+   * Body: { type: "pricing"|"stock"|"product_info"|"all", minioKey?: string }
+   * - pricing: Wholesale_Pricing CSV → updates price on product_maps via ic_sku = TOW_KOD
+   * - stock: Stock CSV → updates stock on product_maps via intercars_mappings TOW_KOD match
+   * - product_info: ProductInformation CSV → updates description, EAN, weight
+   * - all: runs all three in sequence
+   */
+  app.post("/jobs/import-ic-csv", {
+    onRequest: async (request) => { request.raw.socket.setTimeout(600_000); },
+  }, async (request) => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { logger } = await import("../lib/logger.js");
+    const { getObjectStream } = await import("../lib/minio.js");
+    const { createInterface } = await import("node:readline");
+    const { createReadStream, existsSync } = await import("node:fs");
+
+    const body = (request.body ?? {}) as {
+      type?: "pricing" | "stock" | "product_info" | "all";
+      pricingKey?: string;
+      stockKey?: string;
+      productInfoKey?: string;
+      pricingPath?: string;
+      stockPath?: string;
+      productInfoPath?: string;
+    };
+    const importType = body.type ?? "all";
+
+    const results: Record<string, { rows: number; updated: number; errors: number; duration: number }> = {};
+
+    // Helper: get readable stream from MinIO key or local path
+    async function getStream(minioKey?: string, localPath?: string, encoding: BufferEncoding = "utf8"): Promise<NodeJS.ReadableStream | null> {
+      if (localPath && existsSync(localPath)) return createReadStream(localPath, { encoding });
+      if (minioKey) {
+        try { return await getObjectStream(minioKey); } catch { return null; }
+      }
+      return null;
+    }
+
+    // ═══ PRICING IMPORT ═══
+    if (importType === "pricing" || importType === "all") {
+      const start = Date.now();
+      const stream = await getStream(
+        body.pricingKey ?? "intercars/wholesale-pricing.csv",
+        body.pricingPath ?? "/app/data/Wholesale_Pricing.csv"
+      );
+
+      if (stream) {
+        const rl = createInterface({ input: stream, crlfDelay: Infinity });
+        // Build TOW_KOD → price map
+        const priceMap = new Map<string, number>();
+        let lineNum = 0;
+        for await (const line of rl) {
+          if (lineNum++ === 0) continue; // skip header
+          const parts = line.split(";");
+          const towKod = parts[0]?.trim();
+          const priceStr = parts[4]?.trim()?.replace(",", ".") ?? "0";
+          const price = parseFloat(priceStr);
+          if (towKod && price > 0) priceMap.set(towKod, price);
+        }
+        logger.info({ parsed: priceMap.size }, "IC pricing CSV parsed");
+
+        // Batch update: match ic_sku in product_maps
+        const BATCH = 1000;
+        const entries = Array.from(priceMap.entries());
+        let updated = 0;
+        for (let i = 0; i < entries.length; i += BATCH) {
+          const batch = entries.slice(i, i + BATCH);
+          const values = batch.map(([sku, price]) =>
+            `('${sku.replace(/'/g, "''")}', ${price}::double precision)`
+          ).join(",");
+          try {
+            const res = await prisma.$executeRawUnsafe(`
+              UPDATE product_maps pm SET
+                price = v.price,
+                currency = 'EUR',
+                updated_at = NOW()
+              FROM (VALUES ${values}) AS v(sku, price)
+              WHERE pm.ic_sku = v.sku
+            `);
+            updated += Number(res);
+          } catch (err) {
+            logger.warn({ err, batch: i }, "Pricing batch update failed");
+          }
+        }
+
+        results.pricing = { rows: priceMap.size, updated, errors: 0, duration: Date.now() - start };
+        logger.info(results.pricing, "IC pricing CSV import completed");
+      } else {
+        results.pricing = { rows: 0, updated: 0, errors: 1, duration: 0 };
+      }
+    }
+
+    // ═══ STOCK IMPORT ═══
+    if (importType === "stock" || importType === "all") {
+      const start = Date.now();
+      const stream = await getStream(
+        body.stockKey ?? "intercars/stock.csv",
+        body.stockPath ?? "/app/data/Stock.csv"
+      );
+
+      if (stream) {
+        const rl = createInterface({ input: stream, crlfDelay: Infinity });
+        // Build TOW_KOD → total stock (sum across warehouses)
+        const stockMap = new Map<string, number>();
+        let lineNum = 0;
+        for await (const line of rl) {
+          if (lineNum++ === 0) continue;
+          const parts = line.split(";");
+          const towKod = parts[0]?.trim();
+          const avail = parseInt(parts[5]?.trim() ?? "0", 10) || 0;
+          if (towKod && avail > 0) {
+            stockMap.set(towKod, (stockMap.get(towKod) ?? 0) + avail);
+          }
+        }
+        logger.info({ parsed: stockMap.size }, "IC stock CSV parsed");
+
+        // Stock CSV has NUMERIC tow_kods, product_maps has ALPHANUMERIC ic_skus
+        // Join via intercars_mappings: numeric tow_kod → ic_index → alphanumeric tow_kod
+        // First, build a lookup from the intercars_mappings table
+        const BATCH = 2000;
+        const numericTowKods = Array.from(stockMap.keys());
+        let updated = 0;
+
+        for (let i = 0; i < numericTowKods.length; i += BATCH) {
+          const batch = numericTowKods.slice(i, i + BATCH);
+          const values = batch.map((k) => `('${k.replace(/'/g, "''")}'::text, ${stockMap.get(k) ?? 0}::int)`).join(",");
+          try {
+            // Join: numeric tow_kod → ic_index → find alphanumeric tow_kod in same ic_index → match product_maps.ic_sku
+            const res = await prisma.$executeRawUnsafe(`
+              UPDATE product_maps pm SET
+                stock = v.stock,
+                updated_at = NOW()
+              FROM (VALUES ${values}) AS v(tow_kod, stock)
+              JOIN intercars_mappings im_num ON im_num.tow_kod = v.tow_kod
+              JOIN intercars_mappings im_alpha ON im_alpha.ic_index = im_num.ic_index
+                AND im_alpha.tow_kod != im_num.tow_kod
+              WHERE pm.ic_sku = im_alpha.tow_kod
+            `);
+            updated += Number(res);
+          } catch (err) {
+            logger.warn({ err, batch: i }, "Stock batch update failed");
+          }
+        }
+
+        // Also try direct match for products with numeric ic_sku
+        for (let i = 0; i < numericTowKods.length; i += BATCH) {
+          const batch = numericTowKods.slice(i, i + BATCH);
+          const values = batch.map((k) => `('${k.replace(/'/g, "''")}'::text, ${stockMap.get(k) ?? 0}::int)`).join(",");
+          try {
+            const res = await prisma.$executeRawUnsafe(`
+              UPDATE product_maps pm SET
+                stock = v.stock,
+                updated_at = NOW()
+              FROM (VALUES ${values}) AS v(tow_kod, stock)
+              WHERE pm.ic_sku = v.tow_kod
+            `);
+            updated += Number(res);
+          } catch (err) { /* ignore — direct match is bonus */ }
+        }
+
+        results.stock = { rows: stockMap.size, updated, errors: 0, duration: Date.now() - start };
+        logger.info(results.stock, "IC stock CSV import completed");
+      } else {
+        results.stock = { rows: 0, updated: 0, errors: 1, duration: 0 };
+      }
+    }
+
+    // ═══ PRODUCT INFO IMPORT ═══
+    if (importType === "product_info" || importType === "all") {
+      const start = Date.now();
+      const stream = await getStream(
+        body.productInfoKey ?? "intercars/product-info.csv",
+        body.productInfoPath ?? "/app/data/ProductInformation.csv"
+      );
+
+      if (stream) {
+        const rl = createInterface({ input: stream, crlfDelay: Infinity });
+        // Build TOW_KOD → product info
+        const infoMap = new Map<string, { description: string; ean: string | null; weight: number | null }>();
+        let lineNum = 0;
+        for await (const line of rl) {
+          if (lineNum++ === 0) continue;
+          const parts = line.split(";");
+          const towKod = parts[0]?.trim();
+          const description = parts[7]?.trim() ?? ""; // DESCRIPTION (full Dutch)
+          const ean = parts[8]?.trim()?.split(",")[0] ?? null; // first barcode
+          const weightStr = parts[9]?.trim()?.replace(",", ".") ?? "";
+          const weight = parseFloat(weightStr) || null;
+          if (towKod && description) {
+            infoMap.set(towKod, { description, ean: ean && ean.length >= 8 ? ean : null, weight });
+          }
+        }
+        logger.info({ parsed: infoMap.size }, "IC product info CSV parsed");
+
+        // Batch update via ic_sku match (alphanumeric TOW_KODs)
+        const BATCH = 500;
+        const entries = Array.from(infoMap.entries());
+        let updated = 0;
+        for (let i = 0; i < entries.length; i += BATCH) {
+          const batch = entries.slice(i, i + BATCH);
+          const skus = batch.map(([sku]) => sku);
+          const descCases = batch.map(([sku, info]) =>
+            `WHEN '${sku.replace(/'/g, "''")}' THEN '${info.description.replace(/'/g, "''").slice(0, 500)}'`
+          ).join(" ");
+          const eanCases = batch.map(([sku, info]) =>
+            `WHEN '${sku.replace(/'/g, "''")}' THEN ${info.ean ? `'${info.ean}'` : "NULL"}`
+          ).join(" ");
+          const weightCases = batch.map(([sku, info]) =>
+            `WHEN '${sku.replace(/'/g, "''")}' THEN ${info.weight ?? "NULL"}::double precision`
+          ).join(" ");
+
+          try {
+            const res = await prisma.$executeRawUnsafe(`
+              UPDATE product_maps SET
+                description = CASE ic_sku ${descCases} ELSE description END,
+                ean = COALESCE(CASE ic_sku ${eanCases} END, ean),
+                weight = COALESCE(CASE ic_sku ${weightCases} END, weight),
+                updated_at = NOW()
+              WHERE ic_sku = ANY($1::text[])
+            `, skus);
+            updated += Number(res);
+          } catch (err) {
+            logger.warn({ err, batch: i }, "Product info batch update failed");
+          }
+        }
+
+        results.product_info = { rows: infoMap.size, updated, errors: 0, duration: Date.now() - start };
+        logger.info(results.product_info, "IC product info CSV import completed");
+      } else {
+        results.product_info = { rows: 0, updated: 0, errors: 1, duration: 0 };
+      }
+    }
+
+    return { importType, results };
+  });
+
+  /**
    * Inline pricing: runs IC pricing directly on the API server, bypassing BullMQ workers.
    * Use when worker pods are running stale code.
    * Processes products in batches, updates prices+stock from IC inventory/quote.

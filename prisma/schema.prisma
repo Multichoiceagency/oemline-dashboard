@@ -24,6 +24,7 @@ model Supplier {
   overrides   Override[]
   matchLogs   MatchLog[]
   unmatched   Unmatched[]
+  uploads     SupplierUpload[]
 
   @@index([active, priority])
   @@map("suppliers")
@@ -230,4 +231,24 @@ model Unmatched {
   @@index([createdAt])
   @@index([attempts])
   @@map("unmatched")
+}
+
+model SupplierUpload {
+  id          Int       @id @default(autoincrement())
+  supplierId  Int       @map("supplier_id")
+  fileType    String    @map("file_type") // pricing, stock, product_info, catalog
+  fileName    String    @map("file_name")
+  minioKey    String    @map("minio_key")
+  fileSize    Int       @map("file_size")
+  rowCount    Int?      @map("row_count")
+  status      String    @default("uploaded") // uploaded, processing, completed, failed
+  result      Json?     // {imported, updated, errors, duration}
+  processedAt DateTime? @map("processed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@index([supplierId, fileType])
+  @@index([createdAt])
+  @@map("supplier_uploads")
 }
