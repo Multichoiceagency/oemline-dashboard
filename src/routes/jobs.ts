@@ -389,6 +389,81 @@ export async function jobRoutes(app: FastifyInstance) {
   });
 
   /**
+   * Fast bulk price update from pre-computed article→price JSON (from MinIO).
+   * JSON format: {"NORMALIZED_ARTICLE|NORMALIZED_BRAND": price, ...}
+   * Matches product_maps by UPPER(article_no) + UPPER(brand.name) with special chars stripped.
+   */
+  app.post("/jobs/import-ic-prices-fast", {
+    onRequest: async (request) => { request.raw.socket.setTimeout(900_000); },
+  }, async () => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { logger } = await import("../lib/logger.js");
+    const { getObjectStream } = await import("../lib/minio.js");
+
+    const stream = await getObjectStream("intercars/article-prices.json");
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const priceMap = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, number>;
+    logger.info({ entries: Object.keys(priceMap).length }, "Loaded article-prices.json from MinIO");
+
+    // Get all products with brand in batches, normalize, and match
+    const PAGE = 10000;
+    let lastId = 0;
+    let updated = 0;
+    let scanned = 0;
+
+    while (true) {
+      const products = await prisma.$queryRawUnsafe<Array<{
+        id: number; article_no: string; brand_name: string; price: number | null;
+      }>>(
+        `SELECT pm.id, pm.article_no, b.name AS brand_name, pm.price
+         FROM product_maps pm
+         JOIN brands b ON b.id = pm.brand_id
+         WHERE pm.id > $1 AND pm.status = 'active'
+         ORDER BY pm.id ASC LIMIT $2`,
+        lastId, PAGE
+      );
+
+      if (products.length === 0) break;
+      lastId = products[products.length - 1].id;
+      scanned += products.length;
+
+      // Match products against the price map
+      const updates: Array<{ id: number; price: number }> = [];
+      for (const p of products) {
+        const normArticle = p.article_no.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const normBrand = p.brand_name.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const key = `${normArticle}|${normBrand}`;
+        const price = priceMap[key];
+        if (price != null && price > 0) {
+          updates.push({ id: p.id, price });
+        }
+      }
+
+      if (updates.length > 0) {
+        const values = updates.map((u) => `(${u.id}, ${u.price}::double precision)`).join(",");
+        try {
+          const res = await prisma.$executeRawUnsafe(`
+            UPDATE product_maps pm SET price = v.price, currency = 'EUR', updated_at = NOW()
+            FROM (VALUES ${values}) AS v(id, price)
+            WHERE pm.id = v.id
+          `);
+          updated += Number(res);
+        } catch (err) {
+          logger.warn({ err }, "Fast pricing batch failed");
+        }
+      }
+
+      if (scanned % 100000 === 0) {
+        logger.info({ scanned, updated, lastId }, "Fast pricing progress");
+      }
+    }
+
+    logger.info({ scanned, updated }, "Fast pricing completed");
+    return { scanned, updated };
+  });
+
+  /**
    * Inline pricing: runs IC pricing directly on the API server, bypassing BullMQ workers.
    * Use when worker pods are running stale code.
    * Processes products in batches, updates prices+stock from IC inventory/quote.
