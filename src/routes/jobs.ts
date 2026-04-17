@@ -133,6 +133,89 @@ export async function jobRoutes(app: FastifyInstance) {
     return { jobId: job.id, queue: "pricing", supplierCode, status: "queued" };
   });
 
+  /**
+   * Inline pricing: runs IC pricing directly on the API server, bypassing BullMQ workers.
+   * Use when worker pods are running stale code.
+   * Processes products in batches, updates prices+stock from IC inventory/quote.
+   */
+  app.post("/jobs/pricing-inline", {
+    onRequest: async (request) => { request.raw.socket.setTimeout(900_000); },
+  }, async (request) => {
+    const { prisma } = await import("../lib/prisma.js");
+    const { logger } = await import("../lib/logger.js");
+    const { getAdapterOrLoad } = await import("../adapters/registry.js");
+
+    const body = (request.body ?? {}) as { limit?: number; staleMinutes?: number };
+    const maxProducts = Math.min(body.limit ?? 10000, 50000);
+    const staleMinutes = body.staleMinutes ?? 45;
+
+    const adapter = await getAdapterOrLoad("intercars");
+    if (!adapter || typeof (adapter as any).fetchQuoteBatch !== "function") {
+      return { error: "InterCars adapter not available" };
+    }
+    const icAdapter = adapter as any;
+
+    const products = await prisma.$queryRawUnsafe<Array<{ id: number; ic_sku: string }>>(
+      `SELECT id, ic_sku FROM product_maps
+       WHERE ic_sku IS NOT NULL AND status = 'active'
+         AND updated_at < NOW() - INTERVAL '${staleMinutes} minutes'
+       ORDER BY updated_at ASC
+       LIMIT $1`,
+      maxProducts
+    );
+
+    if (products.length === 0) return { processed: 0, updated: 0, message: "No stale products found" };
+
+    let updated = 0;
+    let errors = 0;
+    const BATCH = 30;
+
+    for (let i = 0; i < products.length; i += BATCH) {
+      const batch = products.slice(i, i + BATCH);
+      const skus = batch.map((p) => p.ic_sku);
+
+      try {
+        const quoteMap = await icAdapter.fetchQuoteBatch(skus);
+        const updates: string[] = [];
+        for (const p of batch) {
+          const q = quoteMap.get(p.ic_sku);
+          if (q) {
+            updates.push(`(${p.id}::int, ${q.price != null ? q.price : "NULL::double precision"}, ${q.stock}::int, '${(q.currency || "EUR").replace(/'/g, "''")}')`);
+          }
+        }
+        if (updates.length > 0) {
+          await prisma.$executeRawUnsafe(
+            `UPDATE product_maps AS pm SET
+              price = COALESCE(v.price, pm.price), stock = v.stock,
+              currency = COALESCE(v.currency, pm.currency), updated_at = NOW()
+            FROM (VALUES ${updates.join(",")}) AS v(id, price, stock, currency)
+            WHERE pm.id = v.id`
+          );
+          updated += updates.length;
+        }
+      } catch (err) {
+        errors++;
+        const msg = String(err instanceof Error ? err.message : err);
+        if (msg.includes("429") || msg.includes("throttle")) {
+          logger.warn({ i, errors }, "IC rate limit — pausing 60s");
+          await new Promise((r) => setTimeout(r, 60_000));
+        }
+      }
+
+      // Rate limit safe: 2s between calls
+      if (i + BATCH < products.length) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+
+      if ((i / BATCH) % 50 === 0 && i > 0) {
+        logger.info({ processed: i, updated, errors }, "Inline pricing progress");
+      }
+    }
+
+    logger.info({ total: products.length, updated, errors }, "Inline pricing completed");
+    return { processed: products.length, updated, errors };
+  });
+
   // Manually trigger a stock refresh job for a supplier
   app.post("/jobs/stock", async (request) => {
     const schema = z.object({
