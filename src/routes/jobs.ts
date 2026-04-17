@@ -389,6 +389,23 @@ export async function jobRoutes(app: FastifyInstance) {
   });
 
   /**
+   * Fire-and-forget IC pricing import.
+   * Spawns the import as a background child process on the API server.
+   * Returns immediately — check /finalized/stats for progress.
+   */
+  app.post("/jobs/run-ic-import", async () => {
+    const { spawn } = await import("node:child_process");
+    const child = spawn("node", ["dist/scripts/import-ic-prices.js"], {
+      cwd: "/app",
+      stdio: "ignore",
+      detached: true,
+      env: { ...process.env },
+    });
+    child.unref();
+    return { status: "started", pid: child.pid, message: "Import running in background. Check /finalized/stats for progress." };
+  });
+
+  /**
    * Fast bulk price update from pre-computed article→price JSON (from MinIO).
    * JSON format: {"NORMALIZED_ARTICLE|NORMALIZED_BRAND": price, ...}
    * Matches product_maps by UPPER(article_no) + UPPER(brand.name) with special chars stripped.
