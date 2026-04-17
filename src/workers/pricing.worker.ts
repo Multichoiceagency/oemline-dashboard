@@ -16,8 +16,8 @@ interface PricingJobData {
 const API_BATCH_SIZE = 30;         // IC API max per call (30 SKUs per request)
 const PARALLEL_API_CALLS = 1;      // Sequential calls to stay within IC rate limits
 const DB_PAGE_SIZE = 5000;         // Products per cursor page
-const RATE_LIMIT_PAUSE = 1200;     // 1.2s between calls (~50 req/min, safe for IC)
-const SUB_JOB_SIZE = 50_000;       // ID range per sub-job (sparse IDs, actual products << this)
+const RATE_LIMIT_PAUSE = 2000;     // 2s between calls (~30 req/min, safe even with multiple sub-jobs)
+const SUB_JOB_SIZE = 200_000;      // Larger ranges = fewer sub-jobs = less parallel IC pressure
 const DEFAULT_STALE_MINUTES = 45;  // Only re-price products older than this
 
 interface ProductRow { id: number; ic_sku: string }
@@ -198,9 +198,18 @@ async function processRange(
       );
 
       const allUpdates: Array<{ id: number; price: number | null; stock: number; currency: string }> = [];
+      let gotRateLimit = false;
       for (const r of results) {
-        if (r.status === "fulfilled") allUpdates.push(...r.value);
-        else totalErrors++;
+        if (r.status === "fulfilled") {
+          allUpdates.push(...r.value);
+        } else {
+          totalErrors++;
+          // Detect rate limit and back off
+          const msg = String(r.reason?.message ?? r.reason ?? "");
+          if (msg.includes("429") || msg.includes("throttle") || msg.includes("quota")) {
+            gotRateLimit = true;
+          }
+        }
       }
 
       if (allUpdates.length > 0) {
@@ -213,8 +222,13 @@ async function processRange(
           });
       }
 
+      // Back off on rate limit, normal pause otherwise
+      const pause = gotRateLimit ? 60_000 : RATE_LIMIT_PAUSE;
+      if (gotRateLimit) {
+        logger.warn({ totalUpdated, totalErrors }, "IC rate limit hit, backing off 60s");
+      }
       if (i + PARALLEL_API_CALLS < apiBatches.length) {
-        await new Promise((r) => setTimeout(r, RATE_LIMIT_PAUSE));
+        await new Promise((r) => setTimeout(r, pause));
       }
     }
 
