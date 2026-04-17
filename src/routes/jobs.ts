@@ -400,13 +400,15 @@ export async function jobRoutes(app: FastifyInstance) {
     const { logger } = await import("../lib/logger.js");
     const { getObjectStream } = await import("../lib/minio.js");
 
-    const stream = await getObjectStream("intercars/article-prices.json");
+    // article-index.json: {normalizedArticle: [{b: normalizedBrand, p: price}, ...]}
+    const stream = await getObjectStream("intercars/article-index.json");
     const chunks: Buffer[] = [];
     for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    const priceMap = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, number>;
-    logger.info({ entries: Object.keys(priceMap).length }, "Loaded article-prices.json from MinIO");
+    const articleIndex = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, Array<{ b: string; p: number }>>;
+    logger.info({ articles: Object.keys(articleIndex).length }, "Loaded article-index.json from MinIO");
 
     // Get all products with brand in batches, normalize, and match
+    // Uses PREFIX brand matching: IC "FEBI" matches TecDoc "FEBI BILSTEIN"
     const PAGE = 10000;
     let lastId = 0;
     let updated = 0;
@@ -414,9 +416,9 @@ export async function jobRoutes(app: FastifyInstance) {
 
     while (true) {
       const products = await prisma.$queryRawUnsafe<Array<{
-        id: number; article_no: string; brand_name: string; price: number | null;
+        id: number; article_no: string; brand_name: string;
       }>>(
-        `SELECT pm.id, pm.article_no, b.name AS brand_name, pm.price
+        `SELECT pm.id, pm.article_no, b.name AS brand_name
          FROM product_maps pm
          JOIN brands b ON b.id = pm.brand_id
          WHERE pm.id > $1 AND pm.status = 'active'
@@ -428,15 +430,24 @@ export async function jobRoutes(app: FastifyInstance) {
       lastId = products[products.length - 1].id;
       scanned += products.length;
 
-      // Match products against the price map
+      // Match products against the article index with PREFIX brand matching
       const updates: Array<{ id: number; price: number }> = [];
       for (const p of products) {
         const normArticle = p.article_no.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const entries = articleIndex[normArticle];
+        if (!entries) continue;
+
         const normBrand = p.brand_name.toUpperCase().replace(/[^A-Z0-9]/g, "");
-        const key = `${normArticle}|${normBrand}`;
-        const price = priceMap[key];
-        if (price != null && price > 0) {
-          updates.push({ id: p.id, price });
+        // Find best brand match: exact → prefix → first
+        let bestPrice: number | null = null;
+        for (const entry of entries) {
+          if (entry.b === normBrand) { bestPrice = entry.p; break; } // exact
+          if (normBrand.startsWith(entry.b) || entry.b.startsWith(normBrand)) {
+            bestPrice = entry.p; // prefix match (FEBI matches FEBIBILSTEIN)
+          }
+        }
+        if (bestPrice != null && bestPrice > 0) {
+          updates.push({ id: p.id, price: bestPrice });
         }
       }
 
