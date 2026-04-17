@@ -197,8 +197,9 @@ export async function jobRoutes(app: FastifyInstance) {
         }
         logger.info({ parsed: priceMap.size }, "IC pricing CSV parsed");
 
-        // Batch update: match ic_sku in product_maps
-        const BATCH = 1000;
+        // Batch update via intercars_mappings:
+        // CSV tow_kod → intercars_mappings → match product_maps by article_number + brand
+        const BATCH = 500;
         const entries = Array.from(priceMap.entries());
         let updated = 0;
         for (let i = 0; i < entries.length; i += BATCH) {
@@ -207,17 +208,32 @@ export async function jobRoutes(app: FastifyInstance) {
             `('${sku.replace(/'/g, "''")}', ${price}::double precision)`
           ).join(",");
           try {
-            const res = await prisma.$executeRawUnsafe(`
+            // Match 1: direct ic_sku match (InterCars supplier products)
+            const res1 = await prisma.$executeRawUnsafe(`
               UPDATE product_maps pm SET
-                price = v.price,
-                currency = 'EUR',
-                updated_at = NOW()
-              FROM (VALUES ${values}) AS v(sku, price)
-              WHERE pm.ic_sku = v.sku
+                price = v.price, currency = 'EUR', updated_at = NOW()
+              FROM (VALUES ${values}) AS v(tow_kod, price)
+              WHERE pm.ic_sku = v.tow_kod
             `);
-            updated += Number(res);
+            // Match 2: via intercars_mappings (TecDoc products linked to IC)
+            const res2 = await prisma.$executeRawUnsafe(`
+              UPDATE product_maps pm SET
+                price = v.price, currency = 'EUR', updated_at = NOW()
+              FROM (VALUES ${values}) AS v(tow_kod, price)
+              JOIN intercars_mappings im ON im.tow_kod = v.tow_kod
+              JOIN brands b ON b.id = pm.brand_id
+              WHERE UPPER(REGEXP_REPLACE(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
+                    = UPPER(REGEXP_REPLACE(pm.article_no, '[^a-zA-Z0-9]', '', 'g'))
+                AND UPPER(REGEXP_REPLACE(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                    = UPPER(REGEXP_REPLACE(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                AND pm.ic_sku IS NULL
+            `);
+            updated += Number(res1) + Number(res2);
           } catch (err) {
             logger.warn({ err, batch: i }, "Pricing batch update failed");
+          }
+          if (i % 5000 === 0 && i > 0) {
+            logger.info({ processed: i, updated }, "IC pricing CSV progress");
           }
         }
 
