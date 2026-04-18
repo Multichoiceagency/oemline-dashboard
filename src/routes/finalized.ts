@@ -15,6 +15,10 @@ const listQuerySchema = z.object({
   category: z.string().optional(),
   categoryId: z.coerce.number().int().optional(),
   supplier: z.string().optional(),
+  /** Comma-separated supplier codes — e.g. "intercars,vanwezel,diederichs". */
+  suppliers: z.string().optional(),
+  /** Cap maximum price to avoid showing industrial/wholesale-only products. */
+  maxPrice: z.coerce.number().positive().optional(),
   hasStock: z.enum(["true", "false"]).optional(),
   hasPrice: z.enum(["true", "false"]).optional(),
   hasImage: z.enum(["true", "false"]).optional(),
@@ -34,10 +38,10 @@ export async function finalizedRoutes(app: FastifyInstance) {
   // ─── GET /finalized ─── Paginated finalized products with all combined data
   app.get("/finalized", async (request) => {
     const query = listQuerySchema.parse(request.query);
-    const { page, limit, q, brand, category, categoryId, supplier, hasStock, hasPrice, hasImage } = query;
+    const { page, limit, q, brand, category, categoryId, supplier, suppliers, maxPrice, hasStock, hasPrice, hasImage } = query;
 
     // Redis cache for storefront article lookups (q-only searches with small limits)
-    if (q && !brand && !category && !categoryId && !supplier && !hasStock && !hasPrice && !hasImage && limit <= 10) {
+    if (q && !brand && !category && !categoryId && !supplier && !suppliers && !maxPrice && !hasStock && !hasPrice && !hasImage && limit <= 10) {
       const cacheKeyParts = ["finalized", q, String(page), String(limit)];
       const cached = await cacheGet<unknown>("pricing", cacheKeyParts);
       if (cached) return cached;
@@ -61,6 +65,9 @@ export async function finalizedRoutes(app: FastifyInstance) {
 
     if (supplier) {
       where.supplier = { code: supplier };
+    } else if (suppliers) {
+      const codes = suppliers.split(",").map((s) => s.trim()).filter(Boolean);
+      if (codes.length > 0) where.supplier = { code: { in: codes } };
     }
 
     if (hasStock === "true") {
@@ -69,10 +76,15 @@ export async function finalizedRoutes(app: FastifyInstance) {
       where.OR = [{ stock: null }, { stock: 0 }];
     }
 
-    if (hasPrice === "true") {
+    // Compose price filter from hasPrice + maxPrice. Both can be combined.
+    if (hasPrice === "true" && maxPrice != null) {
+      where.price = { not: null, lte: maxPrice };
+    } else if (hasPrice === "true") {
       where.price = { not: null };
     } else if (hasPrice === "false") {
       where.price = null;
+    } else if (maxPrice != null) {
+      where.price = { lte: maxPrice };
     }
 
     if (hasImage === "true") {
@@ -488,7 +500,7 @@ export async function finalizedRoutes(app: FastifyInstance) {
 
   // ─── POST /batch/articles ─── Fast batch lookup by article numbers (single query)
   app.post("/batch/articles", async (request, reply) => {
-    const body = request.body as { articleNumbers?: string[] };
+    const body = request.body as { articleNumbers?: string[]; suppliers?: string[]; maxPrice?: number };
     if (!Array.isArray(body?.articleNumbers) || body.articleNumbers.length === 0) {
       return reply.code(400).send({ error: "articleNumbers array required (1-100)" });
     }
@@ -498,11 +510,16 @@ export async function finalizedRoutes(app: FastifyInstance) {
       return { items: {}, found: 0, requested: 0 };
     }
 
+    const supplierCodes = Array.isArray(body.suppliers)
+      ? body.suppliers.map((s) => String(s).trim()).filter(Boolean)
+      : [];
+    const maxPrice = typeof body.maxPrice === "number" && body.maxPrice > 0 ? body.maxPrice : null;
+
     // Normalize for matching: uppercase, alphanumeric only
     const normalized = articleNumbers.map((a) => a.replace(/[^a-zA-Z0-9]/g, "").toUpperCase());
 
-    // Check Redis cache first
-    const cacheKey = normalized.slice().sort().join(",");
+    // Check Redis cache first — key must include filter scope so different callers don't collide
+    const cacheKey = [normalized.slice().sort().join(","), supplierCodes.sort().join(","), maxPrice ?? ""].join("|");
     const cached = await cacheGet<Record<string, unknown>>("pricing", ["batch", cacheKey]);
     if (cached) {
       return cached;
@@ -553,8 +570,11 @@ export async function finalizedRoutes(app: FastifyInstance) {
       LEFT JOIN categories c ON c.id = p.category_id
       LEFT JOIN suppliers s ON s.id = p.supplier_id
       WHERE p.status = 'active'
-        AND UPPER(REGEXP_REPLACE(p.article_no, '[^a-zA-Z0-9]', '', 'g')) = ANY($1::text[])`,
-      normalized
+        AND UPPER(REGEXP_REPLACE(p.article_no, '[^a-zA-Z0-9]', '', 'g')) = ANY($1::text[])
+        ${supplierCodes.length > 0 ? `AND s.code = ANY($2::text[])` : ``}
+        ${maxPrice != null ? `AND (p.price IS NULL OR p.price <= ${maxPrice})` : ``}`,
+      normalized,
+      ...(supplierCodes.length > 0 ? [supplierCodes] : [])
     );
 
     // Apply pricing
