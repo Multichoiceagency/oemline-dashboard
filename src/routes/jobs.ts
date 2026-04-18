@@ -184,18 +184,32 @@ export async function jobRoutes(app: FastifyInstance) {
 
       if (stream) {
         const rl = createInterface({ input: stream, crlfDelay: Infinity });
-        // Build TOW_KOD → price map
-        const priceMap = new Map<string, number>();
+        // Two-pass so we can filter out IC "price on request" placeholders:
+        // values >= €5000 that get reused across ≥3 distinct SKUs (e.g. 11149.99).
+        const rawRows: Array<[string, number]> = [];
+        const priceCounts = new Map<number, number>();
         let lineNum = 0;
         for await (const line of rl) {
-          if (lineNum++ === 0) continue; // skip header
+          if (lineNum++ === 0) continue;
           const parts = line.split(";");
           const towKod = parts[0]?.trim();
           const priceStr = parts[4]?.trim()?.replace(",", ".") ?? "0";
           const price = parseFloat(priceStr);
-          if (towKod && price > 0) priceMap.set(towKod, price);
+          if (towKod && price > 0) {
+            rawRows.push([towKod, price]);
+            priceCounts.set(price, (priceCounts.get(price) ?? 0) + 1);
+          }
         }
-        logger.info({ parsed: priceMap.size }, "IC pricing CSV parsed");
+        const placeholders = new Set<number>();
+        for (const [p, c] of priceCounts) if (p >= 5000 && c >= 3) placeholders.add(p);
+        if (placeholders.size > 0) {
+          logger.warn({ placeholders: [...placeholders] }, "Skipping IC placeholder prices");
+        }
+        const priceMap = new Map<string, number>();
+        for (const [sku, price] of rawRows) {
+          if (!placeholders.has(price)) priceMap.set(sku, price);
+        }
+        logger.info({ parsed: priceMap.size, skippedPlaceholders: rawRows.length - priceMap.size }, "IC pricing CSV parsed");
 
         // Batch update via intercars_mappings:
         // CSV tow_kod → intercars_mappings → match product_maps by article_number + brand

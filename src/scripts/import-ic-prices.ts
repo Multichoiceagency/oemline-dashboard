@@ -178,9 +178,23 @@ function buildPriceLookup(
 ): Map<string, number> {
   // Key: `${normalizedArticle}|${brandId}` → price
   const out = new Map<string, number>();
+
+  // Detect IC "price on request" placeholders: values >= €5000 shared by ≥3
+  // distinct SKUs. Without this filter MAHLE fuel filters end up at €11,949.
+  const priceCounts = new Map<number, number>();
+  for (const entries of Object.values(articleIndex)) {
+    for (const e of entries) {
+      if (e.p > 0) priceCounts.set(e.p, (priceCounts.get(e.p) ?? 0) + 1);
+    }
+  }
+  const placeholders = new Set<number>();
+  for (const [p, c] of priceCounts) {
+    if (p >= 5000 && c >= 3) placeholders.add(p);
+  }
+
   for (const [normArticle, entries] of Object.entries(articleIndex)) {
     for (const e of entries) {
-      if (!(e.p > 0)) continue;
+      if (!(e.p > 0) || placeholders.has(e.p)) continue;
       // Re-normalize the brand — JSON sometimes preserves special chars.
       const normB = normalizeBrand(e.b);
       // Prefer exact brand match over alias when both yield the same ID
