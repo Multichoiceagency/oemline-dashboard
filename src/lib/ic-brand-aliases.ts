@@ -14,7 +14,7 @@ export const MANUAL_ALIASES_FULL: Record<string, string> = {
   "LEMFOERDER": "LEMFÖRDER",           // Umlaut difference (oe vs ö)
   "REINZ": "VICTOR REINZ",             // Short vs full name (same company)
   "MEAT&DORIA": "MEAT & DORIA",        // Punctuation difference
-  "GOETZE": "GOETZE ENGINE",           // Short vs full name
+  "GOETZE": "GOETZE",                  // IC and TecDoc both use "GOETZE" (no "ENGINE" suffix in our DB)
   "LUK1": "LuK",                       // Typo in IC system (LUK1 vs LuK)
   "ATE1": "ATE",                       // Typo in IC system
   "DAYCO1": "DAYCO",                   // Typo in IC system
