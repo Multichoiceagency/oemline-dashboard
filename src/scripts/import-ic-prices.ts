@@ -179,8 +179,8 @@ function buildPriceLookup(
   // Key: `${normalizedArticle}|${brandId}` → price
   const out = new Map<string, number>();
 
-  // Detect IC "price on request" placeholders: values >= €5000 shared by ≥3
-  // distinct SKUs. Without this filter MAHLE fuel filters end up at €11,949.
+  // IC "price on request" sentinels: ≥ €5000 ending in .99 and recurring.
+  // Real wholesale at this level has organic decimals (67560.55 etc.).
   const priceCounts = new Map<number, number>();
   for (const entries of Object.values(articleIndex)) {
     for (const e of entries) {
@@ -189,7 +189,9 @@ function buildPriceLookup(
   }
   const placeholders = new Set<number>();
   for (const [p, c] of priceCounts) {
-    if (p >= 5000 && c >= 3) placeholders.add(p);
+    if (p < 5000) continue;
+    const cents = Math.round((p % 1) * 100);
+    if (c >= 3 || (cents === 99 && c >= 2) || p === 9999.99) placeholders.add(p);
   }
 
   for (const [normArticle, entries] of Object.entries(articleIndex)) {

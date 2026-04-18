@@ -201,7 +201,11 @@ export async function jobRoutes(app: FastifyInstance) {
           }
         }
         const placeholders = new Set<number>();
-        for (const [p, c] of priceCounts) if (p >= 5000 && c >= 3) placeholders.add(p);
+        for (const [p, c] of priceCounts) {
+          if (p < 5000) continue;
+          const cents = Math.round((p % 1) * 100);
+          if (c >= 3 || (cents === 99 && c >= 2) || p === 9999.99) placeholders.add(p);
+        }
         if (placeholders.size > 0) {
           logger.warn({ placeholders: [...placeholders] }, "Skipping IC placeholder prices");
         }

@@ -89,23 +89,27 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
   }
 
   // ── Step 3: Build price + stock maps ──────────────────────────────────
-  // IC encodes "price on request" as a handful of placeholder values (e.g.
-  // 10547.99, 11149.99) that get shared across many distinct SKUs. Detect
-  // them by frequency: a price ≥ €5000 that shows up for ≥3 unique SKUs is
-  // almost certainly a placeholder, not a real quote. Skip those rows so
-  // MAHLE fuel filters don't get priced at €11,949.
+  // IC encodes "price on request" as a handful of sentinel values that end
+  // in .99 and recur across many SKUs (e.g. 9999.99, 11149.99). Real
+  // wholesale prices above €5000 have organic decimals (e.g. 67560.55).
+  // Reject:
+  //   (a) any price ≥ €5000 that appears for ≥3 distinct SKUs, OR
+  //   (b) any price ≥ €5000 ending in exactly .99 that appears ≥2 times, OR
+  //   (c) the universal €9999.99 sentinel.
   const priceCounts = new Map<number, number>();
   for (const r of pricingRows) {
     if (r.price > 0) priceCounts.set(r.price, (priceCounts.get(r.price) ?? 0) + 1);
   }
   const placeholders = new Set<number>();
   for (const [p, c] of priceCounts) {
-    if (p >= 5000 && c >= 3) placeholders.add(p);
+    if (p < 5000) continue;
+    const cents = Math.round((p % 1) * 100);
+    if (c >= 3 || (cents === 99 && c >= 2) || p === 9999.99) placeholders.add(p);
   }
   if (placeholders.size > 0) {
     logger.warn(
       { placeholders: [...placeholders], skippedRows: pricingRows.filter((r) => placeholders.has(r.price)).length },
-      "Skipping IC placeholder prices (shared across many SKUs)",
+      "Skipping IC placeholder prices (sentinel values, shared across SKUs)",
     );
   }
 
