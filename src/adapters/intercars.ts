@@ -740,7 +740,14 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
         for (const item of quoteItems) {
           const sku = item.sku;
-          const price = item.price?.customerPriceNet ?? item.price?.listPriceNet ?? null;
+          let price = item.price?.customerPriceNet ?? item.price?.listPriceNet ?? null;
+          // IC encodes "price on request" as .99-ending sentinels >= €5000
+          // (e.g. 9999.99, 10547.99, 11149.99). Real wholesale at that level
+          // uses organic decimals. Strip the sentinel so the product shows
+          // "Prijs op aanvraag" instead of a fake €10,547.99.
+          if (price != null && price >= 5000 && Math.round((price % 1) * 100) === 99) {
+            price = null;
+          }
           const currency = item.price?.currencyCode ?? "EUR";
           const stock = item.lines?.reduce((sum, l) => sum + (l.availability ?? 0), 0) ?? 0;
           const existing = quoteMap.get(sku);
