@@ -2,6 +2,7 @@ import { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { waitForIcRateLimit } from "../lib/ic-rate-limiter.js";
+import { MANUAL_ALIASES_FULL } from "../lib/ic-brand-aliases.js";
 
 /**
  * IC Direct Lookup & Enrichment Worker → 100% Match Rate
@@ -528,139 +529,8 @@ async function searchIcByIndex(index: string): Promise<IcProduct | null> {
 }
 
 // ── Auto brand aliases ───────────────────────────────────────────────────
-
-// Manual IC brand → TecDoc brand name mapping
-// ONLY entries where the IC CSV name is genuinely different from TecDoc brand name.
-// No abbreviation guessing — each entry is a verified name difference.
-const MANUAL_ALIASES_FULL: Record<string, string> = {
-  // Verified different names (IC name → TecDoc name)
-  // "BLIC": "DIEDERICHS" — removed: Diederichs has its own API, should not be linked to InterCars
-  "KAYABA": "KYB",                     // KYB was formerly Kayaba (company renamed)
-  "HANS PRIES": "HP",                  // Hans Pries is the full name, HP is the TecDoc brand
-  "LEMFOERDER": "LEMFÖRDER",           // Umlaut difference (oe vs ö)
-  "REINZ": "VICTOR REINZ",             // Short vs full name (same company)
-  "MEAT&DORIA": "MEAT & DORIA",        // Punctuation difference
-  "GOETZE": "GOETZE ENGINE",           // Short vs full name
-  "LUK1": "LuK",                       // Typo in IC system (LUK1 vs LuK)
-  "ATE1": "ATE",                       // Typo in IC system
-  "DAYCO1": "DAYCO",                   // Typo in IC system
-  "INA1": "INA",                       // Typo in IC system
-  "SACHS1": "SACHS",                   // Typo in IC system
-  "PIERBURG1": "PIERBURG",             // Typo in IC system
-  "SNR": "NTN-SNR",                    // SNR merged with NTN
-  "BEHR": "MAHLE",                     // BEHR was acquired by MAHLE
-  "BEHR HELLA": "HELLA",               // BEHR HELLA SERVICE → HELLA
-  "MAHLE ORIGINAL": "MAHLE",           // Extended name vs short
-  "KNECHT": "MAHLE",                   // KNECHT is a MAHLE brand
-  "TRW AUTOMOTIVE": "TRW",             // Extended name vs short
-  "SAINT-GOBAIN SEKURIT": "SAINT-GOBAIN", // Extended name
-  "SAINT GOBAIN": "SAINT-GOBAIN",      // Punctuation difference
-  "AUTOFREN SEINSA": "SEINSA",         // Extended name
-  "JAPAN PARTS": "JAPANPARTS",         // Space difference
-  "LESJOFORS": "LESJÖFORS",            // Umlaut difference (o vs ö)
-  "HENGST": "HENGST FILTER",           // Short vs full name
-  "MANN": "MANN-FILTER",               // Short vs full name
-  "MANN FILTER": "MANN-FILTER",         // Punctuation difference
-  "HERTH+BUSS": "HERTH+BUSS ELPARTS",  // Short vs full name
-  "HERTH BUSS": "HERTH+BUSS ELPARTS",  // Punctuation difference
-  "DT SPARE PARTS": "DT",              // Extended name vs short
-  "DIESEL TECHNIC": "DT",              // Different brand name, same company
-  "PE AUTOMOTIVE": "PE Automotive",     // Case difference
-  "ICER": "ICER BRAKES",               // Short vs full name
-  "FTE": "FTE AUTOMOTIVE",             // Short vs full name
-  "ZF PARTS": "ZF",                    // Extended name
-  "ALL BALLS": "ALL BALLS RACING",     // Short vs full name
-  "DELPHI TECHNOLOGIES": "DELPHI",     // Extended name
-  "NGK SPARK PLUG": "NGK",             // Extended name
-  "VDO": "CONTINENTAL",                // VDO is a Continental brand (verified acquisition)
-  "CONTI": "CONTINENTAL",              // Short name for Continental
-  "NTK": "NGK",                        // NTK is NGK's sensor brand (verified)
-  "GKN": "SPIDAN",                     // GKN driveline → SPIDAN (verified same company)
-  "SWF": "SWF VALEO",                  // SWF is part of Valeo group
-  "KS": "KOLBENSCHMIDT",               // KS = Kolbenschmidt (verified abbreviation in IC)
-  // Additional verified brand aliases for top unmatched IC brands
-  "C.E.I": "CEI",                      // Punctuation difference
-  "HC-CARGO": "CARGO",                 // Prefix difference (HC = house code)
-  "CORTECO": "CORTECO",                // Direct match (should work via Method 2 but ensure)
-  "LAUBER": "LAUBER",                  // Direct match
-  "STEINHOF": "STEINHOF",              // Direct match
-  "ORIS": "ORIS",                      // Direct match (towbar manufacturer)
-  "AUTLOG": "AUTLOG",                  // Direct match
-  "ROMIX": "ROMIX",                    // Direct match
-  "OPTIMAL": "OPTIMAL",                // Direct match
-  "PRASCO": "PRASCO",                  // Direct match
-  "STARK": "STARK",                    // Direct match
-  "RIDEX": "RIDEX",                    // Direct match
-  "ACKOJA": "ACKOJA",                  // Direct match
-  "AUTOMEGA": "AUTOMEGA",              // Direct match
-  "TOPRAN": "TOPRAN",                  // Direct match
-  "ABAKUS": "ABAKUS",                  // Direct match
-  "A.B.S.": "A.B.S.",                  // Direct match (punctuation)
-  "EPS": "EPS",                        // Direct match
-  "FAST": "FAST",                      // Direct match
-  "SWA": "SWag",                       // SWA might be SWAG abbreviation
-  "S-TR": "S-TR",                      // Direct match
-  "MAXGEAR": "MAXGEAR",               // Direct match
-  "KONI": "KONI",                      // Direct match
-  "PROCODIS FRANCE": "PROCODIS",       // Extended name
-  "LUCAS ELECTRICAL": "LUCAS",         // Extended name
-  "QUINTON HAZELL": "QUINTON HAZELL",  // Direct match
-  "SRL": "S.R.L.",                     // Punctuation difference
-  "WILMINK": "WILMINK GROUP",          // Short vs full
-  "BORG AUTOMOTIVE": "BORG",           // Extended name
-  "VIGNAL": "VIGNAL",                  // Direct match
-  "DT": "DT Spare Parts",             // DT → DT Spare Parts (verified TecDoc name)
-  // BOSCH sub-brands in InterCars
-  "BOSCH Brakes": "BOSCH",            // IC sub-brand
-  "BOSCH Filers": "BOSCH",            // IC sub-brand (typo in IC system)
-  "BOSCH DIESEL": "BOSCH",            // IC sub-brand
-  "BOSCH Belts": "BOSCH",             // IC sub-brand
-  "BOSCH Wipers": "BOSCH",            // IC sub-brand
-  "BOSCH Injection": "BOSCH",         // IC sub-brand
-  "BOSCH Electrics": "BOSCH",         // IC sub-brand
-  "BOSCH Bateries": "BOSCH",          // IC sub-brand (typo in IC system)
-  "BOSCH-ELEKTRONARZĘDZ": "BOSCH",    // IC sub-brand (Polish: power tools)
-  "KIOSK SBC": "BOSCH",               // IC alias for Bosch
-  // VALEO sub-brands
-  "VALEO1": "VALEO",                  // IC system variant
-  "VALEO WYCIERACZKI": "VALEO",       // IC sub-brand (Polish: wipers)
-  // DELPHI sub-brands
-  "DELPHI DIESEL": "DELPHI",          // IC sub-brand
-  "DELPHI WTRYSK": "DELPHI",          // IC sub-brand (Polish: injection)
-  // DENSO sub-brands
-  "DENSO WTRYSK": "DENSO",            // IC sub-brand (Polish: injection)
-  "DENSO DIESEL": "DENSO",            // IC sub-brand
-  // GATES sub-brand
-  "GATES OFF HIGHWAY": "GATES",       // IC sub-brand (off-highway division)
-  // DONALDSON sub-brand
-  "DONALDSON OFF": "DONALDSON",        // IC sub-brand (off-highway)
-  // TRW sub-brand
-  "TRW ENGINE COMPONENT": "TRW",      // IC sub-brand
-  // ABE sub-brand
-  "ABE PERFORMANCE": "ABE",           // IC sub-brand
-  // Continental sub-brand
-  "CONTI Industry": "CONTINENTAL CTAM", // IC sub-brand
-  // Numbered IC variants
-  "MAGNUM TECHNOLOGY1": "Magnum Technology", // IC system variant
-  "TYC1": "TYC",                      // IC system variant
-  "BILSTEIN1": "BILSTEIN",            // IC system variant
-  "BREMBO-TU": "BREMBO",              // IC variant
-  // XXL pack variants
-  "CASTROL XXL": "CASTROL",           // IC bulk pack
-  "CASTROL MOTO": "CASTROL",          // IC motorcycle line
-  "CASTROL MOTO XXL": "CASTROL",      // IC motorcycle bulk
-  "SHELL XXL": "SHELL",               // IC bulk pack
-  "MOBIL XXL": "MOBIL",               // IC bulk pack
-  "LIQUI MOLY XXL": "LIQUI MOLY",     // IC bulk pack
-  "LIQUI MOLY MOTO": "LIQUI MOLY",    // IC motorcycle line
-  "FEBI BILSTEIN XXL": "FEBI BILSTEIN", // IC bulk pack
-  // Other
-  "HANKOOK AKUMULATORY": "Hankook",   // IC sub-brand (Polish: batteries)
-  "BMTS": "MAHLE",                     // BMTS turbochargers (MAHLE group)
-  "FAG Industry": "Schaeffler FAG",    // IC sub-brand
-  "TARNÓW": "ZF",                      // IC regional alias for ZF
-  "4MAX BLACHY": "BLIC",              // IC sub-brand (body panels)
-};
+// MANUAL_ALIASES_FULL lives in ../lib/ic-brand-aliases.ts so the pricing
+// importer can share the same curated list.
 
 async function autoCreateBrandAliases(): Promise<number> {
   const supplier = await prisma.$queryRawUnsafe<Array<{ id: number }>>(

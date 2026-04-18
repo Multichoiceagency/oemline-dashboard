@@ -392,23 +392,40 @@ export async function jobRoutes(app: FastifyInstance) {
    * Fire-and-forget IC pricing import.
    * Spawns the import as a background child process on the API server.
    * Returns immediately — check /finalized/stats for progress.
+   *
+   * Body: { execute?: boolean, resetStale?: boolean }
+   *   Default = preflight only (no DB writes). Pass execute=true to actually update.
    */
-  app.post("/jobs/run-ic-import", async () => {
+  app.post("/jobs/run-ic-import", async (request) => {
+    const body = (request.body ?? {}) as { execute?: boolean; resetStale?: boolean };
     const { spawn } = await import("node:child_process");
-    const child = spawn("node", ["dist/scripts/import-ic-prices.js"], {
+    const args = ["dist/scripts/import-ic-prices.js"];
+    if (body.execute) args.push("--execute");
+    if (body.resetStale) args.push("--reset-stale");
+
+    const child = spawn("node", args, {
       cwd: "/app",
       stdio: "ignore",
       detached: true,
       env: { ...process.env },
     });
     child.unref();
-    return { status: "started", pid: child.pid, message: "Import running in background. Check /finalized/stats for progress." };
+    return {
+      status: "started",
+      pid: child.pid,
+      mode: body.execute ? "execute" : "preflight",
+      resetStale: !!body.resetStale,
+      message: body.execute
+        ? "Import running in background. Check /finalized/stats for progress."
+        : "Preflight running in background. Inspect logs for brand coverage.",
+    };
   });
 
   /**
-   * Fast bulk price update from pre-computed article→price JSON (from MinIO).
-   * JSON format: {"NORMALIZED_ARTICLE|NORMALIZED_BRAND": price, ...}
-   * Matches product_maps by UPPER(article_no) + UPPER(brand.name) with special chars stripped.
+   * Fast bulk price update from article-index.json (MinIO).
+   *
+   * Uses strict alias-aware brand resolution (no loose prefix matching).
+   * See src/scripts/import-ic-prices.ts for the canonical matcher.
    */
   app.post("/jobs/import-ic-prices-fast", {
     onRequest: async (request) => { request.raw.socket.setTimeout(900_000); },
@@ -416,16 +433,64 @@ export async function jobRoutes(app: FastifyInstance) {
     const { prisma } = await import("../lib/prisma.js");
     const { logger } = await import("../lib/logger.js");
     const { getObjectStream } = await import("../lib/minio.js");
+    const { MANUAL_ALIASES_FULL, NORMALIZED_ALIASES, normalizeBrand } =
+      await import("../lib/ic-brand-aliases.js");
 
-    // article-index.json: {normalizedArticle: [{b: normalizedBrand, p: price}, ...]}
     const stream = await getObjectStream("intercars/article-index.json");
     const chunks: Buffer[] = [];
     for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     const articleIndex = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, Array<{ b: string; p: number }>>;
     logger.info({ articles: Object.keys(articleIndex).length }, "Loaded article-index.json from MinIO");
 
-    // Get all products with brand in batches, normalize, and match
-    // Uses PREFIX brand matching: IC "FEBI" matches TecDoc "FEBI BILSTEIN"
+    // Build normalized-name → brand_id
+    const brands = await prisma.$queryRawUnsafe<Array<{ id: number; normalized_name: string | null; name: string }>>(
+      `SELECT id, normalized_name, name FROM brands`
+    );
+    const normToId = new Map<string, number>();
+    for (const b of brands) {
+      const key = b.normalized_name ?? normalizeBrand(b.name);
+      if (key && !normToId.has(key)) normToId.set(key, b.id);
+    }
+    // Merge manual alias map + supplier_brand_rules for intercars
+    const icNormToBrandId = new Map<string, number>();
+    for (const [icNorm, tdNorm] of Object.entries(NORMALIZED_ALIASES)) {
+      const id = normToId.get(tdNorm);
+      if (id != null) icNormToBrandId.set(icNorm, id);
+    }
+    try {
+      const rows = await prisma.$queryRawUnsafe<Array<{ supplier_brand: string; brand_id: number }>>(
+        `SELECT sbr.supplier_brand, sbr.brand_id
+         FROM supplier_brand_rules sbr
+         JOIN suppliers s ON s.id = sbr.supplier_id
+         WHERE s.code = 'intercars' AND sbr.active = true`
+      );
+      for (const r of rows) {
+        const k = normalizeBrand(r.supplier_brand);
+        if (!icNormToBrandId.has(k)) icNormToBrandId.set(k, r.brand_id);
+      }
+    } catch (err) {
+      logger.warn({ err }, "supplier_brand_rules load failed (non-fatal)");
+    }
+    const resolveBrand = (icNorm: string): number | null =>
+      normToId.get(icNorm) ?? icNormToBrandId.get(icNorm) ?? null;
+
+    // Build (normArticle|brandId) → price
+    const priceLookup = new Map<string, number>();
+    for (const [normArticle, entries] of Object.entries(articleIndex)) {
+      for (const e of entries) {
+        if (!(e.p > 0)) continue;
+        const exactId = normToId.get(e.b);
+        const id = exactId ?? resolveBrand(e.b);
+        if (id == null) continue;
+        const key = `${normArticle}|${id}`;
+        if (exactId != null || !priceLookup.has(key)) priceLookup.set(key, e.p);
+      }
+    }
+    logger.info(
+      { brandsInDb: brands.length, aliasMapSize: Object.keys(MANUAL_ALIASES_FULL).length, lookupEntries: priceLookup.size },
+      "Alias-aware price lookup built",
+    );
+
     const PAGE = 10000;
     let lastId = 0;
     let updated = 0;
@@ -433,12 +498,14 @@ export async function jobRoutes(app: FastifyInstance) {
 
     while (true) {
       const products = await prisma.$queryRawUnsafe<Array<{
-        id: number; article_no: string; brand_name: string;
+        id: number;
+        normalized_article_no: string | null;
+        article_no: string;
+        brand_id: number | null;
       }>>(
-        `SELECT pm.id, pm.article_no, b.name AS brand_name
+        `SELECT pm.id, pm.normalized_article_no, pm.article_no, pm.brand_id
          FROM product_maps pm
-         JOIN brands b ON b.id = pm.brand_id
-         WHERE pm.id > $1 AND pm.status = 'active'
+         WHERE pm.id > $1 AND pm.status = 'active' AND pm.brand_id IS NOT NULL
          ORDER BY pm.id ASC LIMIT $2`,
         lastId, PAGE
       );
@@ -447,25 +514,12 @@ export async function jobRoutes(app: FastifyInstance) {
       lastId = products[products.length - 1].id;
       scanned += products.length;
 
-      // Match products against the article index with PREFIX brand matching
       const updates: Array<{ id: number; price: number }> = [];
       for (const p of products) {
-        const normArticle = p.article_no.toUpperCase().replace(/[^A-Z0-9]/g, "");
-        const entries = articleIndex[normArticle];
-        if (!entries) continue;
-
-        const normBrand = p.brand_name.toUpperCase().replace(/[^A-Z0-9]/g, "");
-        // Find best brand match: exact → prefix → first
-        let bestPrice: number | null = null;
-        for (const entry of entries) {
-          if (entry.b === normBrand) { bestPrice = entry.p; break; } // exact
-          if (normBrand.startsWith(entry.b) || entry.b.startsWith(normBrand)) {
-            bestPrice = entry.p; // prefix match (FEBI matches FEBIBILSTEIN)
-          }
-        }
-        if (bestPrice != null && bestPrice > 0) {
-          updates.push({ id: p.id, price: bestPrice });
-        }
+        if (p.brand_id == null) continue;
+        const normArticle = p.normalized_article_no ?? normalizeBrand(p.article_no);
+        const price = priceLookup.get(`${normArticle}|${p.brand_id}`);
+        if (price != null && price > 0) updates.push({ id: p.id, price });
       }
 
       if (updates.length > 0) {
