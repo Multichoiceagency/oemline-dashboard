@@ -76,15 +76,27 @@ export async function finalizedRoutes(app: FastifyInstance) {
       where.OR = [{ stock: null }, { stock: 0 }];
     }
 
+    // maxPrice is the RETAIL cap the customer sees (incl. margin + VAT).
+    // Convert to a wholesale-base cap using current pricing settings so the
+    // SQL filter on product_maps.price (which is the raw base) is correct.
+    let baseCap: number | null = null;
+    if (maxPrice != null) {
+      const s = await getAllSettings();
+      const marginPct = parseFloat(s.margin_percentage ?? "0") / 100;
+      const taxRate = parseFloat(s.tax_rate ?? "21") / 100;
+      const multiplier = (1 + marginPct) * (1 + taxRate);
+      baseCap = multiplier > 0 ? maxPrice / multiplier : maxPrice;
+    }
+
     // Compose price filter from hasPrice + maxPrice. Both can be combined.
-    if (hasPrice === "true" && maxPrice != null) {
-      where.price = { not: null, lte: maxPrice };
+    if (hasPrice === "true" && baseCap != null) {
+      where.price = { not: null, lte: baseCap };
     } else if (hasPrice === "true") {
       where.price = { not: null };
     } else if (hasPrice === "false") {
       where.price = null;
-    } else if (maxPrice != null) {
-      where.price = { lte: maxPrice };
+    } else if (baseCap != null) {
+      where.price = { lte: baseCap };
     }
 
     if (hasImage === "true") {
@@ -513,7 +525,16 @@ export async function finalizedRoutes(app: FastifyInstance) {
     const supplierCodes = Array.isArray(body.suppliers)
       ? body.suppliers.map((s) => String(s).trim()).filter(Boolean)
       : [];
-    const maxPrice = typeof body.maxPrice === "number" && body.maxPrice > 0 ? body.maxPrice : null;
+    const maxRetailPrice = typeof body.maxPrice === "number" && body.maxPrice > 0 ? body.maxPrice : null;
+    // Translate the retail cap to a wholesale-base cap (same multiplier as /finalized).
+    let maxPrice: number | null = null;
+    if (maxRetailPrice != null) {
+      const s = await getAllSettings();
+      const marginPct = parseFloat(s.margin_percentage ?? "0") / 100;
+      const taxRate = parseFloat(s.tax_rate ?? "21") / 100;
+      const multiplier = (1 + marginPct) * (1 + taxRate);
+      maxPrice = multiplier > 0 ? maxRetailPrice / multiplier : maxRetailPrice;
+    }
 
     // Normalize for matching: uppercase, alphanumeric only
     const normalized = articleNumbers.map((a) => a.replace(/[^a-zA-Z0-9]/g, "").toUpperCase());
