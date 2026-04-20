@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { NORMALIZED_ALIASES, normalizeBrand } from "../lib/ic-brand-aliases.js";
 
 const setPriceSchema = z.object({
   price: z.number().min(0).max(1_000_000).nullable(),
@@ -26,6 +27,11 @@ const dedupeSchema = z.object({
   confirm: z.literal("YES_DEDUPE_INTERCARS"),
 });
 
+const cleanupContaminationSchema = z.object({
+  confirm: z.literal("YES_CLEAN_CONTAMINATION"),
+  dryRun: z.boolean().default(true),
+});
+
 /**
  * Targeted price admin endpoints.
  *
@@ -45,6 +51,151 @@ const dedupeSchema = z.object({
  *       only bulk cleanup still needed — real high-priced items stay.
  */
 export async function pricingAdminRoutes(app: FastifyInstance) {
+  /**
+   * Alias-aware cleanup of IC cross-contamination.
+   *
+   * Background: 124K rows have ic_sku pointing to an IC row whose manufacturer
+   * doesn't match the product's brand. Most of those are legitimate aliases
+   * (MAHLE↔KNECHT, Schaeffler-LuK↔LUK, LEMFÖRDER↔LEMFOERDER) routed via
+   * supplier_brand_rules + NORMALIZED_ALIASES. Only ~25K are real
+   * contamination from the old Phase 1D (MAPCO↔FEBI etc).
+   *
+   * Strategy:
+   * 1. Pre-compute legit alias set: NORMALIZED_ALIASES + supplier_brand_rules
+   *    rows for the InterCars supplier. Key: `${normTecDocName}|${normIcManu}`.
+   * 2. Scan contaminated rows, bucket by brand-pair.
+   * 3. If pair is in legit set → skip (keep ic_sku + price).
+   * 4. If pair is not in legit set → NULL out ic_sku, price, ean.
+   *    Description left as-is; TecDoc description will repopulate on next
+   *    sync for that brand if missing.
+   * 5. Idempotent: running twice is safe because contamination only touches
+   *    rows we've flagged.
+   *
+   * Supports dryRun (default) so callers see the scale before writing.
+   */
+  app.post("/admin/products/cleanup-contamination", async (request) => {
+    const { dryRun } = cleanupContaminationSchema.parse(request.body ?? {});
+    const start = Date.now();
+
+    // 1. Build legit-alias set
+    const legitPairs = new Set<string>();
+
+    // 1a. NORMALIZED_ALIASES is { normIc: normTecDoc }.
+    for (const [icNorm, tdNorm] of Object.entries(NORMALIZED_ALIASES)) {
+      legitPairs.add(`${tdNorm}|${icNorm}`);
+    }
+
+    // 1b. supplier_brand_rules for InterCars supplier
+    try {
+      const rules = await prisma.$queryRawUnsafe<Array<{
+        brand_name: string; supplier_brand: string;
+      }>>(
+        `SELECT b.name AS brand_name, sbr.supplier_brand
+           FROM supplier_brand_rules sbr
+           JOIN suppliers s ON s.id = sbr.supplier_id
+           JOIN brands b ON b.id = sbr.brand_id
+          WHERE s.code = 'intercars' AND sbr.active = true`
+      );
+      for (const r of rules) {
+        legitPairs.add(`${normalizeBrand(r.brand_name)}|${normalizeBrand(r.supplier_brand)}`);
+      }
+    } catch (err) {
+      logger.warn({ err }, "Could not read supplier_brand_rules — alias resolution is NORMALIZED_ALIASES-only");
+    }
+
+    // 2. Count contaminated rows grouped by brand-pair so we can bucket alias/dirty
+    const pairs = await prisma.$queryRawUnsafe<Array<{
+      our_brand: string; ic_brand: string; row_count: bigint;
+    }>>(
+      `SELECT b.name AS our_brand,
+              im.manufacturer AS ic_brand,
+              COUNT(*)::bigint AS row_count
+         FROM product_maps pm
+         JOIN brands b ON b.id = pm.brand_id
+         JOIN intercars_mappings im ON im.tow_kod = pm.ic_sku
+        WHERE pm.ic_sku IS NOT NULL
+          AND pm.status = 'active'
+          AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                <> UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+          AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                NOT LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+          AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                NOT LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+        GROUP BY b.name, im.manufacturer`
+    );
+
+    const dirtyPairs: Array<{ ourBrand: string; icBrand: string; rowCount: number }> = [];
+    const legitKept: Array<{ ourBrand: string; icBrand: string; rowCount: number }> = [];
+    let dirtyTotal = 0;
+    let legitTotal = 0;
+
+    for (const p of pairs) {
+      const key = `${normalizeBrand(p.our_brand)}|${normalizeBrand(p.ic_brand)}`;
+      const count = Number(p.row_count);
+      if (legitPairs.has(key)) {
+        legitKept.push({ ourBrand: p.our_brand, icBrand: p.ic_brand, rowCount: count });
+        legitTotal += count;
+      } else {
+        dirtyPairs.push({ ourBrand: p.our_brand, icBrand: p.ic_brand, rowCount: count });
+        dirtyTotal += count;
+      }
+    }
+
+    dirtyPairs.sort((a, b) => b.rowCount - a.rowCount);
+    legitKept.sort((a, b) => b.rowCount - a.rowCount);
+
+    if (dryRun) {
+      return {
+        ok: true,
+        dryRun: true,
+        durationMs: Date.now() - start,
+        summary: {
+          dirtyRowsToClean: dirtyTotal,
+          legitRowsKept: legitTotal,
+          dirtyPairs: dirtyPairs.length,
+          legitPairs: legitKept.length,
+        },
+        topDirtyPairs: dirtyPairs.slice(0, 15),
+        topLegitKept: legitKept.slice(0, 10),
+        note: "Re-run with dryRun=false to actually clean.",
+      };
+    }
+
+    // 3. Real cleanup — NULL out ic_sku/price/ean for each dirty pair
+    await prisma.$executeRawUnsafe(`SET LOCAL statement_timeout = '600s'`);
+    let affected = 0;
+    for (const p of dirtyPairs) {
+      const res = await prisma.$executeRawUnsafe(
+        `UPDATE product_maps pm
+            SET ic_sku = NULL, price = NULL, ean = NULL, updated_at = NOW()
+           FROM brands b, intercars_mappings im
+          WHERE pm.brand_id = b.id
+            AND im.tow_kod = pm.ic_sku
+            AND pm.status = 'active'
+            AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace($1, '[^a-zA-Z0-9]', '', 'g'))
+            AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace($2, '[^a-zA-Z0-9]', '', 'g'))`,
+        p.ourBrand,
+        p.icBrand
+      );
+      affected += Number(res);
+    }
+
+    logger.warn(
+      { affected, durationMs: Date.now() - start, dirtyPairCount: dirtyPairs.length },
+      "IC cross-contamination cleanup applied"
+    );
+
+    return {
+      ok: true,
+      dryRun: false,
+      durationMs: Date.now() - start,
+      affected,
+      dirtyPairCount: dirtyPairs.length,
+      legitRowsKept: legitTotal,
+      note: "ic_sku, price, ean reset on dirty rows. Next ic-match run (with brand-guarded Phase 1D) will re-match correctly.",
+    };
+  });
+
   /**
    * One-off dedupe of intercars_mappings.
    *
