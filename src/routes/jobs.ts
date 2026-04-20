@@ -105,6 +105,40 @@ export async function jobRoutes(app: FastifyInstance) {
     };
   });
 
+  /**
+   * Trigger a targeted TecDoc sync for specific assembly-group node IDs.
+   * Used to back-fill articleCriteria on a subset of categories (e.g. olie +
+   * oliefilter + oliekoeler) without resyncing the whole 1.1M-row catalogue.
+   *
+   * Body: { assemblyGroupNodeIds: number[] } — TecDoc assemblyGroupNodeId values
+   *   e.g. [706233, 101994, 101996, 102201, 102203, 103352]   (Olie)
+   *        [100259, 103543, 706587, 706726, 100470]           (Oliefilter)
+   *        [100108, 100483, 706083]                            (Oliekoeler)
+   *
+   * One sync job is queued; the TecDoc adapter filters the full assembly-group
+   * list to just the requested IDs before paginating.
+   */
+  app.post("/jobs/sync-tecdoc-categories", async (request) => {
+    const schema = z.object({
+      assemblyGroupNodeIds: z.array(z.number().int().positive()).min(1).max(100),
+    });
+    const { assemblyGroupNodeIds } = schema.parse(request.body);
+
+    const job = await syncQueue.add(
+      `sync-tecdoc-categories`,
+      { supplierCode: "tecdoc", assemblyGroupNodeIds },
+      { priority: 2, jobId: `sync-tecdoc-categories-${Date.now()}` }
+    );
+
+    return {
+      queued: 1,
+      jobId: job.id,
+      assemblyGroupNodeIds,
+      status: "queued",
+      message: `Gerichte TecDoc sync gestart voor ${assemblyGroupNodeIds.length} assembly group(s). articleCriteria wordt bijgewerkt zodra elk product door de upsert gaat.`,
+    };
+  });
+
   // Manually trigger a match job for a supplier
   app.post("/jobs/match", async (request) => {
     const schema = z.object({ supplierCode: z.string().min(1) });

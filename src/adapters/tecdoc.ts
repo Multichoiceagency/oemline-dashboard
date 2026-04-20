@@ -299,9 +299,9 @@ export class TecDocAdapter extends BaseSupplierAdapter {
    */
   async *syncCatalogWithOptions(
     cursor?: string,
-    opts?: { brandIds?: number[] }
+    opts?: { brandIds?: number[]; assemblyGroupNodeIds?: number[] }
   ): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
-    yield* this.syncCatalogInternal(cursor, opts?.brandIds);
+    yield* this.syncCatalogInternal(cursor, opts?.brandIds, opts?.assemblyGroupNodeIds);
   }
 
   async *syncCatalog(cursor?: string): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
@@ -310,7 +310,8 @@ export class TecDocAdapter extends BaseSupplierAdapter {
 
   private async *syncCatalogInternal(
     cursor?: string,
-    overrideBrandIds?: number[]
+    overrideBrandIds?: number[],
+    overrideAssemblyGroupIds?: number[]
   ): AsyncGenerator<SupplierCatalogItem[], void, unknown> {
     try {
       // Load brand filter: job-level override takes priority, then DB setting
@@ -363,9 +364,20 @@ export class TecDocAdapter extends BaseSupplierAdapter {
       // Flatten nested tree structure if needed
       const allFacets = this.flattenFacets(rawFacets);
 
-      const groups = allFacets
+      let groups = allFacets
         .filter((g) => g.assemblyGroupNodeId && (g.matchCount ?? 0) > 0)
         .sort((a, b) => (b.matchCount ?? 0) - (a.matchCount ?? 0));
+
+      // Narrow to specific assembly groups if the caller asked for a targeted
+      // sync (e.g. only oil-related categories for faster criteria back-fill).
+      if (overrideAssemblyGroupIds && overrideAssemblyGroupIds.length > 0) {
+        const wanted = new Set(overrideAssemblyGroupIds);
+        groups = groups.filter((g) => wanted.has(g.assemblyGroupNodeId));
+        logger.info(
+          { supplier: this.code, targetedGroups: groups.length, requested: overrideAssemblyGroupIds.length },
+          "TecDoc sync: assembly group filter active",
+        );
+      }
 
       logger.info(
         {
