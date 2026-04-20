@@ -20,6 +20,7 @@ import { processIcCatalogJob } from "./workers/ic-catalog.worker.js";
 import { processIcEnrichJob } from "./workers/ic-enrich.worker.js";
 import { processIcCsvSyncJob } from "./workers/ic-csv-sync.worker.js";
 import { processAiCoordinatorJob } from "./workers/ai-coordinator.worker.js";
+import { processTecdocWatchdogJob } from "./workers/tecdoc-watchdog.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 
@@ -228,6 +229,17 @@ if (handles("ai-coordinator") || handles("sync")) {
     concurrency: 1, // Single job — sequential decision making
     stalledInterval: 120_000,
     lockDuration: 300_000, // 5 min max
+  }));
+}
+
+// TecDoc watchdog: probes TecDoc every 5 min and auto-rearms the paused
+// sync + match schedulers once the API is healthy again.
+if (handles("tecdoc-watchdog") || handles("sync")) {
+  workers.push(new Worker("tecdoc-watchdog", processTecdocWatchdogJob, {
+    connection,
+    concurrency: 1,
+    stalledInterval: 120_000,
+    lockDuration: 120_000,
   }));
 }
 

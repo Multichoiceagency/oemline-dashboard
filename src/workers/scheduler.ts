@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue } from "./queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue, tecdocWatchdogQueue } from "./queues.js";
 
 /**
  * Sets up repeatable jobs for continuous sync, match, pricing, stock, and index.
@@ -20,7 +20,7 @@ export async function startScheduler(): Promise<void> {
   logger.info("Starting job scheduler...");
 
   // Clean up old repeatable jobs to avoid duplicates
-  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue]) {
+  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue, tecdocWatchdogQueue]) {
     const existing = await queue.getRepeatableJobs();
     for (const job of existing) {
       await queue.removeRepeatableByKey(job.key);
@@ -216,6 +216,18 @@ export async function startScheduler(): Promise<void> {
     }
   );
   logger.info("Scheduled AI Coordinator (30m — Ollama-powered worker orchestration)");
+
+  // TecDoc watchdog: probes TecDoc every 5 min; auto-rearms sync+match when
+  // the API recovers from an outage/quota-exceeded state.
+  await tecdocWatchdogQueue.add(
+    "tecdoc-watchdog-scheduled",
+    {},
+    {
+      repeat: { every: 5 * 60 * 1000 },
+      jobId: "tecdoc-watchdog-repeat",
+    }
+  );
+  logger.info("Scheduled TecDoc watchdog (5m — auto-rearm on recovery)");
 
   // Fire initial jobs immediately for all suppliers
   // Use jobId for deduplication — prevents duplicate jobs accumulating across restarts

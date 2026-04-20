@@ -173,3 +173,16 @@ export const swarmQueue = new Queue("swarm", {
     backoff: { type: "exponential", delay: 30_000 },
   },
 });
+
+// TecDoc watchdog: probes the TecDoc API every 5 min and, when the API
+// recovers after an outage (expired key / exceeded quota), automatically
+// re-arms the paused sync + match schedulers and fires the pending oil
+// back-fill sync. Cheap (1 API call per probe) and self-healing.
+export const tecdocWatchdogQueue = new Queue("tecdoc-watchdog", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 20 },
+    removeOnFail: { count: 50 },
+    attempts: 1,
+  },
+});
