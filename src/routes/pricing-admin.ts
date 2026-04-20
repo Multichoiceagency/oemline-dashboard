@@ -2,7 +2,6 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { ensureNormalizedIndexes } from "../lib/prisma.js";
 
 const setPriceSchema = z.object({
   price: z.number().min(0).max(1_000_000).nullable(),
@@ -45,13 +44,38 @@ export async function pricingAdminRoutes(app: FastifyInstance) {
   /**
    * On-demand rebuild of ic_unique_articles (Phase 1D source of truth).
    *
-   * Needed when the startup ensureNormalizedIndexes hits its timeout before
-   * finishing the drop+recreate with the new norm_manufacturer column.
-   * Returns after the mat-view is present with the expected columns.
+   * Targeted: only CREATE MATERIALIZED VIEW + index, no ensureNormalizedIndexes.
+   * Calling the full bootstrap was the cause of earlier CREATE failures — too
+   * many parallel DDLs on a busy Postgres. Also extends the session timeout
+   * because the GROUP BY over 565K IC rows runs 30-60s under load.
    */
   app.post("/admin/migrations/rebuild-ic-unique-articles", async () => {
     const start = Date.now();
-    await ensureNormalizedIndexes();
+
+    // Per-session timeout: default 30s isn't enough for the CREATE's GROUP BY
+    // on 565K intercars_mappings rows. Bump to 5 min for this one request.
+    await prisma.$executeRawUnsafe(`SET LOCAL statement_timeout = '300s'`);
+
+    await prisma.$executeRawUnsafe(`DROP MATERIALIZED VIEW IF EXISTS ic_unique_articles CASCADE`);
+
+    await prisma.$executeRawUnsafe(`
+      CREATE MATERIALIZED VIEW ic_unique_articles AS
+      SELECT
+        normalized_article_number     AS norm_article,
+        MIN(tow_kod)                  AS tow_kod,
+        MIN(ean)                      AS ic_ean,
+        MIN(weight)                   AS ic_weight,
+        MIN(manufacturer)             AS manufacturer,
+        MIN(normalized_manufacturer)  AS norm_manufacturer
+      FROM intercars_mappings
+      GROUP BY normalized_article_number
+      HAVING COUNT(*) = 1
+    `);
+
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX idx_ic_unique_articles_norm ON ic_unique_articles (norm_article)`
+    );
+
     const cols = await prisma.$queryRawUnsafe<Array<{ column_name: string }>>(
       `SELECT column_name FROM information_schema.columns
         WHERE table_name = 'ic_unique_articles'
@@ -60,6 +84,12 @@ export async function pricingAdminRoutes(app: FastifyInstance) {
     const count = await prisma.$queryRawUnsafe<Array<{ c: bigint }>>(
       `SELECT COUNT(*)::bigint AS c FROM ic_unique_articles`
     );
+
+    logger.info(
+      { durationMs: Date.now() - start, rowCount: Number(count[0]?.c ?? 0) },
+      "ic_unique_articles rebuilt with manufacturer column"
+    );
+
     return {
       ok: true,
       durationMs: Date.now() - start,
