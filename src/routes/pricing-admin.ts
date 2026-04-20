@@ -104,31 +104,34 @@ export async function pricingAdminRoutes(app: FastifyInstance) {
     }
 
     // 2. Count contaminated rows grouped by brand-pair so we can bucket alias/dirty.
-    // Disable parallel workers for this groupBy — parallel hash aggregation
-    // allocates shared memory segments that fill /tmp under concurrent load.
-    // Serial execution is slower but doesn't hit the shm bottleneck.
-    await prisma.$executeRawUnsafe(`SET LOCAL max_parallel_workers_per_gather = 0`);
-    await prisma.$executeRawUnsafe(`SET LOCAL work_mem = '256MB'`);
-
-    const pairs = await prisma.$queryRawUnsafe<Array<{
-      our_brand: string; ic_brand: string; row_count: bigint;
-    }>>(
-      `SELECT b.name AS our_brand,
-              im.manufacturer AS ic_brand,
-              COUNT(*)::bigint AS row_count
-         FROM product_maps pm
-         JOIN brands b ON b.id = pm.brand_id
-         JOIN intercars_mappings im ON im.tow_kod = pm.ic_sku
-        WHERE pm.ic_sku IS NOT NULL
-          AND pm.status = 'active'
-          AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
-                <> UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
-          AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
-                NOT LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
-          AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
-                NOT LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
-        GROUP BY b.name, im.manufacturer`
-    );
+    // SET LOCAL only applies within a single transaction, so wrap the groupBy
+    // + its memory/parallel tweaks in an interactive transaction. Otherwise
+    // Prisma picks a fresh pool connection for the $queryRawUnsafe and the
+    // SET LOCAL statements are ignored — shm crash returns.
+    const pairs = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL max_parallel_workers_per_gather = 0`);
+      await tx.$executeRawUnsafe(`SET LOCAL work_mem = '256MB'`);
+      await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '300s'`);
+      return tx.$queryRawUnsafe<Array<{
+        our_brand: string; ic_brand: string; row_count: bigint;
+      }>>(
+        `SELECT b.name AS our_brand,
+                im.manufacturer AS ic_brand,
+                COUNT(*)::bigint AS row_count
+           FROM product_maps pm
+           JOIN brands b ON b.id = pm.brand_id
+           JOIN intercars_mappings im ON im.tow_kod = pm.ic_sku
+          WHERE pm.ic_sku IS NOT NULL
+            AND pm.status = 'active'
+            AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                  <> UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+            AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                  NOT LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+            AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                  NOT LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+          GROUP BY b.name, im.manufacturer`
+      );
+    }, { maxWait: 10_000, timeout: 300_000 });
 
     const dirtyPairs: Array<{ ourBrand: string; icBrand: string; rowCount: number }> = [];
     const legitKept: Array<{ ourBrand: string; icBrand: string; rowCount: number }> = [];
@@ -167,24 +170,31 @@ export async function pricingAdminRoutes(app: FastifyInstance) {
       };
     }
 
-    // 3. Real cleanup — NULL out ic_sku/price/ean for each dirty pair
-    await prisma.$executeRawUnsafe(`SET LOCAL statement_timeout = '600s'`);
-    let affected = 0;
-    for (const p of dirtyPairs) {
-      const res = await prisma.$executeRawUnsafe(
-        `UPDATE product_maps pm
-            SET ic_sku = NULL, price = NULL, ean = NULL, updated_at = NOW()
-           FROM brands b, intercars_mappings im
-          WHERE pm.brand_id = b.id
-            AND im.tow_kod = pm.ic_sku
-            AND pm.status = 'active'
-            AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace($1, '[^a-zA-Z0-9]', '', 'g'))
-            AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace($2, '[^a-zA-Z0-9]', '', 'g'))`,
-        p.ourBrand,
-        p.icBrand
-      );
-      affected += Number(res);
-    }
+    // 3. Real cleanup — NULL out ic_sku/price/ean for each dirty pair.
+    // Wrapped in a transaction so SET LOCAL timeouts + memory tweaks apply
+    // to every UPDATE in the batch.
+    const affected = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL max_parallel_workers_per_gather = 0`);
+      await tx.$executeRawUnsafe(`SET LOCAL work_mem = '256MB'`);
+      await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '600s'`);
+      let total = 0;
+      for (const p of dirtyPairs) {
+        const res = await tx.$executeRawUnsafe(
+          `UPDATE product_maps pm
+              SET ic_sku = NULL, price = NULL, ean = NULL, updated_at = NOW()
+             FROM brands b, intercars_mappings im
+            WHERE pm.brand_id = b.id
+              AND im.tow_kod = pm.ic_sku
+              AND pm.status = 'active'
+              AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace($1, '[^a-zA-Z0-9]', '', 'g'))
+              AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) = UPPER(regexp_replace($2, '[^a-zA-Z0-9]', '', 'g'))`,
+          p.ourBrand,
+          p.icBrand
+        );
+        total += Number(res);
+      }
+      return total;
+    }, { maxWait: 10_000, timeout: 900_000 });
 
     logger.warn(
       { affected, durationMs: Date.now() - start, dirtyPairCount: dirtyPairs.length },
