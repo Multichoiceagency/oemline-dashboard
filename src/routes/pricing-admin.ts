@@ -134,6 +134,51 @@ export async function pricingAdminRoutes(app: FastifyInstance) {
    * Returns a ranked list of contaminated rows so we can size the cleanup
    * before running any mass UPDATE.
    */
+  /**
+   * Summary audit — one row per (our_brand → ic_brand) pair with count.
+   * Surfaces whether the mismatch is a systemic alias (MAHLE↔KNECHT with
+   * thousands of rows) or one-off contamination (MAPCO↔SONIC with a few).
+   * No row-level payload — just aggregation so the caller can prioritise.
+   */
+  app.get("/admin/products/audit-contamination/summary", async () => {
+    const pairs = await prisma.$queryRawUnsafe<Array<{
+      our_brand: string;
+      ic_brand: string;
+      row_count: bigint;
+      sample_articles: string[];
+    }>>(
+      `SELECT b.name AS our_brand,
+              im.manufacturer AS ic_brand,
+              COUNT(*)::bigint AS row_count,
+              (ARRAY_AGG(pm.article_no ORDER BY pm.id))[1:3] AS sample_articles
+         FROM product_maps pm
+         JOIN brands b ON b.id = pm.brand_id
+         JOIN intercars_mappings im ON im.tow_kod = pm.ic_sku
+        WHERE pm.ic_sku IS NOT NULL
+          AND pm.status = 'active'
+          AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                <> UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+          AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                NOT LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+          AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                NOT LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+        GROUP BY b.name, im.manufacturer
+        ORDER BY COUNT(*) DESC
+        LIMIT 200`
+    );
+
+    return {
+      uniquePairs: pairs.length,
+      pairs: pairs.map((p) => ({
+        ourBrand: p.our_brand,
+        icBrand: p.ic_brand,
+        rowCount: Number(p.row_count),
+        sampleArticles: p.sample_articles,
+      })),
+      note: "Legitimate group brands (MAHLE/KNECHT, CONTINENTAL/VDO, SACHS/ZF) surface as large clusters; pure contamination is the long tail of tiny counts.",
+    };
+  });
+
   app.get("/admin/products/audit-contamination", async (request) => {
     const { limit } = auditContaminationSchema.parse(request.query);
 
