@@ -3,38 +3,36 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 
-const normalizeSingleSchema = z.object({
-  productId: z.coerce.number().int().positive(),
+const setPriceSchema = z.object({
+  price: z.number().min(0).max(1_000_000).nullable(),
 });
 
-const normalizeBulkSchema = z.object({
-  confirm: z.literal("YES_NORMALIZE_ALL_PRICES"),
-  threshold: z.coerce.number().min(0).default(100),
+const stripSentinelsSchema = z.object({
+  confirm: z.literal("YES_STRIP_SENTINELS"),
 });
 
 /**
- * One-off price normalization endpoints.
+ * Targeted price admin endpoints.
  *
- * Context: supplier adapters historically stored wholesale prices in minor
- * units (cents) while the rest of the system treats them as euros, producing
- * values 100x too high across the catalogue. This route exposes two tools:
+ * Background: an earlier fix assumed all high prices were cents-mistakes and
+ * divided everything ≥ €1000 by 100. That broke legitimately expensive items
+ * (ZF automatic gearboxes, Bosch injection pumps etc.). Those real prices
+ * match what InterCars lists on pl.e-cat.intercars.eu. We back out the blanket
+ * normalization and expose two surgical tools:
  *
- *   POST /admin/pricing/normalize-cents/:productId
- *     — Dry-fix one row. Use this to verify the approach on a single product
- *       (e.g. /finalized/8164484) before touching the whole table.
+ *   POST /admin/pricing/set-price/:productId { price: number|null }
+ *     — Directly set / clear a single product's wholesale price. Used to
+ *       restore values broken by the earlier /100 experiment.
  *
- *   POST /admin/pricing/normalize-cents-bulk
- *     — Mass update. Divides `price` by 100 for every row where price is
- *       above `threshold` (default 100, catches anything likely-inflated
- *       while leaving already-sane prices alone). Requires an explicit
- *       confirm string so it can't fire by accident.
- *
- * Both operations also bust the `finalized-products` Redis cache via the
- * pricing settings touch (updates updated_at on product_maps).
+ *   POST /admin/pricing/strip-sentinels { confirm: "YES_STRIP_SENTINELS" }
+ *     — NULL out prices that match IC "Prijs op aanvraag" sentinels
+ *       (>= €5000 and ending in .99) across the whole table. This is the
+ *       only bulk cleanup still needed — real high-priced items stay.
  */
 export async function pricingAdminRoutes(app: FastifyInstance) {
-  app.post("/admin/pricing/normalize-cents/:productId", async (request, reply) => {
-    const { productId } = normalizeSingleSchema.parse(request.params);
+  app.post("/admin/pricing/set-price/:productId", async (request, reply) => {
+    const { productId } = z.object({ productId: z.coerce.number().int().positive() }).parse(request.params);
+    const { price } = setPriceSchema.parse(request.body ?? {});
 
     const before = await prisma.productMap.findUnique({
       where: { id: productId },
@@ -42,42 +40,42 @@ export async function pricingAdminRoutes(app: FastifyInstance) {
     });
     if (!before) return reply.code(404).send({ error: "Product not found" });
 
-    if (before.price == null) {
-      return { productId, before, after: before, changed: false, note: "price was null, nothing to do" };
-    }
-
-    const newPrice = Math.round((before.price / 100) * 100) / 100;
     const after = await prisma.productMap.update({
       where: { id: productId },
-      data: { price: newPrice },
+      data: { price },
       select: { id: true, sku: true, articleNo: true, price: true, currency: true },
     });
 
-    logger.info({ productId, oldPrice: before.price, newPrice }, "Normalized single product price (/100)");
+    logger.info({ productId, before: before.price, after: price }, "Set wholesale price directly");
     return { productId, before, after, changed: before.price !== after.price };
   });
 
-  app.post("/admin/pricing/normalize-cents-bulk", async (request) => {
-    const { threshold } = normalizeBulkSchema.parse(request.body);
+  app.post("/admin/pricing/strip-sentinels", async (request) => {
+    stripSentinelsSchema.parse(request.body);
 
-    const toUpdate = await prisma.productMap.count({ where: { price: { gt: threshold } } });
+    // Count first so the response tells the caller what was touched.
+    const precheck = await prisma.productMap.count({
+      where: {
+        price: { gte: 5000 },
+      },
+    });
 
-    const result = await prisma.$executeRawUnsafe(
-      `UPDATE product_maps SET price = ROUND((price / 100.0)::numeric, 2)::double precision, updated_at = NOW() WHERE price IS NOT NULL AND price > $1`,
-      threshold
+    // Strip .99-ending sentinels at high values. Uses modulo to identify
+    // exactly-.99 tails (floats are messy, so subtract floor and compare).
+    const affected = await prisma.$executeRawUnsafe(
+      `UPDATE product_maps
+         SET price = NULL, updated_at = NOW()
+       WHERE price IS NOT NULL
+         AND price >= 5000
+         AND ROUND((price - FLOOR(price))::numeric, 2) = 0.99`
     );
 
-    logger.warn(
-      { threshold, affectedCount: result, precheckCount: toUpdate },
-      "Bulk normalization of wholesale prices applied (/100)"
-    );
-
+    logger.warn({ precheckHighPrice: precheck, affected }, "Stripped price-on-request sentinels");
     return {
       ok: true,
-      threshold,
-      affected: result,
-      precheckCount: toUpdate,
-      note: "Run this only once. Redeploy the workers to prevent re-inflation via future syncs.",
+      affected,
+      precheckHighPriceRows: precheck,
+      note: "Only .99-ending sentinels at ≥ €5000 were cleared; real high-priced items untouched.",
     };
   });
 }

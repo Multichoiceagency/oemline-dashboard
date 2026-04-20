@@ -198,10 +198,8 @@ function buildPriceLookup(
   for (const [normArticle, entries] of Object.entries(articleIndex)) {
     for (const e of entries) {
       if (!(e.p > 0) || placeholders.has(e.p)) continue;
-      // article-index.json stores prices as they came out of the IC CSV —
-      // minor units (cents) that were historically treated as euros, inflating
-      // every product 100x. Normalize at read time so re-running this import
-      // cannot re-inflate the DB.
+      // article-index.json prices are in euros (verified against IC website
+      // for ZF 1068-042-058 → €4863.09 matches). Only strip sentinels.
       const sanitized = sanitizeWholesalePrice(e.p);
       if (sanitized == null) continue;
       // Re-normalize the brand — JSON sometimes preserves special chars.
