@@ -621,6 +621,99 @@ export async function finalizedRoutes(app: FastifyInstance) {
       };
     }
 
+    // Override-lookup for articles we didn't find directly. When an admin has
+    // manually mapped (supplier, brand, articleNo) → sku in the overrides
+    // table, use that sku to fetch the linked product_map row. This matters
+    // for the kenteken flow: a customer sees TecDoc articles that may not
+    // have been synced to product_maps yet, but a manual override can still
+    // pin them to the correct inventory SKU.
+    const missingNormalized = normalized.filter((n) => !items[n]);
+    if (missingNormalized.length > 0) {
+      try {
+        const overrideRows = await prisma.$queryRawUnsafe<Array<{
+          norm_key: string;
+          sku: string;
+        }>>(
+          `SELECT DISTINCT
+             UPPER(REGEXP_REPLACE(o.article_no, '[^a-zA-Z0-9]', '', 'g')) AS norm_key,
+             o.sku
+           FROM overrides o
+           JOIN suppliers s ON s.id = o.supplier_id
+           WHERE o.active = true
+             AND UPPER(REGEXP_REPLACE(o.article_no, '[^a-zA-Z0-9]', '', 'g')) = ANY($1::text[])
+             ${supplierCodes.length > 0 ? `AND s.code = ANY($2::text[])` : ``}`,
+          missingNormalized,
+          ...(supplierCodes.length > 0 ? [supplierCodes] : [])
+        );
+
+        if (overrideRows.length > 0) {
+          const skuToNorm = new Map<string, string>();
+          for (const r of overrideRows) skuToNorm.set(r.sku, r.norm_key);
+
+          const overrideProducts = await prisma.$queryRawUnsafe<typeof products>(
+            `SELECT
+              p.id, p.article_no, p.sku, p.description, p.image_url, p.images,
+              p.ean, p.tecdoc_id, p.oem, p.generic_article, p.oem_numbers,
+              p.price, p.currency, p.stock, p.weight, p.status, p.ic_sku,
+              p.updated_at, p.created_at,
+              b.id AS brand_id, b.name AS brand_name, b.code AS brand_code, b.logo_url AS brand_logo_url,
+              c.id AS category_id, c.name AS category_name, c.code AS category_code,
+              s.id AS supplier_id, s.name AS supplier_name, s.code AS supplier_code
+            FROM product_maps p
+            LEFT JOIN brands b ON b.id = p.brand_id
+            LEFT JOIN categories c ON c.id = p.category_id
+            LEFT JOIN suppliers s ON s.id = p.supplier_id
+            WHERE p.status = 'active' AND p.sku = ANY($1::text[])
+              ${maxPrice != null ? `AND (p.price IS NULL OR p.price <= ${maxPrice})` : ``}`,
+            [...skuToNorm.keys()]
+          );
+
+          for (const row of overrideProducts) {
+            if (!row.sku) continue;
+            const normKey = skuToNorm.get(row.sku);
+            if (!normKey || items[normKey]) continue;
+            const basePrice = row.price;
+            let priceWithMargin: number | null = null;
+            let priceWithTax: number | null = null;
+            if (basePrice != null) {
+              priceWithMargin = Math.round(basePrice * (1 + marginPct) * 100) / 100;
+              priceWithTax = Math.round(priceWithMargin * (1 + taxRate) * 100) / 100;
+            }
+            items[normKey] = {
+              id: row.id,
+              articleNo: row.article_no,
+              sku: row.sku,
+              description: row.description,
+              imageUrl: row.image_url,
+              images: row.images ?? [],
+              ean: row.ean,
+              tecdocId: row.tecdoc_id,
+              oem: row.oem,
+              genericArticle: row.generic_article,
+              oemNumbers: row.oem_numbers ?? [],
+              price: basePrice,
+              priceWithMargin,
+              priceWithTax,
+              currency: row.currency,
+              stock: row.stock,
+              weight: row.weight,
+              status: row.status,
+              icSku: row.ic_sku,
+              brand: row.brand_id ? { id: row.brand_id, name: row.brand_name, code: row.brand_code, logoUrl: row.brand_logo_url } : null,
+              category: row.category_id ? { id: row.category_id, name: row.category_name, code: row.category_code } : null,
+              supplier: row.supplier_id ? { id: row.supplier_id, name: row.supplier_name, code: row.supplier_code } : null,
+              matchedVia: "override",
+              updatedAt: row.updated_at,
+              createdAt: row.created_at,
+            };
+          }
+        }
+      } catch (err) {
+        // Override lookup failure is non-fatal — the direct match still works.
+        // Falls through to the existing response.
+      }
+    }
+
     const result = { items, found: Object.keys(items).length, requested: articleNumbers.length };
 
     // Cache for 60 seconds

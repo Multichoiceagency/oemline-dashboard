@@ -207,11 +207,15 @@ export async function storefrontRoutes(app: FastifyInstance) {
     } else {
       where.parentId = null;
     }
-    // Include root categories that have products anywhere in their subtree (3 levels)
+    // Include:
+    //  (a) categories with products anywhere in their 3-level subtree (TecDoc-synced data)
+    //  (b) manually-curated categories (tecdoc_id IS NULL) even when empty — the admin
+    //      added them on purpose so they should be visible to customers.
     where.OR = [
       { products: { some: {} } },
       { children: { some: { products: { some: {} } } } },
       { children: { some: { children: { some: { products: { some: {} } } } } } },
+      { tecdocId: null },
     ];
 
     const categories = await prisma.category.findMany({
@@ -226,6 +230,7 @@ export async function storefrontRoutes(app: FastifyInstance) {
             OR: [
               { products: { some: {} } },
               { children: { some: { products: { some: {} } } } },
+              { tecdocId: null },
             ],
           },
           include: {
@@ -233,7 +238,9 @@ export async function storefrontRoutes(app: FastifyInstance) {
             children: {
               take: 200,
               orderBy: { name: "asc" },
-              where: { products: { some: {} } },
+              where: {
+                OR: [{ products: { some: {} } }, { tecdocId: null }],
+              },
               include: {
                 _count: { select: { products: true, children: true } },
               },
