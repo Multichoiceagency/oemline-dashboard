@@ -2,6 +2,14 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 
+// Prisma error code when the target table is missing (schema out of sync with DB).
+// We degrade gracefully on read endpoints so the sidebar badge can't cause a
+// 500-storm before the migration has been applied.
+const MISSING_TABLE = "P2021";
+function isMissingTable(e: unknown): boolean {
+  return typeof e === "object" && e !== null && "code" in e && (e as { code: string }).code === MISSING_TABLE;
+}
+
 const TASK_TYPES = ["BUG", "FEATURE", "TASK"] as const;
 const TASK_STATUSES = ["OPEN", "IN_PROGRESS", "BLOCKED", "DONE"] as const;
 const TASK_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
@@ -53,35 +61,50 @@ export async function taskRoutes(app: FastifyInstance) {
       ];
     }
 
-    const items = await prisma.task.findMany({
-      where,
-      orderBy: [{ priority: "asc" }, { updatedAt: "desc" }],
-      take: limit,
-    });
-
-    return { items, total: items.length };
+    try {
+      const items = await prisma.task.findMany({
+        where,
+        orderBy: [{ priority: "asc" }, { updatedAt: "desc" }],
+        take: limit,
+      });
+      return { items, total: items.length };
+    } catch (err) {
+      if (isMissingTable(err)) return { items: [], total: 0 };
+      throw err;
+    }
   });
 
   // Counts per status + open-bug count for sidebar badge
   app.get("/tasks/stats", async () => {
-    const [byStatus, byType, openBugs] = await Promise.all([
-      prisma.task.groupBy({ by: ["status"], _count: { _all: true } }),
-      prisma.task.groupBy({ by: ["type"], _count: { _all: true } }),
-      prisma.task.count({
-        where: {
-          type: "BUG",
-          status: { in: ["OPEN", "IN_PROGRESS", "BLOCKED"] },
-        },
-      }),
-    ]);
+    try {
+      const [byStatus, byType, openBugs] = await Promise.all([
+        prisma.task.groupBy({ by: ["status"], _count: { _all: true } }),
+        prisma.task.groupBy({ by: ["type"], _count: { _all: true } }),
+        prisma.task.count({
+          where: {
+            type: "BUG",
+            status: { in: ["OPEN", "IN_PROGRESS", "BLOCKED"] },
+          },
+        }),
+      ]);
 
-    const status: Record<string, number> = { OPEN: 0, IN_PROGRESS: 0, BLOCKED: 0, DONE: 0 };
-    for (const row of byStatus) status[row.status] = row._count._all;
+      const status: Record<string, number> = { OPEN: 0, IN_PROGRESS: 0, BLOCKED: 0, DONE: 0 };
+      for (const row of byStatus) status[row.status] = row._count._all;
 
-    const type: Record<string, number> = { BUG: 0, FEATURE: 0, TASK: 0 };
-    for (const row of byType) type[row.type] = row._count._all;
+      const type: Record<string, number> = { BUG: 0, FEATURE: 0, TASK: 0 };
+      for (const row of byType) type[row.type] = row._count._all;
 
-    return { status, type, openBugs };
+      return { status, type, openBugs };
+    } catch (err) {
+      if (isMissingTable(err)) {
+        return {
+          status: { OPEN: 0, IN_PROGRESS: 0, BLOCKED: 0, DONE: 0 },
+          type: { BUG: 0, FEATURE: 0, TASK: 0 },
+          openBugs: 0,
+        };
+      }
+      throw err;
+    }
   });
 
   app.get("/tasks/:id", async (request, reply) => {

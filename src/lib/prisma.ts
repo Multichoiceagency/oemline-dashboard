@@ -171,6 +171,41 @@ export async function refreshIcUniqueArticles(): Promise<void> {
   }
 }
 
+/**
+ * Ensure the `tasks` table exists. Fallback for when `prisma db push` in the
+ * Docker entrypoint times out before the schema is synced — the sidebar polls
+ * /api/tasks/stats every 15s and a missing table creates a 500-storm.
+ *
+ * Safe to run on every startup (IF NOT EXISTS + idempotent indexes).
+ */
+export async function ensureTasksTable(): Promise<void> {
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        type TEXT NOT NULL DEFAULT 'TASK',
+        status TEXT NOT NULL DEFAULT 'OPEN',
+        priority TEXT NOT NULL DEFAULT 'MEDIUM',
+        assignee TEXT,
+        reporter TEXT,
+        labels TEXT[] DEFAULT ARRAY[]::TEXT[],
+        related_url TEXT,
+        created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS tasks_status_idx ON tasks(status)`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS tasks_type_idx ON tasks(type)`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS tasks_assignee_idx ON tasks(assignee)`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS tasks_created_at_idx ON tasks(created_at)`);
+    logger.info("tasks table ensured");
+  } catch (err) {
+    logger.warn({ err }, "ensureTasksTable failed (non-critical — prisma db push may have handled it)");
+  }
+}
+
 export async function disconnectPrisma(): Promise<void> {
   await prisma.$disconnect();
 }
