@@ -375,7 +375,14 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         const phaseStart = Date.now();
         try {
           const matches = await prisma.$transaction(async (tx) => {
-            await tx.$executeRawUnsafe(`SET LOCAL work_mem = '64MB'`);
+            // Bigger work_mem keeps HashAgg / sort in RAM instead of spilling to
+            // /tmp where we hit "could not write to file" under concurrent load.
+            await tx.$executeRawUnsafe(`SET LOCAL work_mem = '512MB'`);
+            // Parallel workers allocate dynamic shared memory segments. With
+            // /dev/shm backed by mmap to /tmp, parallel queries collide and
+            // throw 53100 during busy index/stock sync. Serial is slower but
+            // doesn't share temp pools.
+            await tx.$executeRawUnsafe(`SET LOCAL max_parallel_workers_per_gather = 0`);
             await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '${timeoutMs}'`);
             return tx.$queryRawUnsafe<MatchRow[]>(sql);
           }, { timeout: timeoutMs + 30_000 }); // Prisma timeout slightly longer than PG timeout
