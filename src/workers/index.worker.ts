@@ -50,6 +50,28 @@ export async function processIndexJob(job: Job<IndexJobData>): Promise<void> {
     if (supplier) where.supplierId = supplier.id;
   }
 
+  // Delete stale docs before rebuilding.
+  // Full reindex → wipe entire index. Partial → wipe only this supplier's docs.
+  // Without this, orphans (deleted/merged products, SKU-renames) accumulate and
+  // Meilisearch doc count drifts above the DB row count (e.g. 143% of totaal).
+  try {
+    const index = meili.index(PRODUCTS_INDEX);
+    const deleteTask = supplierCode
+      ? await index.deleteDocuments({ filter: `supplier = "${supplierCode}"` })
+      : await index.deleteAllDocuments();
+    const deleteResult = await waitForMeiliTask(deleteTask.taskUid);
+    if (!deleteResult.succeeded) {
+      logger.error(
+        { taskUid: deleteTask.taskUid, error: deleteResult.error, supplier: supplierCode ?? "all" },
+        "Failed to purge stale docs before reindex — continuing anyway (orphans may persist)"
+      );
+    } else {
+      logger.info({ supplier: supplierCode ?? "all" }, "Purged stale docs before reindex");
+    }
+  } catch (err) {
+    logger.error({ err, supplier: supplierCode ?? "all" }, "Delete-before-reindex threw — continuing");
+  }
+
   const batchSize = 10_000;
   let skip = 0;
   let totalIndexed = 0;
