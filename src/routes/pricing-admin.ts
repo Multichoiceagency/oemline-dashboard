@@ -103,7 +103,13 @@ export async function pricingAdminRoutes(app: FastifyInstance) {
       logger.warn({ err }, "Could not read supplier_brand_rules — alias resolution is NORMALIZED_ALIASES-only");
     }
 
-    // 2. Count contaminated rows grouped by brand-pair so we can bucket alias/dirty
+    // 2. Count contaminated rows grouped by brand-pair so we can bucket alias/dirty.
+    // Disable parallel workers for this groupBy — parallel hash aggregation
+    // allocates shared memory segments that fill /tmp under concurrent load.
+    // Serial execution is slower but doesn't hit the shm bottleneck.
+    await prisma.$executeRawUnsafe(`SET LOCAL max_parallel_workers_per_gather = 0`);
+    await prisma.$executeRawUnsafe(`SET LOCAL work_mem = '256MB'`);
+
     const pairs = await prisma.$queryRawUnsafe<Array<{
       our_brand: string; ic_brand: string; row_count: bigint;
     }>>(
