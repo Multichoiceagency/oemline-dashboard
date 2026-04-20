@@ -132,14 +132,34 @@ export async function ensureNormalizedIndexes(): Promise<void> {
   // Pre-aggregates the Phase 1D GROUP BY/HAVING COUNT(*) = 1 query so it runs
   // once at refresh time instead of scanning 565K rows on every ic-match job.
   // REFRESH MATERIALIZED VIEW CONCURRENTLY keeps it readable during refresh.
+  //
+  // v2: includes normalized_manufacturer so Phase 1D can do a strict brand
+  // check and stop contaminating rows whose articles collide numerically
+  // (MAPCO 29815/5 vs C.E.I. 298.155 both → "298155").
   try {
+    // Migration: if the view exists but lacks the norm_manufacturer column,
+    // drop + recreate. Otherwise CREATE IF NOT EXISTS is a no-op.
+    const hasColumn = await prisma.$queryRawUnsafe<Array<{ exists: boolean }>>(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'ic_unique_articles'
+           AND column_name = 'norm_manufacturer'
+       ) AS exists`
+    );
+    if (!hasColumn[0]?.exists) {
+      logger.info("ic_unique_articles: dropping v1 (no norm_manufacturer) before recreating with brand column");
+      await prisma.$executeRawUnsafe(`DROP MATERIALIZED VIEW IF EXISTS ic_unique_articles CASCADE`);
+    }
+
     await prisma.$executeRawUnsafe(`
       CREATE MATERIALIZED VIEW IF NOT EXISTS ic_unique_articles AS
       SELECT
         normalized_article_number AS norm_article,
-        MIN(tow_kod)  AS tow_kod,
-        MIN(ean)      AS ic_ean,
-        MIN(weight)   AS ic_weight
+        MIN(tow_kod)                  AS tow_kod,
+        MIN(ean)                      AS ic_ean,
+        MIN(weight)                   AS ic_weight,
+        MIN(manufacturer)             AS manufacturer,
+        MIN(normalized_manufacturer)  AS norm_manufacturer
       FROM intercars_mappings
       GROUP BY normalized_article_number
       HAVING COUNT(*) = 1

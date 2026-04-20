@@ -517,7 +517,12 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       yield [];
 
       // ── Phase 1D: Unique article number (materialized view) ─────────────────
-      logger.info({ supplier: this.code }, "Phase 1D: Matching by unique article number (mat-view)...");
+      // Brand-guarded: joins brands and rejects rows where the product's brand
+      // doesn't match the IC row's manufacturer (strict equality OR prefix
+      // match in either direction, same as Phase 1A). Without this, colliding
+      // normalized articles like MAPCO "29815/5" and C.E.I. "298.155" (both →
+      // "298155") would cross-contaminate — see /admin/products/audit-contamination.
+      logger.info({ supplier: this.code }, "Phase 1D: Matching by unique article number (mat-view, brand-guarded)...");
       phaseResults.uniqueArticle = await runPhase("Phase1D-uniqueArticle",
         `SELECT
           pm.id AS product_id,
@@ -525,8 +530,20 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
           ua.ic_ean,
           ua.ic_weight
         FROM product_maps pm
+        JOIN brands b ON b.id = pm.brand_id
         JOIN ic_unique_articles ua ON ua.norm_article = pm.normalized_article_no
         WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+          AND (
+            ua.norm_manufacturer = b.normalized_name
+            OR (
+              LENGTH(ua.norm_manufacturer) >= 2
+              AND b.normalized_name LIKE ua.norm_manufacturer || '%'
+            )
+            OR (
+              LENGTH(b.normalized_name) >= 2
+              AND ua.norm_manufacturer LIKE b.normalized_name || '%'
+            )
+          )
         ORDER BY pm.id`, 120_000);
       totalNewMatches += phaseResults.uniqueArticle;
       yield [];
