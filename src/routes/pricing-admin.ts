@@ -416,6 +416,8 @@ export async function pricingAdminRoutes(app: FastifyInstance) {
    * No row-level payload — just aggregation so the caller can prioritise.
    */
   app.get("/admin/products/audit-contamination/summary", async () => {
+    await prisma.$executeRawUnsafe(`SET LOCAL max_parallel_workers_per_gather = 0`);
+    await prisma.$executeRawUnsafe(`SET LOCAL work_mem = '256MB'`);
     const pairs = await prisma.$queryRawUnsafe<Array<{
       our_brand: string;
       ic_brand: string;
