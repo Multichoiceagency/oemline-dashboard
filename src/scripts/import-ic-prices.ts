@@ -28,6 +28,7 @@ import {
   NORMALIZED_ALIASES,
   normalizeBrand,
 } from "../lib/ic-brand-aliases.js";
+import { sanitizeWholesalePrice } from "../lib/pricing.js";
 
 const BUCKET = process.env.MINIO_BUCKET || "oemline";
 const PAGE_SIZE = 10_000;
@@ -197,6 +198,12 @@ function buildPriceLookup(
   for (const [normArticle, entries] of Object.entries(articleIndex)) {
     for (const e of entries) {
       if (!(e.p > 0) || placeholders.has(e.p)) continue;
+      // article-index.json stores prices as they came out of the IC CSV —
+      // minor units (cents) that were historically treated as euros, inflating
+      // every product 100x. Normalize at read time so re-running this import
+      // cannot re-inflate the DB.
+      const sanitized = sanitizeWholesalePrice(e.p);
+      if (sanitized == null) continue;
       // Re-normalize the brand — JSON sometimes preserves special chars.
       const normB = normalizeBrand(e.b);
       // Prefer exact brand match over alias when both yield the same ID
@@ -205,7 +212,7 @@ function buildPriceLookup(
       if (resolvedId == null) continue;
       const key = `${normArticle}|${resolvedId}`;
       if (exactId != null || !out.has(key)) {
-        out.set(key, e.p);
+        out.set(key, sanitized);
       }
     }
   }
