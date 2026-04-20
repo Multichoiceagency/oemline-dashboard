@@ -5,6 +5,7 @@ import type {
   SupplierCatalogItem,
 } from "../types/index.js";
 import { logger } from "../lib/logger.js";
+import { sanitizeWholesalePrice } from "../lib/pricing.js";
 
 /**
  * Diederichs DVSE SOAP adapter.
@@ -283,6 +284,8 @@ function parseArticleInformationResponse(
       }
     }
 
-    result.set(articleNo, { price: bestPrice, currency, stock: Math.floor(totalStock) });
+    // Normalize cents → euros + strip sentinels (see lib/pricing.ts)
+    const sanitized = sanitizeWholesalePrice(bestPrice);
+    result.set(articleNo, { price: sanitized, currency, stock: Math.floor(totalStock) });
   }
 }
