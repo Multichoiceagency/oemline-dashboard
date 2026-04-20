@@ -3,8 +3,13 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // DIRECT_URL bypasses PgBouncer for migrations / prisma db push / introspection.
+  // Transaction-mode PgBouncer can't hold the long-lived DDL transactions those
+  // tools need, so they need a direct connection. Falls back to DATABASE_URL
+  // when DIRECT_URL isn't set (e.g. local dev without a pooler).
+  directUrl = env("DIRECT_URL")
 }
 
 model Supplier {
