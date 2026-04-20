@@ -137,50 +137,75 @@ export async function pricingAdminRoutes(app: FastifyInstance) {
   app.get("/admin/products/audit-contamination", async (request) => {
     const { limit } = auditContaminationSchema.parse(request.query);
 
-    // Step 1: find EANs shared across multiple brands in product_maps.
-    const conflicts = await prisma.$queryRawUnsafe<Array<{ ean: string; brand_count: bigint; ids: number[] }>>(
-      `SELECT ean,
-              COUNT(DISTINCT brand_id) AS brand_count,
-              ARRAY_AGG(id ORDER BY id) AS ids
-         FROM product_maps
-        WHERE ean IS NOT NULL AND ean <> '' AND brand_id IS NOT NULL
-        GROUP BY ean
-       HAVING COUNT(DISTINCT brand_id) > 1
-        ORDER BY COUNT(DISTINCT brand_id) DESC
+    // Direct detection: a product_maps row whose assigned ic_sku points to an
+    // intercars_mappings entry whose manufacturer doesn't match the product's
+    // own brand. This is the smoking gun for cross-contamination — the
+    // ic-match worker assigned a TOW_KOD from brand X to a product of brand Y.
+    //
+    // Uses the existing index on product_maps(ic_sku) via the JOIN, so it
+    // touches only the subset of rows IC has matched (typically <1M) instead
+    // of GROUP BY on all 1.6M rows.
+    const results = await prisma.$queryRawUnsafe<Array<{
+      id: number;
+      sku: string;
+      article_no: string;
+      brand_id: number;
+      our_brand: string;
+      ic_brand: string;
+      ic_article: string;
+      ic_sku: string;
+      price: number | null;
+      ean: string | null;
+      description: string;
+    }>>(
+      `SELECT pm.id, pm.sku, pm.article_no, pm.brand_id,
+              b.name AS our_brand,
+              im.manufacturer AS ic_brand,
+              im.article_number AS ic_article,
+              pm.ic_sku, pm.price, pm.ean, pm.description
+         FROM product_maps pm
+         JOIN brands b ON b.id = pm.brand_id
+         JOIN intercars_mappings im ON im.tow_kod = pm.ic_sku
+        WHERE pm.ic_sku IS NOT NULL
+          AND pm.status = 'active'
+          -- Strict: normalized names must differ AND neither must be a prefix
+          -- of the other (so "FEBI" + "FEBI BILSTEIN" is fine).
+          AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                <> UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+          AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                NOT LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+          AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                NOT LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'
+        ORDER BY pm.id
         LIMIT $1`,
       limit
     );
 
-    // Step 2: for each conflict, look up IC's manufacturer to identify the real owner.
-    const results = [];
-    for (const c of conflicts) {
-      const icOwner = await prisma.$queryRawUnsafe<Array<{ manufacturer: string; article_number: string }>>(
-        `SELECT manufacturer, article_number
-           FROM intercars_mappings
-          WHERE ean = $1
-          LIMIT 1`,
-        c.ean
-      );
-      const rows = await prisma.productMap.findMany({
-        where: { id: { in: c.ids as unknown as number[] } },
-        select: {
-          id: true, sku: true, articleNo: true, price: true, description: true,
-          brand: { select: { id: true, name: true, code: true } },
-        },
-      });
-      results.push({
-        ean: c.ean,
-        brandCount: Number(c.brand_count),
-        icOwner: icOwner[0] ?? null,
-        rows,
-      });
-    }
+    // Also return the total count so we know the scale before running cleanup.
+    const totalRow = await prisma.$queryRawUnsafe<Array<{ total: bigint }>>(
+      `SELECT COUNT(*)::bigint AS total
+         FROM product_maps pm
+         JOIN brands b ON b.id = pm.brand_id
+         JOIN intercars_mappings im ON im.tow_kod = pm.ic_sku
+        WHERE pm.ic_sku IS NOT NULL
+          AND pm.status = 'active'
+          AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                <> UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+          AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+                NOT LIKE UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g')) || '%'
+          AND UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+                NOT LIKE UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g')) || '%'`
+    );
 
     return {
-      conflictsReturned: results.length,
+      totalContaminated: Number(totalRow[0]?.total ?? 0),
+      shown: results.length,
       limit,
-      note: "Conflicts ordered by brand_count DESC. icOwner.manufacturer is the IC-CSV brand; rows whose brand.name doesn't match (prefix-normalized) are contamination.",
-      results,
+      note: "Rows where product's own brand doesn't match the IC TOW_KOD's manufacturer (even via prefix). These are ic-match mis-assignments.",
+      rows: results.map((r) => ({
+        ...r,
+        price: r.price ? Number(r.price) : null,
+      })),
     };
   });
 }
