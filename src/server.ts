@@ -166,7 +166,7 @@ try {
   await Promise.race([
     ensureNormalizedIndexes(),
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("ensureNormalizedIndexes timeout")), 15_000)
+      setTimeout(() => reject(new Error("ensureNormalizedIndexes timeout")), 120_000)
     ),
   ]).catch((err) => {
     logger.warn({ err }, "Normalized index creation failed or timed out — matching may be slower");

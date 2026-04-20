@@ -71,7 +71,9 @@ export default function FinalizedPage() {
   const [categoryFilter, setCategoryFilter] = useState("");
   const [supplierFilter, setSupplierFilter] = useState("");
   const [stockFilter, setStockFilter] = useState("");
-  const [priceFilter, setPriceFilter] = useState("");
+  // Hide products without price by default — corrupt/uninitialized rows are
+  // distracting on the default view. User can still opt-in via the filter.
+  const [priceFilter, setPriceFilter] = useState("true");
   const [imageFilter, setImageFilter] = useState("");
 
   const { data, loading, refetch } = useApi(

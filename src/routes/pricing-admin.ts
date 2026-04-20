@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
+import { ensureNormalizedIndexes } from "../lib/prisma.js";
 
 const setPriceSchema = z.object({
   price: z.number().min(0).max(1_000_000).nullable(),
@@ -41,6 +42,32 @@ const auditContaminationSchema = z.object({
  *       only bulk cleanup still needed — real high-priced items stay.
  */
 export async function pricingAdminRoutes(app: FastifyInstance) {
+  /**
+   * On-demand rebuild of ic_unique_articles (Phase 1D source of truth).
+   *
+   * Needed when the startup ensureNormalizedIndexes hits its timeout before
+   * finishing the drop+recreate with the new norm_manufacturer column.
+   * Returns after the mat-view is present with the expected columns.
+   */
+  app.post("/admin/migrations/rebuild-ic-unique-articles", async () => {
+    const start = Date.now();
+    await ensureNormalizedIndexes();
+    const cols = await prisma.$queryRawUnsafe<Array<{ column_name: string }>>(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'ic_unique_articles'
+        ORDER BY ordinal_position`
+    );
+    const count = await prisma.$queryRawUnsafe<Array<{ c: bigint }>>(
+      `SELECT COUNT(*)::bigint AS c FROM ic_unique_articles`
+    );
+    return {
+      ok: true,
+      durationMs: Date.now() - start,
+      columns: cols.map((c) => c.column_name),
+      rowCount: Number(count[0]?.c ?? 0),
+    };
+  });
+
   app.post("/admin/pricing/set-price/:productId", async (request, reply) => {
     const { productId } = z.object({ productId: z.coerce.number().int().positive() }).parse(request.params);
     const { price } = setPriceSchema.parse(request.body ?? {});
