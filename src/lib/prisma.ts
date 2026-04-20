@@ -3,7 +3,10 @@ import { config } from "../config.js";
 import { logger } from "./logger.js";
 
 const url = new URL(config.DATABASE_URL);
-url.searchParams.set("connection_limit", "100");
+// Cumulative cap: API + 3 workers + scheduler share a Postgres default of 100
+// max_connections. 100 per process = 500 attempts = "too many clients already"
+// storm. Cap each process at 15 so cumulative stays under the server limit.
+url.searchParams.set("connection_limit", "15");
 url.searchParams.set("pool_timeout", "15");
 
 export const prisma = new PrismaClient({
