@@ -52,6 +52,34 @@ const cleanupContaminationSchema = z.object({
  */
 export async function pricingAdminRoutes(app: FastifyInstance) {
   /**
+   * Force-create missing brands.normalized_name generated column.
+   * Phase 1A of ic-match depends on this column; if the startup ALTER
+   * timed out it stays missing and Phase 1A returns 0 matches with 42703.
+   */
+  app.post("/admin/migrations/ensure-brand-normalized-name", async () => {
+    const start = Date.now();
+    const before = await prisma.$queryRawUnsafe<Array<{ exists: boolean }>>(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'brands' AND column_name = 'normalized_name'
+       ) AS exists`
+    );
+    if (before[0]?.exists) {
+      return { ok: true, alreadyExists: true, durationMs: Date.now() - start };
+    }
+    await prisma.$executeRawUnsafe(`SET LOCAL statement_timeout = '300s'`);
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE brands
+        ADD COLUMN IF NOT EXISTS normalized_name TEXT
+        GENERATED ALWAYS AS (UPPER(regexp_replace(name, '[^a-zA-Z0-9]', '', 'g'))) STORED
+    `);
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS idx_brands_norm_name_stored ON brands (normalized_name)`
+    );
+    return { ok: true, created: true, durationMs: Date.now() - start };
+  });
+
+  /**
    * Alias-aware cleanup of IC cross-contamination.
    *
    * Background: 124K rows have ic_sku pointing to an IC row whose manufacturer
