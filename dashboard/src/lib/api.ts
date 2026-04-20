@@ -1072,3 +1072,81 @@ export const updateUnmatchedProduct = (id: number, data: {
     method: "PATCH",
     body: JSON.stringify(data),
   });
+
+// Tasks / Issues
+export type TaskType = "BUG" | "FEATURE" | "TASK";
+export type TaskStatus = "OPEN" | "IN_PROGRESS" | "BLOCKED" | "DONE";
+export type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+export interface Task {
+  id: number;
+  title: string;
+  description: string | null;
+  type: TaskType;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assignee: string | null;
+  reporter: string | null;
+  labels: string[];
+  relatedUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskStats {
+  status: Record<TaskStatus, number>;
+  type: Record<TaskType, number>;
+  openBugs: number;
+}
+
+export const getTasks = (params?: {
+  status?: TaskStatus;
+  type?: TaskType;
+  assignee?: string;
+  q?: string;
+  limit?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    });
+  }
+  return apiFetch<{ items: Task[]; total: number }>(`/api/tasks?${qs}`);
+};
+
+export const getTaskStats = () => apiFetch<TaskStats>("/api/tasks/stats");
+
+export const createTask = (data: {
+  title: string;
+  description?: string;
+  type?: TaskType;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  assignee?: string;
+  reporter?: string;
+  labels?: string[];
+  relatedUrl?: string;
+}) =>
+  apiFetch<Task>("/api/tasks", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const updateTask = (id: number, data: Partial<{
+  title: string;
+  description: string | null;
+  type: TaskType;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assignee: string | null;
+  labels: string[];
+  relatedUrl: string | null;
+}>) =>
+  apiFetch<Task>(`/api/tasks/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+
+export const deleteTask = (id: number) =>
+  apiFetch<{ success: boolean }>(`/api/tasks/${id}`, { method: "DELETE" });

@@ -4,6 +4,7 @@ import { useState, useEffect, createContext, useContext } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { getTaskStats } from "@/lib/api";
 import {
   LayoutDashboard,
   Search,
@@ -27,13 +28,21 @@ import {
   Menu,
   X,
   FileText,
+  KanbanSquare,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useTranslation } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 
-const navItems = [
+type NavItem = {
+  href: string;
+  labelKey: string;
+  icon: React.ComponentType<{ className?: string }>;
+  badge?: "openBugs";
+};
+
+const navItems: NavItem[] = [
   { href: "/", labelKey: "nav.dashboard", icon: LayoutDashboard },
   { href: "/suppliers", labelKey: "nav.suppliers", icon: Truck },
   { href: "/products", labelKey: "nav.products", icon: Package },
@@ -42,6 +51,7 @@ const navItems = [
   { href: "/search", labelKey: "nav.search", icon: Search },
   { href: "/tecdoc", labelKey: "nav.tecdoc", icon: BookOpen },
   { href: "/unmatched", labelKey: "nav.unmatched", icon: AlertTriangle },
+  { href: "/tasks", labelKey: "nav.tasks", icon: KanbanSquare, badge: "openBugs" as const },
   { href: "/finalized", labelKey: "nav.finalized", icon: ShoppingCart },
   { href: "/analytics", labelKey: "nav.analytics", icon: BarChart3 },
   { href: "/storage", labelKey: "nav.storage", icon: HardDrive },
@@ -109,6 +119,25 @@ export function Sidebar() {
   const { locale, setLocale, t } = useTranslation();
   const { email, logout } = useAuth();
   const { open, setOpen } = useSidebar();
+  const [openBugs, setOpenBugs] = useState<number>(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function poll() {
+      try {
+        const stats = await getTaskStats();
+        if (!cancelled) setOpenBugs(stats.openBugs);
+      } catch {
+        // Silently ignore — backend may be booting or tasks table not migrated yet
+      }
+    }
+    poll();
+    const id = setInterval(poll, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
 
   const handleLogout = () => {
     logout();
@@ -158,6 +187,7 @@ export function Sidebar() {
             const isActive =
               pathname === item.href ||
               (item.href !== "/" && pathname.startsWith(item.href));
+            const badgeCount = item.badge === "openBugs" ? openBugs : 0;
             return (
               <Link
                 key={item.href}
@@ -170,7 +200,19 @@ export function Sidebar() {
                 )}
               >
                 <item.icon className="h-4 w-4 shrink-0" />
-                {t(item.labelKey)}
+                <span className="flex-1">{t(item.labelKey)}</span>
+                {badgeCount > 0 && (
+                  <span
+                    className={cn(
+                      "rounded-full px-2 py-0.5 text-xs font-semibold",
+                      isActive
+                        ? "bg-primary-foreground/20 text-primary-foreground"
+                        : "bg-red-500/15 text-red-400"
+                    )}
+                  >
+                    {badgeCount}
+                  </span>
+                )}
               </Link>
             );
           })}

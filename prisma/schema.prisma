@@ -253,3 +253,24 @@ model SupplierUpload {
   @@index([createdAt])
   @@map("supplier_uploads")
 }
+
+model Task {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String?
+  type        String   @default("TASK")
+  status      String   @default("OPEN")
+  priority    String   @default("MEDIUM")
+  assignee    String?
+  reporter    String?
+  labels      String[] @default([])
+  relatedUrl  String?  @map("related_url")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([type])
+  @@index([assignee])
+  @@index([createdAt])
+  @@map("tasks")
+}
