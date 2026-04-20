@@ -28,6 +28,7 @@ import { authRoutes } from "./routes/auth.js";
 import { cartRoutes } from "./routes/cart.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { pricingAdminRoutes } from "./routes/pricing-admin.js";
+import { kentekenRoutes } from "./routes/kenteken.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { ensureBucket } from "./lib/minio.js";
 
@@ -104,6 +105,7 @@ await app.register(authRoutes, { prefix: "/api" });
 await app.register(cartRoutes, { prefix: "/api" });
 await app.register(taskRoutes, { prefix: "/api" });
 await app.register(pricingAdminRoutes, { prefix: "/api" });
+await app.register(kentekenRoutes, { prefix: "/api" });
 
 app.setErrorHandler((error: Error & { statusCode?: number; issues?: unknown; validation?: unknown }, request, reply) => {
   // Zod validation errors → 400

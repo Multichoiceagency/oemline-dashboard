@@ -29,6 +29,7 @@ import {
   X,
   FileText,
   KanbanSquare,
+  Car,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useTranslation } from "@/lib/i18n";
@@ -49,6 +50,7 @@ const navItems: NavItem[] = [
   { href: "/brands", labelKey: "nav.brands", icon: Tag },
   { href: "/categories", labelKey: "nav.categories", icon: FolderTree },
   { href: "/search", labelKey: "nav.search", icon: Search },
+  { href: "/kenteken", labelKey: "nav.kenteken", icon: Car },
   { href: "/tecdoc", labelKey: "nav.tecdoc", icon: BookOpen },
   { href: "/unmatched", labelKey: "nav.unmatched", icon: AlertTriangle },
   { href: "/tasks", labelKey: "nav.tasks", icon: KanbanSquare, badge: "openBugs" as const },

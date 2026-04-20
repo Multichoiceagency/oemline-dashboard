@@ -1150,3 +1150,35 @@ export const updateTask = (id: number, data: Partial<{
 
 export const deleteTask = (id: number) =>
   apiFetch<{ success: boolean }>(`/api/tasks/${id}`, { method: "DELETE" });
+
+// Kenteken (RDW) lookup
+export interface KentekenResponse {
+  plate: string;
+  vehicle: {
+    merk: string;
+    handelsbenaming: string;
+    voertuigsoort: string;
+    inrichting: string | null;
+    variant: string | null;
+    uitvoering: string | null;
+    year: number | null;
+    dateFirstRegistration: string | null;
+    cilinderinhoud: number | null;
+    aantalCilinders: number | null;
+    massa: number | null;
+    europeseCategorie: string | null;
+  };
+  fuel: {
+    brandstof: string | null;
+    verbruik: number | null;
+    co2: number | null;
+    emissiecode: string | null;
+    euroklasse: string | null;
+    nettoVermogen: number | null;
+  } | null;
+  brandMatch: { id: number; name: string; code: string; tecdocId: number | null } | null;
+  searchHint: { brand: string | null; year: number | null };
+}
+
+export const lookupKenteken = (plate: string) =>
+  apiFetch<KentekenResponse>(`/api/kenteken/${encodeURIComponent(plate)}`);
