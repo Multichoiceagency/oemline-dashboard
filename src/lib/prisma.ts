@@ -71,6 +71,22 @@ export async function ensureNormalizedIndexes(): Promise<void> {
     }
   }
 
+  // ── Plain additive columns (idempotent) ────────────────────────────────────
+  // article_criteria: TecDoc spec sheet ({criteriaId, criteriaDescription, formattedValue, rawValue}[])
+  // Stored as JSONB so the storefront can build filter sidebars (e.g. SAE
+  // viscositeit voor olie) without a separate TecDoc call per product.
+  try {
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE product_maps ADD COLUMN IF NOT EXISTS article_criteria JSONB DEFAULT '[]'::jsonb`,
+    );
+    // GIN index so category pages can filter "article_criteria @> '[{criteriaId: 2950, formattedValue: \"5W-30\"}]'::jsonb" fast.
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS idx_pm_article_criteria_gin ON product_maps USING GIN (article_criteria jsonb_path_ops)`,
+    );
+  } catch (err) {
+    logger.warn({ err }, "article_criteria column/index setup (non-critical — may already exist)");
+  }
+
   // ── Indexes ───────────────────────────────────────────────────────────────────
   const indexes = [
     // IC mappings — stored columns for fast joins

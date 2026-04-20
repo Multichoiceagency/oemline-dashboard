@@ -246,6 +246,7 @@ export async function finalizedRoutes(app: FastifyInstance) {
         oem: p.oem,
         genericArticle: p.genericArticle,
         oemNumbers: p.oemNumbers,
+        articleCriteria: p.articleCriteria ?? [],
         price: basePrice,
         priceWithMargin,
         priceWithTax,
@@ -559,6 +560,7 @@ export async function finalizedRoutes(app: FastifyInstance) {
       oem: string | null;
       generic_article: string | null;
       oem_numbers: unknown;
+      article_criteria: unknown;
       price: number | null;
       currency: string;
       stock: number | null;
@@ -581,6 +583,7 @@ export async function finalizedRoutes(app: FastifyInstance) {
       `SELECT
         p.id, p.article_no, p.sku, p.description, p.image_url, p.images,
         p.ean, p.tecdoc_id, p.oem, p.generic_article, p.oem_numbers,
+        p.article_criteria,
         p.price, p.currency, p.stock, p.weight, p.status, p.ic_sku,
         p.updated_at, p.created_at,
         b.id AS brand_id, b.name AS brand_name, b.code AS brand_code, b.logo_url AS brand_logo_url,
@@ -626,6 +629,7 @@ export async function finalizedRoutes(app: FastifyInstance) {
         oem: row.oem,
         genericArticle: row.generic_article,
         oemNumbers: row.oem_numbers ?? [],
+        articleCriteria: row.article_criteria ?? [],
         price: basePrice,
         priceWithMargin,
         priceWithTax,
@@ -712,6 +716,7 @@ export async function finalizedRoutes(app: FastifyInstance) {
               oem: row.oem,
               genericArticle: row.generic_article,
               oemNumbers: row.oem_numbers ?? [],
+        articleCriteria: row.article_criteria ?? [],
               price: basePrice,
               priceWithMargin,
               priceWithTax,

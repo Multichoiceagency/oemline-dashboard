@@ -52,6 +52,13 @@ interface TecDocArticle {
     attrValue?: string;
     attrUnit?: string;
   }>;
+  articleCriteria?: Array<{
+    criteriaId?: number;
+    criteriaDescription?: string;
+    rawValue?: string;
+    formattedValue?: string;
+    unit?: string;
+  }>;
   linkages?: Array<{
     linkageTargetType?: string;
   }>;
@@ -243,6 +250,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
         includeOemNumbers: true,
         includeEanNumbers: true,
         includeImages: true,
+              includeArticleCriteria: true,
       })) as GetArticlesResponse;
 
       const articleMap = new Map<string, { ean: string | null; oem: string | null }>();
@@ -411,6 +419,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
               includeOemNumbers: true,
               includeEanNumbers: true,
               includeImages: true,
+              includeArticleCriteria: true,
               ...(dataSupplierIds ? { dataSupplierIds } : {}),
             })) as GetArticlesResponse;
 
@@ -488,6 +497,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
                   includeOemNumbers: true,
                   includeEanNumbers: true,
                   includeImages: true,
+              includeArticleCriteria: true,
                 })) as GetArticlesResponse;
 
                 const articles = result.articles ?? [];
@@ -576,6 +586,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
           includeOemNumbers: true,
           includeEanNumbers: true,
           includeImages: true,
+              includeArticleCriteria: true,
         })) as GetArticlesResponse;
 
         const articles = result.articles ?? [];
@@ -606,6 +617,16 @@ export class TecDocAdapter extends BaseSupplierAdapter {
         .filter(Boolean);
       const imageUrl = images[0] ?? null;
 
+      const articleCriteria = (art.articleCriteria ?? [])
+        .filter((c) => c.criteriaId != null && (c.formattedValue || c.rawValue))
+        .map((c) => ({
+          criteriaId: Number(c.criteriaId),
+          criteriaDescription: c.criteriaDescription ?? "",
+          rawValue: c.rawValue ?? "",
+          formattedValue: c.formattedValue ?? c.rawValue ?? "",
+          unit: c.unit ?? null,
+        }));
+
       return {
         sku: String(art.dataSupplierId ?? 0) + "_" + (art.articleNumber ?? ""),
         brand: art.mfrName ?? "",
@@ -619,6 +640,7 @@ export class TecDocAdapter extends BaseSupplierAdapter {
         genericArticle: art.genericArticleDescription ?? null,
         oemNumbers: oemList,
         tecdocGroupId: groupNodeId ?? null,
+        articleCriteria: articleCriteria.length > 0 ? articleCriteria : undefined,
       };
     });
   }

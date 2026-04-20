@@ -190,6 +190,7 @@ async function batchUpsertProducts(supplierId: number, items: SupplierCatalogIte
       ${item.imageUrl ?? null}, ${JSON.stringify(item.images ?? [])}::jsonb, ${item.genericArticle ?? null},
       ${JSON.stringify(item.oemNumbers ?? [])}::jsonb,
       ${item.price ?? null}, ${item.currency ?? "EUR"}, ${item.stock ?? null},
+      ${JSON.stringify(item.articleCriteria ?? [])}::jsonb,
       'active', NOW(), NOW()
     )`
   );
@@ -200,6 +201,7 @@ async function batchUpsertProducts(supplierId: number, items: SupplierCatalogIte
       ean, tecdoc_id, oem, description,
       image_url, images, generic_article, oem_numbers,
       price, currency, stock,
+      article_criteria,
       status, created_at, updated_at
     )
     VALUES ${Prisma.join(values)}
@@ -219,6 +221,7 @@ async function batchUpsertProducts(supplierId: number, items: SupplierCatalogIte
       price       = COALESCE(EXCLUDED.price,    product_maps.price),
       currency    = COALESCE(EXCLUDED.currency, product_maps.currency),
       stock       = COALESCE(EXCLUDED.stock,    product_maps.stock),
+      article_criteria = CASE WHEN EXCLUDED.article_criteria != '[]'::jsonb THEN EXCLUDED.article_criteria ELSE product_maps.article_criteria END,
       updated_at  = NOW()
   `;
 }

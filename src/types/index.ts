@@ -55,6 +55,14 @@ export interface SupplierStockParams {
   sku: string;
 }
 
+export interface ArticleCriterion {
+  criteriaId: number;
+  criteriaDescription: string;
+  rawValue: string;
+  formattedValue: string;
+  unit?: string | null;
+}
+
 export interface SupplierCatalogItem {
   sku: string;
   brand: string;
@@ -72,4 +80,6 @@ export interface SupplierCatalogItem {
   currency?: string | null;
   stock?: number | null;
   tecdocGroupId?: number | null;
+  /** TecDoc spec-sheet criteria — used for storefront filter sidebars (oil viscosity, voltage, etc.). */
+  articleCriteria?: ArticleCriterion[];
 }
