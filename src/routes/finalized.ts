@@ -5,7 +5,7 @@ import { logger } from "../lib/logger.js";
 import { getAllSettings } from "./settings.js";
 import { meili, PRODUCTS_INDEX } from "../lib/meilisearch.js";
 import { pushQueue } from "../workers/queues.js";
-import { cacheGet, cacheSet } from "../services/cache.js";
+import { cacheGet, cacheSet, cacheWrap, hashQuery } from "../services/cache.js";
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -40,7 +40,16 @@ export async function finalizedRoutes(app: FastifyInstance) {
     const query = listQuerySchema.parse(request.query);
     const { page, limit, q, brand, category, categoryId, supplier, suppliers, maxPrice, hasStock, hasPrice, hasImage } = query;
 
-    // Redis cache for storefront article lookups (q-only searches with small limits)
+    // Blanket catalog cache (60s). Keyed by a hash of every query parameter so
+    // repeated storefront requests with the same filters skip the DB entirely.
+    // This is the single biggest Postgres-load reduction for the storefront:
+    // under 10K concurrent users reading the same catalogue page, only ~1 DB
+    // hit per minute per unique filter combination.
+    const catalogCacheKey = hashQuery(query as unknown as Record<string, unknown>);
+    const cachedCatalog = await cacheGet<unknown>("catalog", [catalogCacheKey]);
+    if (cachedCatalog) return cachedCatalog;
+
+    // Legacy small-query cache kept as fallback; cache writes now both keys.
     if (q && !brand && !category && !categoryId && !supplier && !suppliers && !maxPrice && !hasStock && !hasPrice && !hasImage && limit <= 10) {
       const cacheKeyParts = ["finalized", q, String(page), String(limit)];
       const cached = await cacheGet<unknown>("pricing", cacheKeyParts);
@@ -284,7 +293,10 @@ export async function finalizedRoutes(app: FastifyInstance) {
       },
     };
 
-    // Cache storefront article lookups
+    // Catalog cache (60s TTL) for any parameter combination
+    await cacheSet("catalog", [catalogCacheKey], result);
+
+    // Legacy storefront article lookup cache
     if (q && !brand && !category && !categoryId && !supplier && !hasStock && !hasPrice && !hasImage && limit <= 10) {
       await cacheSet("pricing", ["finalized", q, String(page), String(limit)], result);
     }
@@ -294,6 +306,12 @@ export async function finalizedRoutes(app: FastifyInstance) {
 
   // ─── GET /finalized/stats ─── Summary statistics
   app.get("/finalized/stats", async () => {
+    // Heavy groupBy on 1.6M rows — cache aggressively (5 min). Stats rarely
+    // move meaningfully between refreshes, and the query can trigger shm
+    // shortages under load; serving from Redis avoids that entirely.
+    const statsCached = await cacheGet<unknown>("catalog", ["stats-v2"]);
+    if (statsCached) return statsCached;
+
     const activeWhere = { status: "active" as const };
 
     const [
@@ -380,7 +398,7 @@ export async function finalizedRoutes(app: FastifyInstance) {
       logger.warn({ err }, "Failed to fetch Meilisearch index stats");
     }
 
-    return {
+    const statsResult = {
       totalProducts,
       withPrice,
       withStock,
@@ -390,6 +408,8 @@ export async function finalizedRoutes(app: FastifyInstance) {
       topCategories,
       indexStats,
     };
+    await cacheSet("catalog", ["stats-v2"], statsResult);
+    return statsResult;
   });
 
   // ─── GET /finalized/:id ─── Single product with full details including IC mapping

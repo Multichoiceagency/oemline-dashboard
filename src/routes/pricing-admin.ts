@@ -22,6 +22,10 @@ const auditContaminationSchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(50),
 });
 
+const dedupeSchema = z.object({
+  confirm: z.literal("YES_DEDUPE_INTERCARS"),
+});
+
 /**
  * Targeted price admin endpoints.
  *
@@ -41,6 +45,63 @@ const auditContaminationSchema = z.object({
  *       only bulk cleanup still needed — real high-priced items stay.
  */
 export async function pricingAdminRoutes(app: FastifyInstance) {
+  /**
+   * One-off dedupe of intercars_mappings.
+   *
+   * The mat-view has 2.5M rows while the CSV source is ~565K — ~4× duplicates
+   * from repeated imports. Deduping halves every Phase 1D query, every
+   * /finalized/stats groupBy, every audit.
+   *
+   * Strategy: keep the earliest id per (tow_kod, article_number, manufacturer)
+   * triple; delete the rest. Safe because tow_kod uniquely identifies an IC
+   * article and we preserve the representative row.
+   */
+  app.post("/admin/migrations/dedupe-intercars-mappings", async (request) => {
+    dedupeSchema.parse(request.body ?? {});
+    const start = Date.now();
+
+    await prisma.$executeRawUnsafe(`SET LOCAL statement_timeout = '600s'`);
+
+    const before = await prisma.$queryRawUnsafe<Array<{ c: bigint }>>(
+      `SELECT COUNT(*)::bigint AS c FROM intercars_mappings`
+    );
+
+    const deleted = await prisma.$executeRawUnsafe(`
+      DELETE FROM intercars_mappings im
+      USING (
+        SELECT ctid
+          FROM (
+            SELECT ctid,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY tow_kod, article_number, manufacturer
+                     ORDER BY ctid
+                   ) AS rn
+              FROM intercars_mappings
+          ) t
+          WHERE t.rn > 1
+      ) dup
+      WHERE im.ctid = dup.ctid
+    `);
+
+    const after = await prisma.$queryRawUnsafe<Array<{ c: bigint }>>(
+      `SELECT COUNT(*)::bigint AS c FROM intercars_mappings`
+    );
+
+    logger.warn(
+      { before: Number(before[0]?.c), after: Number(after[0]?.c), deleted, durationMs: Date.now() - start },
+      "intercars_mappings deduped"
+    );
+
+    return {
+      ok: true,
+      durationMs: Date.now() - start,
+      before: Number(before[0]?.c ?? 0),
+      after: Number(after[0]?.c ?? 0),
+      deleted: Number(deleted),
+      note: "Run POST /admin/migrations/rebuild-ic-unique-articles next to refresh the Phase 1D mat-view with the clean data.",
+    };
+  });
+
   /**
    * On-demand rebuild of ic_unique_articles (Phase 1D source of truth).
    *

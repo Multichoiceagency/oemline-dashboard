@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
 import { decryptCredentials } from "../lib/crypto.js";
+import { cacheGet, cacheSet, hashQuery } from "../services/cache.js";
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -29,6 +30,13 @@ export async function brandRoutes(app: FastifyInstance) {
   app.get("/brands", async (request) => {
     const query = listQuerySchema.parse(request.query);
     const { page, limit, q } = query;
+
+    // Brands change rarely (sync runs add/rename) — 10 min cache keyed by
+    // full query string covers the whole storefront filter usage.
+    const brandsCacheKey = hashQuery(query as unknown as Record<string, unknown>);
+    const cached = await cacheGet<unknown>("brands", [brandsCacheKey]);
+    if (cached) return cached;
+
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = {
@@ -56,13 +64,15 @@ export async function brandRoutes(app: FastifyInstance) {
       prisma.brand.count({ where }),
     ]);
 
-    return {
+    const result = {
       items,
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
     };
+    await cacheSet("brands", [brandsCacheKey], result);
+    return result;
   });
 
   // IC coupling coverage per brand

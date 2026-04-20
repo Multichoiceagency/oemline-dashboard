@@ -8,6 +8,12 @@ const url = new URL(config.DATABASE_URL);
 // storm. Cap each process at 15 so cumulative stays under the server limit.
 url.searchParams.set("connection_limit", "15");
 url.searchParams.set("pool_timeout", "15");
+// Per-session statement timeout: a runaway query (huge groupBy, missing
+// index) otherwise holds a connection indefinitely and cascades into "too
+// many clients already" for everyone else. 45s cap protects the pool
+// without killing legitimate slow admin operations (which set their own
+// SET LOCAL statement_timeout when needed).
+url.searchParams.set("options", "-c statement_timeout=45000");
 
 export const prisma = new PrismaClient({
   datasourceUrl: url.toString(),
