@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue } from "../workers/queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, pushQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue, tecdocWatchdogQueue } from "../workers/queues.js";
 
 export async function jobRoutes(app: FastifyInstance) {
   // Get all job queue status

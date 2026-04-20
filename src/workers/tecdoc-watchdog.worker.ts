@@ -1,5 +1,6 @@
 import type { Job } from "bullmq";
 import { logger } from "../lib/logger.js";
+import { prisma } from "../lib/prisma.js";
 import { getAdapterOrLoad } from "../adapters/registry.js";
 import { syncQueue, matchQueue } from "./queues.js";
 
@@ -48,11 +49,21 @@ async function probeTecDoc(): Promise<{ ok: boolean; error?: string }> {
 }
 
 async function isTecDocSyncPaused(): Promise<boolean> {
+  // Canonical source: tecdoc_sync_paused setting (survives restarts).
+  // Fallback: check if sync-tecdoc repeatable is absent (covers manual Redis pokes).
+  const flag = await prisma.setting.findUnique({ where: { key: "tecdoc_sync_paused" } });
+  if (flag?.value === "true") return true;
   const repeat = await syncQueue.getRepeatableJobs();
   return !repeat.some((r) => r.name === "sync-tecdoc");
 }
 
 async function rearmAndBackfill(): Promise<void> {
+  // Clear the pause flag first so a future restart re-arms correctly.
+  await prisma.setting.upsert({
+    where: { key: "tecdoc_sync_paused" },
+    create: { key: "tecdoc_sync_paused", value: "false" },
+    update: { value: "false" },
+  });
   // Re-add the 4h sync + 1h match repeatables with the same jobIds as scheduler.ts.
   await syncQueue.add(
     "sync-tecdoc",

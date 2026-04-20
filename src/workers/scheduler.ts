@@ -63,33 +63,48 @@ export async function startScheduler(): Promise<void> {
         );
       } else {
         // LEGACY MODE: Sequential processing
-        // Sync: every 4 hours (TecDoc catalog + IC phase matching)
-        await syncQueue.add(
-          `sync-${supplier.code}`,
-          { supplierCode: supplier.code },
-          {
-            repeat: { every: 4 * 60 * 60 * 1000 },
-            jobId: `sync-repeat-${supplier.code}`,
-          }
-        );
+        // For tecdoc we honour an operator-set "paused" flag so restarts don't
+        // undo a deliberate pause during a TecDoc outage. The watchdog will
+        // flip the flag off and add the repeatables back once the API recovers.
+        const paused = supplier.code === "tecdoc"
+          ? (await prisma.setting.findUnique({ where: { key: "tecdoc_sync_paused" } }))?.value === "true"
+          : false;
+
+        if (!paused) {
+          // Sync: every 4 hours (TecDoc catalog + IC phase matching)
+          await syncQueue.add(
+            `sync-${supplier.code}`,
+            { supplierCode: supplier.code },
+            {
+              repeat: { every: 4 * 60 * 60 * 1000 },
+              jobId: `sync-repeat-${supplier.code}`,
+            }
+          );
+
+          // Match: every 1 hour (rematch unmatched products)
+          await matchQueue.add(
+            `match-${supplier.code}`,
+            { supplierCode: supplier.code },
+            {
+              repeat: { every: 60 * 60 * 1000 },
+              jobId: `match-repeat-${supplier.code}`,
+            }
+          );
+        } else {
+          logger.warn(
+            { supplier: supplier.code },
+            "Sync + match schedulers skipped (tecdoc_sync_paused=true) — watchdog will rearm on recovery",
+          );
+        }
 
         // IC Match: every 1 hour (fast IC product matching, ~2-5 min per run)
+        // Doesn't hit TecDoc API — always armed regardless of tecdoc pause flag.
         await icMatchQueue.add(
           `ic-match-${supplier.code}`,
           { supplierCode: supplier.code },
           {
             repeat: { every: 60 * 60 * 1000 },
             jobId: `ic-match-repeat-${supplier.code}`,
-          }
-        );
-
-        // Match: every 1 hour (rematch unmatched products)
-        await matchQueue.add(
-          `match-${supplier.code}`,
-          { supplierCode: supplier.code },
-          {
-            repeat: { every: 60 * 60 * 1000 },
-            jobId: `match-repeat-${supplier.code}`,
           }
         );
 
@@ -104,8 +119,8 @@ export async function startScheduler(): Promise<void> {
         );
 
         logger.info(
-          { supplier: supplier.code, mode: "legacy" },
-          "Scheduled sync(4h), ic-match(1h), match(1h), pricing(1h)"
+          { supplier: supplier.code, mode: "legacy", paused },
+          `Scheduled ${paused ? "ic-match(1h), pricing(1h) only — sync/match paused" : "sync(4h), ic-match(1h), match(1h), pricing(1h)"}`,
         );
       }
     }
