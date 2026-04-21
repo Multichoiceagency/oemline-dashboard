@@ -1205,7 +1205,9 @@ export interface Cart {
 export const getCart = (key: string) =>
   apiFetch<Cart>(`/api/cart/${encodeURIComponent(key)}`);
 
-export const addToCart = (data: {
+// The cart/add route returns { cart_key, cart } — unwrap to Cart so callers
+// get the same shape as GET /cart/:key.
+export const addToCart = async (data: {
   cart_key?: string;
   articleNo: string;
   name: string;
@@ -1214,11 +1216,13 @@ export const addToCart = (data: {
   quantity?: number;
   image?: string;
   sku?: string;
-}) =>
-  apiFetch<Cart>("/api/cart/add", {
+}): Promise<Cart> => {
+  const res = await apiFetch<{ cart_key: string; cart: Cart }>("/api/cart/add", {
     method: "POST",
     body: JSON.stringify(data),
   });
+  return res.cart;
+};
 
 export const updateCartItem = (cartKey: string, itemId: string, quantity: number) =>
   apiFetch<Cart>(`/api/cart/${encodeURIComponent(cartKey)}/items/${encodeURIComponent(itemId)}`, {
