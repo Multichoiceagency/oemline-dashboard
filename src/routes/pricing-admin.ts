@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { NORMALIZED_ALIASES, normalizeBrand } from "../lib/ic-brand-aliases.js";
+import { NORMALIZED_ALIASES, MANUAL_ALIASES_FULL, normalizeBrand } from "../lib/ic-brand-aliases.js";
 
 const setPriceSchema = z.object({
   price: z.number().min(0).max(1_000_000).nullable(),
@@ -51,6 +51,96 @@ const cleanupContaminationSchema = z.object({
  *       only bulk cleanup still needed — real high-priced items stay.
  */
 export async function pricingAdminRoutes(app: FastifyInstance) {
+  /**
+   * Seed supplier_brand_rules from the curated NORMALIZED_ALIASES + MANUAL_ALIASES_FULL
+   * maps in src/lib/ic-brand-aliases.ts.
+   *
+   * Background: ic-match Phase 0 resolves IC brand → TecDoc brand via the
+   * runtime table `supplier_brand_rules`. The TS alias maps are
+   * hand-curated but were never mass-imported, so Phase 0 misses many
+   * pairs that the cleanup worker classified as "dirty" (e.g. TOPRAN/HANS
+   * PRIES, Schaeffler FAG / FAG ZAWIESZENIE). After this seed + a fresh
+   * ic-match run, those ~7K products recover their ic_sku.
+   *
+   * Idempotent: ON CONFLICT DO NOTHING on (supplier_id, supplier_brand).
+   */
+  app.post("/admin/aliases/seed-from-normalized", async () => {
+    const start = Date.now();
+
+    const supplier = await prisma.supplier.findUnique({ where: { code: "intercars" } });
+    if (!supplier) {
+      return { ok: false, error: "intercars supplier not found" };
+    }
+
+    // Build: { normalizedIcName → TecDoc brand_id }.
+    // MANUAL_ALIASES_FULL maps IC-name-as-written → TecDoc-name-as-written.
+    // NORMALIZED_ALIASES is the same map already normalized.
+    const brands = await prisma.$queryRawUnsafe<Array<{
+      id: number; name: string; normalized_name: string | null;
+    }>>(
+      `SELECT id, name, normalized_name FROM brands`
+    );
+    const normToId = new Map<string, number>();
+    for (const b of brands) {
+      const k = b.normalized_name ?? normalizeBrand(b.name);
+      if (k && !normToId.has(k)) normToId.set(k, b.id);
+    }
+
+    // Walk both alias maps and collect (icName, brandId) tuples.
+    type Pair = { icName: string; brandId: number; tecdocName: string };
+    const pairs: Pair[] = [];
+    const skipped: Array<{ icName: string; reason: string }> = [];
+
+    for (const [icName, tdName] of Object.entries(MANUAL_ALIASES_FULL)) {
+      const tdNorm = normalizeBrand(tdName);
+      const brandId = normToId.get(tdNorm);
+      if (brandId) pairs.push({ icName, brandId, tecdocName: tdName });
+      else skipped.push({ icName, reason: `TecDoc brand "${tdName}" not found` });
+    }
+    // NORMALIZED_ALIASES uses normalized keys; add any that MANUAL_ALIASES_FULL didn't cover.
+    for (const [icNorm, tdNorm] of Object.entries(NORMALIZED_ALIASES)) {
+      if (pairs.some((p) => normalizeBrand(p.icName) === icNorm)) continue;
+      const brandId = normToId.get(tdNorm);
+      if (brandId) pairs.push({ icName: icNorm, brandId, tecdocName: tdNorm });
+    }
+
+    // Bulk upsert via raw SQL — Prisma's createMany doesn't do ON CONFLICT.
+    let inserted = 0;
+    let alreadyPresent = 0;
+    for (const p of pairs) {
+      try {
+        const res = await prisma.$executeRawUnsafe(
+          `INSERT INTO supplier_brand_rules (supplier_id, brand_id, supplier_brand, active, created_at, updated_at)
+           VALUES ($1, $2, $3, true, NOW(), NOW())
+           ON CONFLICT (supplier_id, supplier_brand) DO NOTHING`,
+          supplier.id,
+          p.brandId,
+          p.icName
+        );
+        if (Number(res) > 0) inserted++;
+        else alreadyPresent++;
+      } catch (err) {
+        skipped.push({ icName: p.icName, reason: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    logger.info(
+      { inserted, alreadyPresent, skipped: skipped.length, durationMs: Date.now() - start },
+      "supplier_brand_rules seeded from NORMALIZED_ALIASES"
+    );
+
+    return {
+      ok: true,
+      durationMs: Date.now() - start,
+      totalAliases: pairs.length,
+      inserted,
+      alreadyPresent,
+      skipped: skipped.slice(0, 10),
+      totalSkipped: skipped.length,
+      note: "Run POST /api/jobs/ic-match next to recover products via Phase 0 aliases.",
+    };
+  });
+
   /**
    * Add the Phase 1C supporting index.
    *
