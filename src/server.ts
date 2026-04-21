@@ -6,7 +6,7 @@ import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
 import { config } from "./config.js";
 import { logger } from "./lib/logger.js";
-import { disconnectPrisma, validateConnection, ensureNormalizedIndexes, ensureTasksTable } from "./lib/prisma.js";
+import { disconnectPrisma, validateConnection, ensureNormalizedIndexes, ensureTasksTable, ensureOrdersTable } from "./lib/prisma.js";
 import { disconnectRedis, redis } from "./lib/redis.js";
 import { ensureProductsIndex } from "./lib/meilisearch.js";
 import { healthRoutes } from "./routes/health.js";
@@ -181,6 +181,13 @@ try {
     new Promise((_, reject) => setTimeout(() => reject(new Error("ensureTasksTable timeout")), 5_000)),
   ]).catch((err) => {
     logger.warn({ err }, "Tasks table ensure failed or timed out — /api/tasks will degrade gracefully");
+  });
+
+  await Promise.race([
+    ensureOrdersTable(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("ensureOrdersTable timeout")), 5_000)),
+  ]).catch((err) => {
+    logger.warn({ err }, "Orders table ensure failed or timed out — /api/orders will degrade gracefully");
   });
 
   await ensureBucket().catch((err) => {

@@ -235,6 +235,43 @@ export async function ensureTasksTable(): Promise<void> {
   }
 }
 
+/**
+ * Ensure the `orders` table exists. Same fallback pattern as ensureTasksTable:
+ * the Docker entrypoint's 30s prisma db push can time out before schema
+ * sync completes, leaving new tables missing on every fresh container.
+ */
+export async function ensureOrdersTable(): Promise<void> {
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS orders (
+        id SERIAL PRIMARY KEY,
+        cart_key TEXT,
+        wc_order_id INTEGER,
+        wc_order_url TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        total DOUBLE PRECISION NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'EUR',
+        customer_email TEXT NOT NULL,
+        customer_name TEXT NOT NULL,
+        customer_phone TEXT,
+        shipping JSONB NOT NULL,
+        items JSONB NOT NULL,
+        note TEXT,
+        error_message TEXT,
+        created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS orders_status_idx ON orders(status)`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS orders_customer_email_idx ON orders(customer_email)`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS orders_wc_order_id_idx ON orders(wc_order_id)`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS orders_created_at_idx ON orders(created_at)`);
+    logger.info("orders table ensured");
+  } catch (err) {
+    logger.warn({ err }, "ensureOrdersTable failed (non-critical)");
+  }
+}
+
 export async function disconnectPrisma(): Promise<void> {
   await prisma.$disconnect();
 }
