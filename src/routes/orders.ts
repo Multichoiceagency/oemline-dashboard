@@ -205,7 +205,7 @@ export async function orderRoutes(app: FastifyInstance) {
    * Configure in WC: Settings → Advanced → Webhooks → add:
    *   Topic:      Order updated (or "Order created / updated / deleted" — each)
    *   Delivery:   https://api-bsg4wgow80c8k4sc404ko00k.oemline.eu/api/orders/webhook/woocommerce
-   *   Secret:     set WC_WEBHOOK_SECRET env var to the same value
+   *   Secret:     set WOOCOMMERCE_WEBHOOK_SECRET env var to the same value
    *
    * WC signs the payload with HMAC-SHA256 base64 in X-WC-Webhook-Signature.
    * We verify that header before trusting the body. Missing secret in env =>
@@ -217,7 +217,9 @@ export async function orderRoutes(app: FastifyInstance) {
     const signature = headers["x-wc-webhook-signature"] ?? "";
     const rawBody = JSON.stringify(request.body ?? {});
 
-    const secret = process.env.WC_WEBHOOK_SECRET;
+    // Matches the WOOCOMMERCE_* env var prefix used for the REST credentials.
+    // Old WC_WEBHOOK_SECRET is still honored for backwards compat.
+    const secret = process.env.WOOCOMMERCE_WEBHOOK_SECRET ?? process.env.WC_WEBHOOK_SECRET;
     if (secret) {
       const crypto = await import("node:crypto");
       const expected = crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("base64");
