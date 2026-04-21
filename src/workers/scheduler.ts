@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { logger } from "../lib/logger.js";
-import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue, tecdocWatchdogQueue } from "./queues.js";
+import { syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue, tecdocWatchdogQueue, contaminationAuditQueue } from "./queues.js";
 
 /**
  * Sets up repeatable jobs for continuous sync, match, pricing, stock, and index.
@@ -20,7 +20,7 @@ export async function startScheduler(): Promise<void> {
   logger.info("Starting job scheduler...");
 
   // Clean up old repeatable jobs to avoid duplicates
-  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue, tecdocWatchdogQueue]) {
+  for (const queue of [syncQueue, matchQueue, indexQueue, pricingQueue, stockQueue, icMatchQueue, aiMatchQueue, brandQueue, swarmQueue, oemEnrichQueue, icCatalogQueue, icEnrichQueue, icCsvSyncQueue, aiCoordinatorQueue, tecdocWatchdogQueue, contaminationAuditQueue]) {
     const existing = await queue.getRepeatableJobs();
     for (const job of existing) {
       await queue.removeRepeatableByKey(job.key);
@@ -325,6 +325,18 @@ export async function startScheduler(): Promise<void> {
     {},
     { priority: 1, jobId: "ai-coordinator-initial-dedup" }
   );
+
+  // Weekly contamination audit — auto-applies cleanup only when drift < 10K
+  // (safety valve against runaway cleanup from a bad alias edit).
+  await contaminationAuditQueue.add(
+    "contamination-audit-weekly",
+    { apply: true, maxAutoApply: 10_000 },
+    {
+      repeat: { every: 7 * 24 * 60 * 60 * 1000 }, // 7 days
+      jobId: "contamination-audit-weekly-repeat",
+    }
+  );
+  logger.info("Scheduled contamination audit (weekly)");
 
   logger.info("Initial jobs enqueued for all suppliers");
 }

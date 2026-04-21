@@ -715,6 +715,38 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
       totalNewMatches += phaseResults.oemArrayBrandValidated;
       yield [];
 
+      // ── Phase 4: Trigram fuzzy matching for article typos/variants ─────────
+      // Catches articles that differ only by punctuation, spacing, extra
+      // characters, or typos (e.g. "ABC-123" vs "ABC123X"). Similarity >= 0.85
+      // is a strict threshold so we don't grab false positives. Brand must
+      // still match strictly (same normalization as Phase 1A) to avoid
+      // cross-brand contamination on near-match articles.
+      logger.info({ supplier: this.code }, "Phase 4: Trigram fuzzy article matching (brand-guarded)...");
+      phaseResults.fuzzyTrigram = await runPhase("Phase4-fuzzyTrigram",
+        `SELECT DISTINCT ON (pm.id)
+          pm.id AS product_id,
+          im.tow_kod,
+          im.ean AS ic_ean,
+          im.weight AS ic_weight
+         FROM product_maps pm
+         JOIN brands b ON b.id = pm.brand_id
+         JOIN intercars_mappings im ON
+           im.normalized_article_number % pm.normalized_article_no
+           AND similarity(im.normalized_article_number, pm.normalized_article_no) >= 0.85
+         WHERE pm.status = 'active' AND pm.ic_sku IS NULL
+           AND LENGTH(pm.normalized_article_no) >= 5
+           AND (
+             im.normalized_manufacturer = b.normalized_name
+             OR (LENGTH(im.normalized_manufacturer) >= 2
+                 AND b.normalized_name LIKE im.normalized_manufacturer || '%')
+             OR (LENGTH(b.normalized_name) >= 2
+                 AND im.normalized_manufacturer LIKE b.normalized_name || '%')
+           )
+         ORDER BY pm.id, similarity(im.normalized_article_number, pm.normalized_article_no) DESC`,
+        600_000);
+      totalNewMatches += phaseResults.fuzzyTrigram;
+      yield [];
+
       logger.info(
         { supplier: this.code, totalNewMatches, byPhase: phaseResults },
         "IC matching complete — pricing/stock handled by dedicated workers"

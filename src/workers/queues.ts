@@ -178,6 +178,15 @@ export const swarmQueue = new Queue("swarm", {
 // recovers after an outage (expired key / exceeded quota), automatically
 // re-arms the paused sync + match schedulers and fires the pending oil
 // back-fill sync. Cheap (1 API call per probe) and self-healing.
+export const contaminationAuditQueue = new Queue("contamination-audit", {
+  connection,
+  defaultJobOptions: {
+    removeOnComplete: { count: 20 },
+    removeOnFail: { count: 50 },
+    attempts: 1,
+  },
+});
+
 export const tecdocWatchdogQueue = new Queue("tecdoc-watchdog", {
   connection,
   defaultJobOptions: {

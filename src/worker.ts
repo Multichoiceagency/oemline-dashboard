@@ -21,6 +21,7 @@ import { processIcEnrichJob } from "./workers/ic-enrich.worker.js";
 import { processIcCsvSyncJob } from "./workers/ic-csv-sync.worker.js";
 import { processAiCoordinatorJob } from "./workers/ai-coordinator.worker.js";
 import { processTecdocWatchdogJob } from "./workers/tecdoc-watchdog.worker.js";
+import { processContaminationAuditJob } from "./workers/contamination-audit.worker.js";
 import { loadAdaptersFromDb } from "./adapters/registry.js";
 import { startScheduler } from "./workers/scheduler.js";
 
@@ -229,6 +230,16 @@ if (handles("ai-coordinator") || handles("sync")) {
     concurrency: 1, // Single job — sequential decision making
     stalledInterval: 120_000,
     lockDuration: 300_000, // 5 min max
+  }));
+}
+
+// Contamination audit: weekly check for IC cross-contamination drift + auto-cleanup
+if (handles("contamination-audit") || handles("sync")) {
+  workers.push(new Worker("contamination-audit", processContaminationAuditJob, {
+    connection,
+    concurrency: 1,
+    stalledInterval: 600_000,
+    lockDuration: 1_800_000, // 30 min max
   }));
 }
 

@@ -65,7 +65,16 @@ await app.register(rateLimit, {
 
 app.addHook("onRequest", async (request, reply) => {
   const path = request.url;
-  if (path === "/health" || path.startsWith("/api/auth/") || request.method === "OPTIONS") return;
+  // Public endpoints:
+  // - /health: liveness probe
+  // - /api/auth/*: session-bearer auth
+  // - /api/orders/webhook/woocommerce: HMAC-signed by WC
+  if (
+    path === "/health" ||
+    path.startsWith("/api/auth/") ||
+    path.startsWith("/api/orders/webhook/") ||
+    request.method === "OPTIONS"
+  ) return;
 
   const apiKey = request.headers["x-api-key"];
   if (!apiKey || apiKey !== config.API_KEY) {

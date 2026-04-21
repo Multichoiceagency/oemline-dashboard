@@ -142,6 +142,33 @@ export async function pricingAdminRoutes(app: FastifyInstance) {
   });
 
   /**
+   * Install pg_trgm + the fuzzy-matching indexes that feed Phase 4.
+   *
+   * Extension: pg_trgm is a standard Postgres contrib extension for
+   * trigram-based similarity search. No external deps.
+   *
+   * Indexes: GIN on the normalized article columns of both tables.
+   * These power fast similarity() lookups over 1.6M × 2.5M rows.
+   *
+   * Runtime cost: one-time ~60-180s to build. Storage ~1GB combined.
+   */
+  app.post("/admin/migrations/ensure-pg-trgm", async () => {
+    const start = Date.now();
+    await prisma.$executeRawUnsafe(`SET LOCAL statement_timeout = '600s'`);
+    await prisma.$executeRawUnsafe(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS idx_pm_norm_article_trgm
+         ON product_maps USING GIN (normalized_article_no gin_trgm_ops)
+        WHERE ic_sku IS NULL AND status = 'active'`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS idx_im_norm_article_trgm
+         ON intercars_mappings USING GIN (normalized_article_number gin_trgm_ops)`
+    );
+    return { ok: true, durationMs: Date.now() - start };
+  });
+
+  /**
    * Add the Phase 1C supporting index.
    *
    * Phase 1C joins product_maps.tecdoc_id (TEXT) to intercars_mappings.

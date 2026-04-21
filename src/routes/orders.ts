@@ -38,6 +38,22 @@ interface RedisCart {
   items: RedisCartItem[];
 }
 
+/**
+ * Map WooCommerce's status vocabulary to ours.
+ *  pending/on-hold          → pending
+ *  processing               → processing
+ *  completed                → completed
+ *  cancelled/refunded/failed→ cancelled (failed reserved for our own push-failures)
+ */
+function mapWcStatus(wc: string): "pending" | "processing" | "completed" | "cancelled" | "failed" {
+  const s = (wc || "").toLowerCase().replace(/^wc-/, "");
+  if (s === "completed") return "completed";
+  if (s === "processing") return "processing";
+  if (s === "pending" || s === "on-hold") return "pending";
+  if (s === "cancelled" || s === "refunded") return "cancelled";
+  return "pending";
+}
+
 export async function orderRoutes(app: FastifyInstance) {
   /**
    * Create an order from a cart: persist locally + push to WooCommerce.
@@ -181,6 +197,74 @@ export async function orderRoutes(app: FastifyInstance) {
     const order = await prisma.order.findUnique({ where: { id: parseInt(id, 10) } });
     if (!order) return reply.code(404).send({ error: "Not found" });
     return order;
+  });
+
+  /**
+   * WooCommerce webhook receiver for order lifecycle events.
+   *
+   * Configure in WC: Settings → Advanced → Webhooks → add:
+   *   Topic:      Order updated (or "Order created / updated / deleted" — each)
+   *   Delivery:   https://api-bsg4wgow80c8k4sc404ko00k.oemline.eu/api/orders/webhook/woocommerce
+   *   Secret:     set WC_WEBHOOK_SECRET env var to the same value
+   *
+   * WC signs the payload with HMAC-SHA256 base64 in X-WC-Webhook-Signature.
+   * We verify that header before trusting the body. Missing secret in env =>
+   * signature check is skipped (dev mode).
+   */
+  app.post("/orders/webhook/woocommerce", async (request, reply) => {
+    const headers = request.headers as Record<string, string | undefined>;
+    const event = headers["x-wc-webhook-event"] ?? "";
+    const signature = headers["x-wc-webhook-signature"] ?? "";
+    const rawBody = JSON.stringify(request.body ?? {});
+
+    const secret = process.env.WC_WEBHOOK_SECRET;
+    if (secret) {
+      const crypto = await import("node:crypto");
+      const expected = crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("base64");
+      if (expected !== signature) {
+        return reply.code(401).send({ error: "Invalid webhook signature" });
+      }
+    }
+
+    const body = (request.body ?? {}) as {
+      id?: number;
+      status?: string;
+      number?: string;
+      meta_data?: Array<{ key: string; value: string }>;
+    };
+    const wcOrderId = body.id;
+    if (!wcOrderId) {
+      return reply.code(400).send({ error: "Missing order id" });
+    }
+
+    // Find our Order either by wc_order_id or via meta_data.dashboard_order_id
+    let localId: number | null = null;
+    const metaRef = body.meta_data?.find((m) => m.key === "dashboard_order_id");
+    if (metaRef?.value) {
+      const parsed = parseInt(String(metaRef.value), 10);
+      if (Number.isFinite(parsed)) localId = parsed;
+    }
+
+    const order = localId
+      ? await prisma.order.findUnique({ where: { id: localId } })
+      : await prisma.order.findFirst({ where: { wcOrderId } });
+
+    if (!order) {
+      logger.warn({ wcOrderId, event }, "WC webhook: no matching dashboard order");
+      return { ok: true, matched: false, note: "No local order found for this WC id" };
+    }
+
+    const newStatus = mapWcStatus(body.status ?? "");
+    if (order.status === newStatus && order.wcOrderId === wcOrderId) {
+      return { ok: true, matched: true, orderId: order.id, changed: false };
+    }
+
+    const updated = await prisma.order.update({
+      where: { id: order.id },
+      data: { status: newStatus, wcOrderId },
+    });
+    logger.info({ orderId: order.id, wcOrderId, oldStatus: order.status, newStatus, event }, "WC webhook updated order");
+    return { ok: true, matched: true, orderId: updated.id, status: updated.status, changed: true };
   });
 
   app.post("/orders/:id/retry", async (request, reply) => {
