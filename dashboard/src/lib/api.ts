@@ -1182,3 +1182,56 @@ export interface KentekenResponse {
 
 export const lookupKenteken = (plate: string) =>
   apiFetch<KentekenResponse>(`/api/kenteken/${encodeURIComponent(plate)}`);
+
+// Cart
+export interface CartItem {
+  id: string;
+  articleNo: string;
+  name: string;
+  brand: string;
+  price: number;
+  quantity: number;
+  image?: string;
+  sku?: string;
+}
+
+export interface Cart {
+  key: string;
+  items: CartItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const getCart = (key: string) =>
+  apiFetch<Cart>(`/api/cart/${encodeURIComponent(key)}`);
+
+export const addToCart = (data: {
+  cart_key?: string;
+  articleNo: string;
+  name: string;
+  brand?: string;
+  price: number;
+  quantity?: number;
+  image?: string;
+  sku?: string;
+}) =>
+  apiFetch<Cart>("/api/cart/add", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const updateCartItem = (cartKey: string, itemId: string, quantity: number) =>
+  apiFetch<Cart>(`/api/cart/${encodeURIComponent(cartKey)}/items/${encodeURIComponent(itemId)}`, {
+    method: "PUT",
+    body: JSON.stringify({ quantity }),
+  });
+
+export const removeCartItem = (cartKey: string, itemId: string) =>
+  apiFetch<Cart>(`/api/cart/${encodeURIComponent(cartKey)}/items/${encodeURIComponent(itemId)}`, {
+    method: "DELETE",
+  });
+
+export const clearCart = (cartKey: string) =>
+  apiFetch<{ ok: boolean }>(`/api/cart/${encodeURIComponent(cartKey)}`, {
+    method: "DELETE",
+  });

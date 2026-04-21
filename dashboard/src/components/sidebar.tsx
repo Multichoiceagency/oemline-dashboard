@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { getTaskStats } from "@/lib/api";
+import { useCart } from "@/lib/cart";
 import {
   LayoutDashboard,
   Search,
@@ -40,7 +41,7 @@ type NavItem = {
   href: string;
   labelKey: string;
   icon: React.ComponentType<{ className?: string }>;
-  badge?: "openBugs";
+  badge?: "openBugs" | "cart";
 };
 
 const navItems: NavItem[] = [
@@ -51,6 +52,7 @@ const navItems: NavItem[] = [
   { href: "/categories", labelKey: "nav.categories", icon: FolderTree },
   { href: "/search", labelKey: "nav.search", icon: Search },
   { href: "/kenteken", labelKey: "nav.kenteken", icon: Car },
+  { href: "/cart", labelKey: "nav.cart", icon: ShoppingCart, badge: "cart" as const },
   { href: "/tecdoc", labelKey: "nav.tecdoc", icon: BookOpen },
   { href: "/unmatched", labelKey: "nav.unmatched", icon: AlertTriangle },
   { href: "/tasks", labelKey: "nav.tasks", icon: KanbanSquare, badge: "openBugs" as const },
@@ -121,6 +123,7 @@ export function Sidebar() {
   const { locale, setLocale, t } = useTranslation();
   const { email, logout } = useAuth();
   const { open, setOpen } = useSidebar();
+  const { itemCount: cartCount } = useCart();
   const [openBugs, setOpenBugs] = useState<number>(0);
 
   useEffect(() => {
@@ -189,7 +192,7 @@ export function Sidebar() {
             const isActive =
               pathname === item.href ||
               (item.href !== "/" && pathname.startsWith(item.href));
-            const badgeCount = item.badge === "openBugs" ? openBugs : 0;
+            const badgeCount = item.badge === "openBugs" ? openBugs : item.badge === "cart" ? cartCount : 0;
             return (
               <Link
                 key={item.href}
