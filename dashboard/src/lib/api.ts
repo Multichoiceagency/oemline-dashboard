@@ -1235,3 +1235,69 @@ export const clearCart = (cartKey: string) =>
   apiFetch<{ ok: boolean }>(`/api/cart/${encodeURIComponent(cartKey)}`, {
     method: "DELETE",
   });
+
+// Orders (WooCommerce checkout)
+export interface OrderCustomer {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone?: string;
+  address: string;
+  city: string;
+  postcode: string;
+  country: string;
+}
+
+export interface Order {
+  id: number;
+  cartKey: string | null;
+  wcOrderId: number | null;
+  wcOrderUrl: string | null;
+  status: "pending" | "processing" | "completed" | "cancelled" | "failed";
+  total: number;
+  currency: string;
+  customerEmail: string;
+  customerName: string;
+  customerPhone: string | null;
+  shipping: { street: string; city: string; postcode: string; country: string };
+  items: Array<{
+    id: string; articleNo: string; name: string; brand: string;
+    price: number; quantity: number; sku?: string; image?: string;
+  }>;
+  note: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const checkoutOrder = (data: {
+  cartKey: string;
+  customer: OrderCustomer;
+  note?: string;
+}) =>
+  apiFetch<{
+    ok: boolean; orderId: number; wcOrderId: number;
+    wcOrderNumber: string; wcOrderUrl: string | null; total: number;
+  }>("/api/orders/checkout", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const getOrders = (params?: { status?: string; limit?: number; page?: number }) => {
+  const qs = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    });
+  }
+  return apiFetch<{ items: Order[]; total: number; page: number; limit: number }>(
+    `/api/orders?${qs}`
+  );
+};
+
+export const getOrder = (id: number) => apiFetch<Order>(`/api/orders/${id}`);
+
+export const retryOrder = (id: number) =>
+  apiFetch<{ ok: boolean; wcOrderId: number; orderId: number }>(`/api/orders/${id}/retry`, {
+    method: "POST",
+  });

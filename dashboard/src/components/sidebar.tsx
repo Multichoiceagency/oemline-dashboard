@@ -31,6 +31,7 @@ import {
   FileText,
   KanbanSquare,
   Car,
+  Receipt,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useTranslation } from "@/lib/i18n";
@@ -53,6 +54,7 @@ const navItems: NavItem[] = [
   { href: "/search", labelKey: "nav.search", icon: Search },
   { href: "/kenteken", labelKey: "nav.kenteken", icon: Car },
   { href: "/cart", labelKey: "nav.cart", icon: ShoppingCart, badge: "cart" as const },
+  { href: "/orders", labelKey: "nav.orders", icon: Receipt },
   { href: "/tecdoc", labelKey: "nav.tecdoc", icon: BookOpen },
   { href: "/unmatched", labelKey: "nav.unmatched", icon: AlertTriangle },
   { href: "/tasks", labelKey: "nav.tasks", icon: KanbanSquare, badge: "openBugs" as const },
