@@ -102,36 +102,45 @@ export async function processAiMatchJob(job: Job<AiMatchJobData>): Promise<AiMat
     matching_articles: bigint | number;
   };
 
-  const candidates = await prisma.$queryRawUnsafe<Candidate[]>(
-    `SELECT
-       b.name          AS tecdoc_brand,
-       b.id            AS brand_id,
-       im.manufacturer AS ic_manufacturer,
-       COUNT(*)        AS matching_articles
-     FROM product_maps pm
-     JOIN brands b ON b.id = pm.brand_id
-     JOIN intercars_mappings im
-       ON UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
-        = UPPER(regexp_replace(pm.article_no,     '[^a-zA-Z0-9]', '', 'g'))
-     WHERE pm.ic_sku IS NULL
-       AND pm.status = 'active'
-       AND pm.article_no IS NOT NULL
-       AND pm.article_no != ''
-       AND NOT EXISTS (
-         SELECT 1 FROM supplier_brand_rules sbr
-         WHERE sbr.supplier_id = $1
-           AND sbr.brand_id = b.id
-           AND UPPER(sbr.supplier_brand) = UPPER(im.manufacturer)
-       )
-       AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
-         != UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
-     GROUP BY b.name, b.id, im.manufacturer
-     HAVING COUNT(*) >= $2
-     ORDER BY matching_articles DESC
-     LIMIT 200`,
-    intercarsSupplier.id,
-    llmMinThreshold
-  );
+  // Wrap in $transaction so SET LOCAL actually applies to the groupBy.
+  // Without this the heavy HashAgg spills to /dev/shm (mmap→/tmp) and trips
+  // 53100 "could not resize shared memory segment" under concurrent load —
+  // the same shortage that broke admin cleanup and ic-match Phase 1C before.
+  const candidates = await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SET LOCAL max_parallel_workers_per_gather = 0`);
+    await tx.$executeRawUnsafe(`SET LOCAL work_mem = '512MB'`);
+    await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '600s'`);
+    return tx.$queryRawUnsafe<Candidate[]>(
+      `SELECT
+         b.name          AS tecdoc_brand,
+         b.id            AS brand_id,
+         im.manufacturer AS ic_manufacturer,
+         COUNT(*)        AS matching_articles
+       FROM product_maps pm
+       JOIN brands b ON b.id = pm.brand_id
+       JOIN intercars_mappings im
+         ON UPPER(regexp_replace(im.article_number, '[^a-zA-Z0-9]', '', 'g'))
+          = UPPER(regexp_replace(pm.article_no,     '[^a-zA-Z0-9]', '', 'g'))
+       WHERE pm.ic_sku IS NULL
+         AND pm.status = 'active'
+         AND pm.article_no IS NOT NULL
+         AND pm.article_no != ''
+         AND NOT EXISTS (
+           SELECT 1 FROM supplier_brand_rules sbr
+           WHERE sbr.supplier_id = $1
+             AND sbr.brand_id = b.id
+             AND UPPER(sbr.supplier_brand) = UPPER(im.manufacturer)
+         )
+         AND UPPER(regexp_replace(b.name, '[^a-zA-Z0-9]', '', 'g'))
+           != UPPER(regexp_replace(im.manufacturer, '[^a-zA-Z0-9]', '', 'g'))
+       GROUP BY b.name, b.id, im.manufacturer
+       HAVING COUNT(*) >= $2
+       ORDER BY matching_articles DESC
+       LIMIT 200`,
+      intercarsSupplier.id,
+      llmMinThreshold
+    );
+  }, { maxWait: 10_000, timeout: 660_000 });
 
   const candidatesFound = candidates.length;
   logger.info({ candidatesFound }, "AI match: brand alias candidates identified");
