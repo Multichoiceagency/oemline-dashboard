@@ -507,6 +507,12 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
       // ── Phase 1C: TecDoc product ID match ───────────────────────────────────
       logger.info({ supplier: this.code }, "Phase 1C: Matching by TecDoc product ID...");
+      // Phase 1C rewrite: drop the double-CAST that disabled every index.
+      // pm.tecdoc_id is TEXT, im.tecdoc_prod is INTEGER. Cast only on the
+      // small-side (pm) using the partial index idx_pm_tecdoc_unmatched so
+      // the planner does a nested-loop with index probes into im instead of
+      // seq-scanning both tables (used to hit the 300s statement_timeout).
+      // Regex pre-filter drops non-numeric tecdoc_id values safely.
       phaseResults.tecdocId = await runPhase("Phase1C-tecdocId",
         `SELECT DISTINCT ON (pm.id)
           pm.id as product_id,
@@ -514,11 +520,12 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
           im.ean as ic_ean,
           im.weight as ic_weight
         FROM product_maps pm
-        JOIN intercars_mappings im ON
-          pm.tecdoc_id IS NOT NULL
+        JOIN intercars_mappings im ON im.tecdoc_prod = pm.tecdoc_id::integer
+        WHERE pm.status = 'active'
+          AND pm.ic_sku IS NULL
+          AND pm.tecdoc_id IS NOT NULL
+          AND pm.tecdoc_id ~ '^[0-9]+$'
           AND im.tecdoc_prod IS NOT NULL
-          AND CAST(pm.tecdoc_id AS TEXT) = CAST(im.tecdoc_prod AS TEXT)
-        WHERE pm.status = 'active' AND pm.ic_sku IS NULL
         ORDER BY pm.id`, 300_000);
       totalNewMatches += phaseResults.tecdocId;
       yield [];

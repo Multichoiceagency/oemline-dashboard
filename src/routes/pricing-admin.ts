@@ -52,6 +52,27 @@ const cleanupContaminationSchema = z.object({
  */
 export async function pricingAdminRoutes(app: FastifyInstance) {
   /**
+   * Add the Phase 1C supporting index.
+   *
+   * Phase 1C joins product_maps.tecdoc_id (TEXT) to intercars_mappings.
+   * tecdoc_prod (INTEGER). Without an index on pm.tecdoc_id filtered by
+   * (ic_sku IS NULL AND status = 'active') the planner seq-scans ~1.6M
+   * rows and hits the 5-minute statement_timeout. This partial index
+   * is tiny because only ~40-80K rows have tecdoc_id set AND are unlinked.
+   */
+  app.post("/admin/migrations/ensure-phase1c-index", async () => {
+    const start = Date.now();
+    await prisma.$executeRawUnsafe(`SET LOCAL statement_timeout = '300s'`);
+    // Partial index on the pm side — small, fast for the nested-loop probe.
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS idx_pm_tecdoc_unmatched
+         ON product_maps (tecdoc_id)
+         WHERE tecdoc_id IS NOT NULL AND ic_sku IS NULL AND status = 'active'`
+    );
+    return { ok: true, durationMs: Date.now() - start };
+  });
+
+  /**
    * Force-create missing brands.normalized_name generated column.
    * Phase 1A of ic-match depends on this column; if the startup ALTER
    * timed out it stays missing and Phase 1A returns 0 matches with 42703.
