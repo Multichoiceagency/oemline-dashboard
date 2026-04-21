@@ -1287,6 +1287,29 @@ export const checkoutOrder = (data: {
     body: JSON.stringify(data),
   });
 
+export interface ManualOrderItem {
+  articleNo: string;
+  name: string;
+  brand?: string;
+  price: number;
+  quantity: number;
+  sku?: string;
+  image?: string;
+}
+
+export const createManualOrder = (data: {
+  customer: OrderCustomer;
+  items: ManualOrderItem[];
+  note?: string;
+}) =>
+  apiFetch<{
+    ok: boolean; orderId: number; wcOrderId: number;
+    wcOrderNumber: string; wcOrderUrl: string | null; total: number;
+  }>("/api/orders/manual", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
 export const getOrders = (params?: { status?: string; limit?: number; page?: number }) => {
   const qs = new URLSearchParams();
   if (params) {

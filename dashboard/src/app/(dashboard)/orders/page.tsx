@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Package, RefreshCw, ExternalLink, AlertTriangle, CheckCircle2,
-  Clock, XCircle, Loader2,
+  Clock, XCircle, Loader2, Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getOrders, retryOrder, type Order } from "@/lib/api";
@@ -58,10 +58,18 @@ export default function OrdersPage() {
           <h1 className="text-3xl font-bold">Bestellingen</h1>
           <p className="text-muted-foreground mt-1">Alle orders die via het dashboard zijn aangemaakt en naar WooCommerce gepusht.</p>
         </div>
-        <Button variant="outline" onClick={load} disabled={loading} className="gap-2">
-          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
-          Ververs
-        </Button>
+        <div className="flex gap-2">
+          <Link
+            href="/orders/new"
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            <Plus className="h-4 w-4" /> Nieuwe bestelling
+          </Link>
+          <Button variant="outline" onClick={load} disabled={loading} className="gap-2">
+            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+            Ververs
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2">

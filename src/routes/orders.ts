@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
@@ -6,6 +7,31 @@ import { logger } from "../lib/logger.js";
 import { createWooCommerceOrder, isWooCommerceConfigured } from "../lib/woocommerce.js";
 
 const CART_PREFIX = "cart:";
+
+const manualItemSchema = z.object({
+  articleNo: z.string().min(1),
+  name: z.string().min(1).max(500),
+  brand: z.string().max(200).default(""),
+  price: z.number().min(0),
+  quantity: z.number().int().min(1).max(9999),
+  sku: z.string().optional(),
+  image: z.string().optional(),
+});
+
+const manualOrderSchema = z.object({
+  customer: z.object({
+    firstName: z.string().min(1).max(100),
+    lastName: z.string().min(1).max(100),
+    email: z.string().email().max(200),
+    phone: z.string().max(50).optional(),
+    address: z.string().min(1).max(200),
+    city: z.string().min(1).max(100),
+    postcode: z.string().min(1).max(20),
+    country: z.string().length(2).default("NL"),
+  }),
+  items: z.array(manualItemSchema).min(1).max(100),
+  note: z.string().max(1000).optional(),
+});
 
 const checkoutSchema = z.object({
   cartKey: z.string().min(1),
@@ -162,6 +188,116 @@ export async function orderRoutes(app: FastifyInstance) {
         data: { status: "failed", errorMessage: msg },
       });
       logger.warn({ orderId: order.id, err: msg }, "WooCommerce order push failed");
+      return reply.code(502).send({
+        error: "WooCommerce push failed",
+        orderId: order.id,
+        message: msg,
+      });
+    }
+  });
+
+  /**
+   * Create an order from a direct items list (no Redis cart involved).
+   *
+   * Used by the admin "Nieuwe bestelling" form in the dashboard. Same
+   * Order row + WC push + failed-retry semantics as /checkout; only the
+   * source of items differs.
+   */
+  app.post("/orders/manual", async (request, reply) => {
+    const body = manualOrderSchema.parse(request.body);
+
+    const total = body.items.reduce((s, i) => s + i.price * i.quantity, 0);
+
+    const order = await prisma.order.create({
+      data: {
+        cartKey: null,
+        status: "pending",
+        total,
+        currency: "EUR",
+        customerEmail: body.customer.email,
+        customerName: `${body.customer.firstName} ${body.customer.lastName}`.trim(),
+        customerPhone: body.customer.phone,
+        shipping: {
+          street: body.customer.address,
+          city: body.customer.city,
+          postcode: body.customer.postcode,
+          country: body.customer.country,
+        },
+        items: body.items.map((i) => ({
+          id: crypto.randomUUID(),
+          articleNo: i.articleNo,
+          name: i.name,
+          brand: i.brand,
+          price: i.price,
+          quantity: i.quantity,
+          sku: i.sku,
+          image: i.image,
+        })) as unknown as object,
+        note: body.note,
+      },
+    });
+
+    if (!isWooCommerceConfigured()) {
+      return reply.code(503).send({
+        error: "WooCommerce not configured",
+        orderId: order.id,
+        note: "Order saved locally but no WC endpoint.",
+      });
+    }
+
+    try {
+      const wc = await createWooCommerceOrder({
+        status: "pending",
+        billing: {
+          first_name: body.customer.firstName,
+          last_name: body.customer.lastName,
+          email: body.customer.email,
+          phone: body.customer.phone,
+          address_1: body.customer.address,
+          city: body.customer.city,
+          postcode: body.customer.postcode,
+          country: body.customer.country,
+        },
+        line_items: body.items.map((i) => ({
+          sku: i.sku ?? i.articleNo,
+          name: i.name,
+          quantity: i.quantity,
+          price: i.price.toFixed(2),
+          total: (i.price * i.quantity).toFixed(2),
+          meta_data: [
+            { key: "brand", value: i.brand },
+            { key: "articleNo", value: i.articleNo },
+          ],
+        })),
+        customer_note: body.note,
+        meta_data: [
+          { key: "dashboard_order_id", value: String(order.id) },
+          { key: "source", value: "manual-dashboard" },
+        ],
+      });
+
+      const updated = await prisma.order.update({
+        where: { id: order.id },
+        data: { wcOrderId: wc.id, wcOrderUrl: wc.permalink ?? null, status: "processing" },
+      });
+
+      logger.info({ orderId: order.id, wcOrderId: wc.id, total, source: "manual" }, "Manual order pushed to WooCommerce");
+
+      return {
+        ok: true,
+        orderId: updated.id,
+        wcOrderId: wc.id,
+        wcOrderNumber: wc.number,
+        wcOrderUrl: wc.permalink ?? null,
+        total,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { status: "failed", errorMessage: msg },
+      });
+      logger.warn({ orderId: order.id, err: msg }, "Manual order WC push failed");
       return reply.code(502).send({
         error: "WooCommerce push failed",
         orderId: order.id,
