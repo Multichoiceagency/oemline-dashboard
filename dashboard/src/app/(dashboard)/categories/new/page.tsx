@@ -14,7 +14,7 @@ export default function NewCategoryPage() {
   const router = useRouter();
   const [allCategories, setAllCategories] = useState<Category[]>([]);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: "", code: "", parentId: "none" });
+  const [form, setForm] = useState({ name: "", code: "", parentId: "none", description: "" });
 
   useEffect(() => {
     getCategories({ limit: 250, hideEmpty: "false" })
@@ -30,6 +30,7 @@ export default function NewCategoryPage() {
         name: form.name.trim(),
         code: form.code.trim() || undefined,
         parentId: form.parentId === "none" ? null : Number(form.parentId),
+        description: form.description.trim() || null,
       });
       router.push(`/categories/${category.id}`);
     } catch (err) {
@@ -96,6 +97,19 @@ export default function NewCategoryPage() {
                 ))}
               </SelectContent>
             </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">
+              Beschrijving <span className="text-muted-foreground font-normal">(optioneel — wordt op de storefront getoond)</span>
+            </label>
+            <textarea
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              placeholder="Korte introductie boven de productenlijst (bijv. 'Onze remblokken passen op meer dan 5.000 modellen…')"
+              rows={4}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+            />
           </div>
 
           <div className="flex items-center gap-3 pt-2">

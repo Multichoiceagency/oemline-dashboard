@@ -55,20 +55,23 @@ model Brand {
 }
 
 model Category {
-  id        Int      @id @default(autoincrement())
-  name      String
-  code      String   @unique
-  tecdocId  Int?     @unique @map("tecdoc_id")
-  parentId  Int?     @map("parent_id")
-  level     Int      @default(0)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id          Int      @id @default(autoincrement())
+  name        String
+  code        String   @unique
+  tecdocId    Int?     @unique @map("tecdoc_id")
+  parentId    Int?     @map("parent_id")
+  level       Int      @default(0)
+  position    Int      @default(0)
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   parent   Category?    @relation("CategoryTree", fields: [parentId], references: [id])
   children Category[]   @relation("CategoryTree")
   products ProductMap[]
 
   @@index([parentId])
+  @@index([parentId, position])
   @@map("categories")
 }
 

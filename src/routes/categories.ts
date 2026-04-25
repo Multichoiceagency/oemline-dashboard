@@ -16,6 +16,16 @@ const updateCategorySchema = z.object({
   name: z.string().min(1).max(200).optional(),
   code: z.string().min(1).max(100).optional(),
   parentId: z.number().int().nullable().optional(),
+  description: z.string().max(10_000).nullable().optional(),
+  position: z.number().int().min(0).optional(),
+});
+
+const reorderSchema = z.object({
+  parentId: z.number().int().nullable().optional(),
+  items: z.array(z.object({
+    id: z.number().int(),
+    position: z.number().int().min(0),
+  })).min(1).max(500),
 });
 
 export async function categoryRoutes(app: FastifyInstance) {
@@ -48,12 +58,12 @@ export async function categoryRoutes(app: FastifyInstance) {
         where,
         skip,
         take: limit,
-        orderBy: { name: "asc" },
+        orderBy: [{ position: "asc" }, { name: "asc" }],
         include: {
           _count: { select: { products: true, children: true } },
           children: {
             take: 10,
-            orderBy: { name: "asc" },
+            orderBy: [{ position: "asc" }, { name: "asc" }],
             include: {
               _count: { select: { products: true, children: true } },
             },
@@ -80,7 +90,7 @@ export async function categoryRoutes(app: FastifyInstance) {
       include: {
         parent: { select: { id: true, name: true, code: true } },
         children: {
-          orderBy: { name: "asc" },
+          orderBy: [{ position: "asc" }, { name: "asc" }],
           include: {
             _count: { select: { products: true, children: true } },
           },
@@ -435,6 +445,7 @@ export async function categoryRoutes(app: FastifyInstance) {
       name: z.string().min(1).max(200),
       code: z.string().min(1).max(100).optional(),
       parentId: z.number().int().nullable().optional(),
+      description: z.string().max(10_000).nullable().optional(),
     });
 
     const body = schema.parse(request.body);
@@ -466,11 +477,66 @@ export async function categoryRoutes(app: FastifyInstance) {
       level = (parent.level ?? 0) + 1;
     }
 
+    // New categories slot at the end of their parent (or root) list — pick
+    // the next position so a fresh category doesn't accidentally land at the
+    // top above curated entries.
+    const tail = await prisma.category.aggregate({
+      where: { parentId: body.parentId ?? null },
+      _max: { position: true },
+    });
+    const position = (tail._max.position ?? -1) + 1;
+
     const category = await prisma.category.create({
-      data: { name: body.name, code, parentId: body.parentId ?? null, level },
+      data: {
+        name: body.name,
+        code,
+        parentId: body.parentId ?? null,
+        level,
+        position,
+        description: body.description ?? null,
+      },
     });
 
     return reply.code(201).send(category);
+  });
+
+  // Reorder a contiguous group of categories (typically: siblings under one
+  // parent). Caller sends the desired ordered ids; we apply each new position
+  // in a single transaction so partial failures don't leave the list scrambled.
+  app.post("/categories/reorder", async (request, reply) => {
+    const body = reorderSchema.parse(request.body);
+
+    // Light validation: every id must currently belong to the same parent the
+    // caller is reordering — prevents cross-parent mix-ups from a stale UI.
+    const ids = body.items.map((i) => i.id);
+    const found = await prisma.category.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, parentId: true },
+    });
+    if (found.length !== ids.length) {
+      return reply.code(404).send({ error: "Een of meer categorieën niet gevonden" });
+    }
+    if (body.parentId !== undefined) {
+      const expected = body.parentId;
+      const wrongParent = found.find((c) => (c.parentId ?? null) !== (expected ?? null));
+      if (wrongParent) {
+        return reply.code(400).send({
+          error: `Categorie ${wrongParent.id} hoort niet bij parent ${expected ?? "root"}`,
+        });
+      }
+    }
+
+    await prisma.$transaction(
+      body.items.map((it) =>
+        prisma.category.update({
+          where: { id: it.id },
+          data: { position: it.position },
+        }),
+      ),
+    );
+
+    logger.info({ updated: body.items.length, parentId: body.parentId ?? null }, "Categories reordered");
+    return { updated: body.items.length };
   });
 
   // Delete manual category (only if no products linked)

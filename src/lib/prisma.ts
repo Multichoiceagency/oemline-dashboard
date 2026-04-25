@@ -272,6 +272,29 @@ export async function ensureOrdersTable(): Promise<void> {
   }
 }
 
+/**
+ * Ensure the additive `categories.position` and `categories.description`
+ * columns exist. Same fallback as ensureTasksTable / ensureOrdersTable for
+ * when the boot-time `prisma db push` is throttled by an unrelated
+ * materialized-view dependency error and skips the additive changes.
+ */
+export async function ensureCategoryExtraColumns(): Promise<void> {
+  try {
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE categories ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0`,
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE categories ADD COLUMN IF NOT EXISTS description TEXT`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS categories_parent_position_idx ON categories(parent_id, position)`,
+    );
+    logger.info("categories.position + .description ensured");
+  } catch (err) {
+    logger.warn({ err }, "ensureCategoryExtraColumns failed (non-critical)");
+  }
+}
+
 export async function disconnectPrisma(): Promise<void> {
   await prisma.$disconnect();
 }

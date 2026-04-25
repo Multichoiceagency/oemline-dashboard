@@ -627,6 +627,8 @@ export interface Category {
   tecdocId: number | null;
   parentId: number | null;
   level: number;
+  position: number;
+  description: string | null;
   createdAt: string;
   updatedAt: string;
   _count?: { products: number; children: number };
@@ -654,7 +656,7 @@ export const getCategories = (params?: { page?: number; limit?: number; parentId
 export const getCategory = (id: number) =>
   apiFetch<Category & { parent: { id: number; name: string; code: string } | null; products: Product[] }>(`/api/categories/${id}`);
 
-export const createCategory = (data: { name: string; code?: string; parentId?: number | null }) =>
+export const createCategory = (data: { name: string; code?: string; parentId?: number | null; description?: string | null }) =>
   apiFetch<Category>("/api/categories", {
     method: "POST",
     body: JSON.stringify(data),
@@ -663,9 +665,27 @@ export const createCategory = (data: { name: string; code?: string; parentId?: n
 export const deleteCategory = (id: number) =>
   apiFetch<{ success: boolean }>(`/api/categories/${id}`, { method: "DELETE" });
 
-export const updateCategory = (id: number, data: { name?: string; code?: string; parentId?: number | null }) =>
+export const updateCategory = (
+  id: number,
+  data: {
+    name?: string;
+    code?: string;
+    parentId?: number | null;
+    description?: string | null;
+    position?: number;
+  },
+) =>
   apiFetch<Category>(`/api/categories/${id}`, {
     method: "PATCH",
+    body: JSON.stringify(data),
+  });
+
+export const reorderCategories = (data: {
+  parentId?: number | null;
+  items: Array<{ id: number; position: number }>;
+}) =>
+  apiFetch<{ updated: number }>("/api/categories/reorder", {
+    method: "POST",
     body: JSON.stringify(data),
   });
 

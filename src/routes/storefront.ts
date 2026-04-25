@@ -220,12 +220,12 @@ export async function storefrontRoutes(app: FastifyInstance) {
 
     const categories = await prisma.category.findMany({
       where,
-      orderBy: { name: "asc" },
+      orderBy: [{ position: "asc" }, { name: "asc" }],
       include: {
         _count: { select: { products: true, children: true } },
         children: {
           take: 500,
-          orderBy: { name: "asc" },
+          orderBy: [{ position: "asc" }, { name: "asc" }],
           where: {
             OR: [
               { products: { some: {} } },
@@ -237,7 +237,7 @@ export async function storefrontRoutes(app: FastifyInstance) {
             _count: { select: { products: true, children: true } },
             children: {
               take: 200,
-              orderBy: { name: "asc" },
+              orderBy: [{ position: "asc" }, { name: "asc" }],
               where: {
                 OR: [{ products: { some: {} } }, { tecdocId: null }],
               },
@@ -256,6 +256,8 @@ export async function storefrontRoutes(app: FastifyInstance) {
         name: c.name,
         code: c.code,
         parentId: c.parentId,
+        position: c.position,
+        description: c.description,
         productCount: c._count.products,
         childCount: c._count.children,
         children: c.children.map((ch) => ({
@@ -263,6 +265,8 @@ export async function storefrontRoutes(app: FastifyInstance) {
           name: ch.name,
           code: ch.code,
           parentId: c.id,
+          position: ch.position,
+          description: ch.description,
           productCount: ch._count.products,
           childCount: ch._count.children,
           children: ch.children.map((gch) => ({
@@ -270,6 +274,8 @@ export async function storefrontRoutes(app: FastifyInstance) {
             name: gch.name,
             code: gch.code,
             parentId: ch.id,
+            position: gch.position,
+            description: gch.description,
             productCount: gch._count.products,
             childCount: gch._count.children,
             children: [],

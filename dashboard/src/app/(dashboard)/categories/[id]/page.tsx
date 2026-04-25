@@ -23,7 +23,7 @@ export default function EditCategoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [form, setForm] = useState({ name: "", code: "", parentId: "none" });
+  const [form, setForm] = useState({ name: "", code: "", parentId: "none", description: "" });
 
   useEffect(() => {
     if (!id || isNaN(id)) { setError("Ongeldig categorie-ID"); setLoading(false); return; }
@@ -34,7 +34,12 @@ export default function EditCategoryPage() {
     ])
       .then(([cat, cats]) => {
         setCategory(cat);
-        setForm({ name: cat.name, code: cat.code, parentId: cat.parentId ? String(cat.parentId) : "none" });
+        setForm({
+          name: cat.name,
+          code: cat.code,
+          parentId: cat.parentId ? String(cat.parentId) : "none",
+          description: cat.description ?? "",
+        });
         setAllCategories((cats.items ?? []).filter((c: Category) => c.id !== id));
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Ophalen mislukt"))
@@ -49,6 +54,7 @@ export default function EditCategoryPage() {
         name: form.name,
         code: form.code,
         parentId: form.parentId === "none" ? null : Number(form.parentId),
+        description: form.description.trim() || null,
       });
       router.push("/categories");
     } catch (err) {
@@ -144,6 +150,18 @@ export default function EditCategoryPage() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">
+                Beschrijving <span className="text-muted-foreground font-normal">(optioneel — wordt op de storefront getoond)</span>
+              </label>
+              <textarea
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                placeholder="Korte introductie boven de productenlijst…"
+                rows={4}
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              />
             </div>
             <div className="flex items-center gap-3 pt-2">
               <Button onClick={handleSave} disabled={saving || !form.name.trim()}>

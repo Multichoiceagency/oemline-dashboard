@@ -1,9 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useApi } from "@/lib/hooks";
-import { getCategories, syncTecDocCategories, mergeCategories, resetCategoryProducts } from "@/lib/api";
+import {
+  getCategories, syncTecDocCategories, mergeCategories, resetCategoryProducts,
+  reorderCategories,
+} from "@/lib/api";
 import type { Category } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -46,7 +49,17 @@ import {
   CheckCheck,
   Trash2,
   AlertTriangle,
+  GripVertical,
 } from "lucide-react";
+import {
+  DndContext, type DragEndEvent, PointerSensor, KeyboardSensor,
+  useSensor, useSensors, closestCenter,
+} from "@dnd-kit/core";
+import {
+  SortableContext, arrayMove, sortableKeyboardCoordinates,
+  useSortable, verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 export default function CategoriesPage() {
   const router = useRouter();
@@ -72,6 +85,48 @@ export default function CategoriesPage() {
     () => getCategories({ page, limit: 100, parentId, q: searchQuery || undefined, hideEmpty: "false" }),
     [page, parentId, searchQuery]
   );
+
+  // Local copy of the items so drag-and-drop can update order optimistically
+  // without waiting for refetch. Synced with `data.items` on every load.
+  const [orderedItems, setOrderedItems] = useState<Category[]>([]);
+  const [savingOrder, setSavingOrder] = useState(false);
+  useEffect(() => {
+    setOrderedItems(data?.items ?? []);
+  }, [data?.items]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  // Drag-reorder is only meaningful within a single sibling group. When a
+  // search query filters across parents, we don't expose the handle (saving
+  // a position would falsely persist across mixed groups).
+  const reorderEnabled = !searchQuery;
+
+  async function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIdx = orderedItems.findIndex((c) => c.id === active.id);
+    const newIdx = orderedItems.findIndex((c) => c.id === over.id);
+    if (oldIdx === -1 || newIdx === -1) return;
+
+    const next = arrayMove(orderedItems, oldIdx, newIdx);
+    setOrderedItems(next);
+    setSavingOrder(true);
+    try {
+      await reorderCategories({
+        parentId: parentId ?? null,
+        items: next.map((c, i) => ({ id: c.id, position: i })),
+      });
+    } catch (err) {
+      // Roll back on failure so the UI doesn't lie about the persisted order.
+      setOrderedItems(orderedItems);
+      alert(err instanceof Error ? err.message : "Volgorde opslaan mislukt");
+    } finally {
+      setSavingOrder(false);
+    }
+  }
 
   // All categories for "existing" target dropdown
   const { data: allCats } = useApi(
@@ -208,8 +263,8 @@ export default function CategoriesPage() {
     }
   };
 
-  const selectedCategories = data?.items.filter((c) => selected.has(c.id)) ?? [];
-  const allSelected = (data?.items.length ?? 0) > 0 && selected.size === (data?.items.length ?? 0);
+  const selectedCategories = orderedItems.filter((c) => selected.has(c.id));
+  const allSelected = orderedItems.length > 0 && selected.size === orderedItems.length;
 
   return (
     <div className="space-y-6">
@@ -314,90 +369,60 @@ export default function CategoriesPage() {
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
-          ) : !data?.items.length ? (
+          ) : orderedItems.length === 0 ? (
             <div className="text-center py-12">
               <FolderOpen className="mx-auto h-12 w-12 text-muted-foreground/50" />
               <p className="mt-4 text-muted-foreground text-sm">Geen categorieën gevonden</p>
             </div>
           ) : (
             <div className="overflow-x-auto -mx-6 px-6">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10 pl-4">
-                      <input
-                        type="checkbox"
-                        checked={allSelected}
-                        onChange={toggleAll}
-                        className="h-4 w-4 rounded border-gray-300 cursor-pointer"
-                      />
-                    </TableHead>
-                    <TableHead>Categorie</TableHead>
-                    <TableHead className="hidden sm:table-cell">Code</TableHead>
-                    <TableHead className="hidden md:table-cell">TecDoc ID</TableHead>
-                    <TableHead>Producten</TableHead>
-                    <TableHead className="hidden sm:table-cell">Subcategorieën</TableHead>
-                    <TableHead className="text-right">Acties</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.items.map((cat) => (
-                    <TableRow
-                      key={cat.id}
-                      className={`cursor-pointer hover:bg-muted/50 ${selected.has(cat.id) ? "bg-blue-50/60" : ""}`}
-                      onClick={() => navigateToCategory(cat)}
-                    >
-                      <TableCell className="pl-4" onClick={(e) => toggleSelect(cat.id, e)}>
+              {savingOrder && (
+                <div className="px-4 py-1.5 mb-2 text-xs text-muted-foreground inline-flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Volgorde opslaan…
+                </div>
+              )}
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      {reorderEnabled && <TableHead className="w-8 pl-4" />}
+                      <TableHead className={reorderEnabled ? "w-10" : "w-10 pl-4"}>
                         <input
                           type="checkbox"
-                          checked={selected.has(cat.id)}
-                          onChange={() => {}}
+                          checked={allSelected}
+                          onChange={toggleAll}
                           className="h-4 w-4 rounded border-gray-300 cursor-pointer"
                         />
-                      </TableCell>
-                      <TableCell className="font-medium">
-                        <div className="flex items-center gap-2">
-                          <FolderTree className="h-4 w-4 text-muted-foreground shrink-0" />
-                          {cat.name}
-                          {!cat.tecdocId && (
-                            <Badge variant="secondary" className="text-xs font-normal">eigen</Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="hidden sm:table-cell">
-                        <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{cat.code}</code>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs hidden md:table-cell">
-                        {cat.tecdocId ?? "—"}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{formatNumber(cat._count?.products ?? 0)}</Badge>
-                      </TableCell>
-                      <TableCell className="hidden sm:table-cell">
-                        {(cat._count?.children ?? 0) > 0 && (
-                          <Badge variant="secondary">{cat._count?.children} sub</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => { e.stopPropagation(); router.push(`/categories/${cat.id}`); }}
-                          >
-                            <Pencil className="h-3 w-3" />
-                          </Button>
-                          {(cat._count?.children ?? 0) > 0 && (
-                            <Button variant="ghost" size="sm" onClick={() => navigateToCategory(cat)}>
-                              <ChevronRight className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
+                      </TableHead>
+                      <TableHead>Categorie</TableHead>
+                      <TableHead className="hidden sm:table-cell">Code</TableHead>
+                      <TableHead className="hidden md:table-cell">TecDoc ID</TableHead>
+                      <TableHead>Producten</TableHead>
+                      <TableHead className="hidden sm:table-cell">Subcategorieën</TableHead>
+                      <TableHead className="text-right">Acties</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    <SortableContext
+                      items={orderedItems.map((c) => c.id)}
+                      strategy={verticalListSortingStrategy}
+                      disabled={!reorderEnabled}
+                    >
+                      {orderedItems.map((cat) => (
+                        <SortableCategoryRow
+                          key={cat.id}
+                          cat={cat}
+                          selected={selected.has(cat.id)}
+                          onToggleSelect={(e) => toggleSelect(cat.id, e)}
+                          onNavigate={() => navigateToCategory(cat)}
+                          onEdit={() => router.push(`/categories/${cat.id}`)}
+                          showHandle={reorderEnabled}
+                        />
+                      ))}
+                    </SortableContext>
+                  </TableBody>
+                </Table>
+              </DndContext>
             </div>
           )}
 
@@ -536,5 +561,96 @@ export default function CategoriesPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function SortableCategoryRow({
+  cat, selected, onToggleSelect, onNavigate, onEdit, showHandle,
+}: {
+  cat: Category;
+  selected: boolean;
+  onToggleSelect: (e: React.MouseEvent) => void;
+  onNavigate: () => void;
+  onEdit: () => void;
+  showHandle: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: cat.id });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+  };
+  const childCount = cat._count?.children ?? 0;
+
+  return (
+    <TableRow
+      ref={setNodeRef}
+      style={style}
+      className={`hover:bg-muted/50 ${selected ? "bg-blue-50/60" : ""} ${isDragging ? "shadow-lg" : ""}`}
+      onClick={onNavigate}
+    >
+      {showHandle && (
+        <TableCell
+          className="pl-4 w-8 cursor-grab active:cursor-grabbing select-none touch-none"
+          onClick={(e) => e.stopPropagation()}
+          {...attributes}
+          {...listeners}
+          aria-label="Sleep om te verplaatsen"
+        >
+          <GripVertical className="h-4 w-4 text-muted-foreground" />
+        </TableCell>
+      )}
+      <TableCell className={showHandle ? "w-10" : "pl-4 w-10"} onClick={onToggleSelect}>
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => {}}
+          className="h-4 w-4 rounded border-gray-300 cursor-pointer"
+        />
+      </TableCell>
+      <TableCell className="font-medium cursor-pointer">
+        <div className="flex items-center gap-2">
+          <FolderTree className="h-4 w-4 text-muted-foreground shrink-0" />
+          {cat.name}
+          {!cat.tecdocId && (
+            <Badge variant="secondary" className="text-xs font-normal">eigen</Badge>
+          )}
+          {cat.description && (
+            <Badge variant="outline" className="text-xs font-normal" title={cat.description}>
+              beschrijving
+            </Badge>
+          )}
+        </div>
+      </TableCell>
+      <TableCell className="hidden sm:table-cell">
+        <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{cat.code}</code>
+      </TableCell>
+      <TableCell className="font-mono text-xs hidden md:table-cell">
+        {cat.tecdocId ?? "—"}
+      </TableCell>
+      <TableCell>
+        <Badge variant="outline">{formatNumber(cat._count?.products ?? 0)}</Badge>
+      </TableCell>
+      <TableCell className="hidden sm:table-cell">
+        {childCount > 0 && <Badge variant="secondary">{childCount} sub</Badge>}
+      </TableCell>
+      <TableCell className="text-right">
+        <div className="flex justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(e) => { e.stopPropagation(); onEdit(); }}
+          >
+            <Pencil className="h-3 w-3" />
+          </Button>
+          {childCount > 0 && (
+            <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); onNavigate(); }}>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      </TableCell>
+    </TableRow>
   );
 }
