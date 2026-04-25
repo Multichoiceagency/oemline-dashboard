@@ -245,7 +245,7 @@ export default function FinalizedDetailPage() {
   // ── Edit Mode ──────────────────────────────────────────────────────
   if (editMode) {
     return (
-      <div className="space-y-6 max-w-5xl">
+      <div className="space-y-6 w-full">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
@@ -538,7 +538,7 @@ export default function FinalizedDetailPage() {
 
   // ── Detail View (non-edit mode) ────────────────────────────────────
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6 w-full">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
@@ -665,7 +665,10 @@ export default function FinalizedDetailPage() {
                   href={
                     (product.brand as any)?.tecdocId
                       ? `https://oemline.eu/parts/tecdoc/${(product.brand as any).tecdocId}/${encodeURIComponent(product.articleNo)}`
-                      : `https://oemline.eu/shop?q=${encodeURIComponent(product.articleNo)}`
+                      // Fallback: send to global search. /shop ignored ?q in
+                      // its search params; /search?q= reaches the actual
+                      // result list driven by the same dashboard data.
+                      : `https://oemline.eu/search?q=${encodeURIComponent(product.articleNo)}`
                   }
                   target="_blank"
                   rel="noopener noreferrer"

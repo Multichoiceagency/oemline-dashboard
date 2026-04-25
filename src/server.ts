@@ -19,6 +19,8 @@ import { productRoutes } from "./routes/products.js";
 import { brandRoutes } from "./routes/brands.js";
 import { categoryRoutes } from "./routes/categories.js";
 import { stockLocationRoutes } from "./routes/stock-locations.js";
+import { analyticsRoutes } from "./routes/analytics.js";
+import { assistantRoutes } from "./routes/assistant.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { storefrontRoutes } from "./routes/storefront.js";
 import { intercarsRoutes } from "./routes/intercars-mapping.js";
@@ -119,6 +121,8 @@ await app.register(pricingAdminRoutes, { prefix: "/api" });
 await app.register(kentekenRoutes, { prefix: "/api" });
 await app.register(orderRoutes, { prefix: "/api" });
 await app.register(stockLocationRoutes, { prefix: "/api" });
+await app.register(analyticsRoutes, { prefix: "/api" });
+await app.register(assistantRoutes, { prefix: "/api" });
 
 app.setErrorHandler((error: Error & { statusCode?: number; issues?: unknown; validation?: unknown }, request, reply) => {
   // Zod validation errors → 400

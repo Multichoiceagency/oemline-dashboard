@@ -348,7 +348,7 @@ export default function ProductDetailPage() {
                   href={
                     (product.brand as any)?.tecdocId
                       ? `https://oemline.eu/parts/tecdoc/${(product.brand as any).tecdocId}/${encodeURIComponent(product.articleNo)}`
-                      : `https://oemline.eu/shop?q=${encodeURIComponent(product.articleNo)}`
+                      : `https://oemline.eu/search?q=${encodeURIComponent(product.articleNo)}`
                   }
                   target="_blank"
                   rel="noopener noreferrer"
