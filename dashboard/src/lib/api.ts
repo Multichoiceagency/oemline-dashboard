@@ -1029,6 +1029,88 @@ export const bulkUpdateStock = (
     body: JSON.stringify({ updates }),
   });
 
+// Stock analytics
+export interface StockAnalytics {
+  period: { year: number | null; quarter: number | null; month: number | null; scope: "all-time" | "filtered" };
+  totals: {
+    productCount: number;
+    productsWithStock: number;
+    productsWithoutStock: number;
+    totalUnits: number;
+    totalValue: number;
+    avgPrice: number;
+  };
+  perLocation: Array<{
+    locationId: number;
+    code: string;
+    name: string;
+    country: string;
+    productCount: number;
+    totalUnits: number;
+    totalValue: number;
+  }>;
+  perBrand: Array<{
+    brandId: number;
+    name: string;
+    code: string;
+    productCount: number;
+    stockUnits: number;
+    stockValue: number;
+  }>;
+  perCategory: Array<{
+    categoryId: number | null;
+    name: string;
+    productCount: number;
+    stockUnits: number;
+    stockValue: number;
+  }>;
+  monthlyHistory: Array<{
+    month: string;
+    productCount: number;
+    stockUnits: number;
+    stockValue: number;
+  }>;
+}
+
+export const getStockAnalytics = (params?: {
+  year?: number;
+  quarter?: number;
+  month?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params?.year != null) qs.set("year", String(params.year));
+  if (params?.quarter != null) qs.set("quarter", String(params.quarter));
+  if (params?.month != null) qs.set("month", String(params.month));
+  return apiFetch<StockAnalytics>(`/api/analytics/stock?${qs}`);
+};
+
+// AI Assistant
+export interface AssistantStatus {
+  provider: "kimi" | "ollama" | "none";
+  model: string;
+  available: boolean;
+}
+
+export interface AssistantMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AssistantReply {
+  reply: string;
+  provider: string;
+  model: string;
+  contextSummary: { totalProducts: number; totalValue: number; locations: number };
+}
+
+export const getAssistantStatus = () => apiFetch<AssistantStatus>("/api/assistant/status");
+
+export const sendAssistantMessage = (messages: AssistantMessage[]) =>
+  apiFetch<AssistantReply>("/api/assistant/chat", {
+    method: "POST",
+    body: JSON.stringify({ messages }),
+  });
+
 export const getFinalized = (params?: {
   page?: number;
   limit?: number;

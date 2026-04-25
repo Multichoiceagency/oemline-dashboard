@@ -34,6 +34,8 @@ import {
   Receipt,
   Warehouse,
   Boxes,
+  LineChart,
+  Sparkles,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useTranslation } from "@/lib/i18n";
@@ -63,6 +65,8 @@ const navItems: NavItem[] = [
   { href: "/finalized", labelKey: "nav.finalized", icon: ShoppingCart },
   { href: "/voorraad", labelKey: "nav.stockManagement", icon: Boxes },
   { href: "/locations", labelKey: "nav.locations", icon: Warehouse },
+  { href: "/analyses", labelKey: "nav.analyses", icon: LineChart },
+  { href: "/assistant", labelKey: "nav.assistant", icon: Sparkles },
   { href: "/analytics", labelKey: "nav.analytics", icon: BarChart3 },
   { href: "/storage", labelKey: "nav.storage", icon: HardDrive },
   { href: "/overrides", labelKey: "nav.overrides", icon: GitCompare },
