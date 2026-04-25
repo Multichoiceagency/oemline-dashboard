@@ -70,11 +70,11 @@ export default function ManualOrderPage() {
 
   const brandFilter = vehicle?.brandMatch?.code;
 
-  // Run product search whenever query/category/brand changes
+  // Run product search whenever query/category/brand/category changes.
+  // Triggers when *any* of: a brand match, a category pick, or a 2+ char query.
   const runSearch = useCallback(async (q: string, cat: Category | null, brand?: string) => {
     const trimmed = q.trim();
-    // If no plate AND no query → empty list
-    if (!brand && trimmed.length < 2) {
+    if (!brand && !cat && trimmed.length < 2) {
       setResults([]); setFocusedIdx(0); return;
     }
     setSearching(true);
@@ -113,14 +113,16 @@ export default function ManualOrderPage() {
     try {
       const data = await lookupKenteken(plate);
       setVehicle(data);
-      if (data.brandMatch) {
-        setCatsLoading(true);
-        try {
-          const cats = await getCategories({ hideEmpty: "true", limit: 80 });
-          setCategories(cats.items);
-        } finally {
-          setCatsLoading(false);
-        }
+      // Categories are universal TecDoc product groups (Brake System, Engine, …)
+      // not brand-specific, so we load them on every successful plate lookup —
+      // even when brandMatch is null (which is normal: our brands table only
+      // holds parts manufacturers, not vehicle marques).
+      setCatsLoading(true);
+      try {
+        const cats = await getCategories({ hideEmpty: "true", limit: 80 });
+        setCategories(cats.items);
+      } finally {
+        setCatsLoading(false);
       }
       // After plate, jump focus to search
       setTimeout(() => searchRef.current?.focus(), 50);
@@ -396,14 +398,19 @@ export default function ManualOrderPage() {
             )}
           </div>
 
-          {/* Step 2: Categories (only when brandMatch) */}
-          {vehicle?.brandMatch && (
+          {/* Step 2: Categories — shown for any vehicle lookup, not gated on brandMatch */}
+          {vehicle && (categories.length > 0 || catsLoading) && (
             <div className="rounded-lg border bg-card p-4">
               <div className="mb-3 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <FolderTree className="h-4 w-4 text-muted-foreground" />
                   <h3 className="text-sm font-semibold">
-                    2. Categorie <span className="font-normal text-muted-foreground">voor {vehicle.brandMatch.name}</span>
+                    2. Categorie{" "}
+                    <span className="font-normal text-muted-foreground">
+                      {vehicle.brandMatch
+                        ? `voor ${vehicle.brandMatch.name}`
+                        : `voor ${vehicle.vehicle.merk} ${vehicle.vehicle.handelsbenaming}`}
+                    </span>
                   </h3>
                 </div>
                 {catsLoading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
@@ -444,7 +451,7 @@ export default function ManualOrderPage() {
             <div className="mb-3 flex items-center gap-2">
               <Package className="h-4 w-4 text-muted-foreground" />
               <h3 className="text-sm font-semibold">
-                {vehicle?.brandMatch ? "3. Producten" : "Zoek product"}
+                {vehicle ? "3. Producten" : "Zoek product"}
                 {results.length > 0 && (
                   <span className="ml-2 font-normal text-muted-foreground">({results.length})</span>
                 )}
@@ -468,7 +475,9 @@ export default function ManualOrderPage() {
                       (e.target as HTMLInputElement).blur();
                     }
                   }}
-                  placeholder={vehicle?.brandMatch
+                  placeholder={selectedCat
+                    ? `Filter binnen ${selectedCat.name}... (/ = focus, ↓ = navigeer)`
+                    : vehicle
                     ? "Filter op artikel, omschrijving... (/ = focus, ↓ = navigeer)"
                     : "Artikel, SKU, EAN, merk... (/ = focus)"}
                   className="w-full pl-10 pr-3 py-2 rounded-md border bg-background text-sm"
@@ -480,7 +489,7 @@ export default function ManualOrderPage() {
             </form>
 
             <div ref={resultsRef} className="mt-3 max-h-[60vh] overflow-y-auto rounded-md border divide-y">
-              {(!brandFilter && query.length < 2) ? (
+              {(!brandFilter && !selectedCat && query.length < 2) ? (
                 <div className="p-8 text-center text-sm text-muted-foreground">
                   Voer een kenteken in <em>of</em> type minimaal 2 tekens.
                 </div>
