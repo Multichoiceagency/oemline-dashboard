@@ -22,6 +22,17 @@ export async function processIcMatchJob(job: Job<IcMatchJobData>): Promise<void>
     return;
   }
 
+  // IC phase matching only makes sense for the intercars adapter — running it
+  // against e.g. tecdoc would invoke TecDocAdapter.syncCatalog (full TecDoc
+  // API crawl), which is exactly what this worker is meant to stay isolated from.
+  if (adapter.code !== "intercars") {
+    logger.warn(
+      { supplierCode, adapterCode: adapter.code },
+      "Skipping ic-match: only the intercars adapter supports IC phase matching",
+    );
+    return;
+  }
+
   const { prisma } = await import("../lib/prisma.js");
 
   logger.info({ supplierCode }, "IC match job starting");

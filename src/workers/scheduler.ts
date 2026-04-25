@@ -99,14 +99,18 @@ export async function startScheduler(): Promise<void> {
 
         // IC Match: every 1 hour (fast IC product matching, ~2-5 min per run)
         // Doesn't hit TecDoc API — always armed regardless of tecdoc pause flag.
-        await icMatchQueue.add(
-          `ic-match-${supplier.code}`,
-          { supplierCode: supplier.code },
-          {
-            repeat: { every: 60 * 60 * 1000 },
-            jobId: `ic-match-repeat-${supplier.code}`,
-          }
-        );
+        // Only meaningful for the intercars supplier; scheduling for tecdoc/partspoint
+        // would route through their adapters and trigger unrelated catalog syncs.
+        if (supplier.adapterType === "intercars") {
+          await icMatchQueue.add(
+            `ic-match-${supplier.code}`,
+            { supplierCode: supplier.code },
+            {
+              repeat: { every: 60 * 60 * 1000 },
+              jobId: `ic-match-repeat-${supplier.code}`,
+            }
+          );
+        }
 
         // Pricing: every 1 hour (API refresh for real-time price updates)
         await pricingQueue.add(
@@ -266,11 +270,13 @@ export async function startScheduler(): Promise<void> {
           { priority: 1, jobId: `sync-initial-dedup-${supplier.code}` }
         );
 
-        await icMatchQueue.add(
-          `ic-match-initial-${supplier.code}`,
-          { supplierCode: supplier.code },
-          { priority: 1, jobId: `ic-match-initial-dedup-${supplier.code}` }
-        );
+        if (supplier.adapterType === "intercars") {
+          await icMatchQueue.add(
+            `ic-match-initial-${supplier.code}`,
+            { supplierCode: supplier.code },
+            { priority: 1, jobId: `ic-match-initial-dedup-${supplier.code}` }
+          );
+        }
 
         await matchQueue.add(
           `match-initial-${supplier.code}`,
