@@ -168,10 +168,16 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
     }
   }
 
-  // ── Step 5: Zero stale stock for SKUs no longer in today's CSV ─────────
-  // Without this, products that IC discontinued (or that simply dropped out
-  // of stock everywhere) keep showing their last-known stock value forever
-  // because the targeted UPDATE above only touches SKUs *present* in the CSV.
+  // ── Step 5: Zero stale + initialize null stock for SKUs not in today's CSV ─
+  // Two cases collapse into one UPDATE:
+  //   (a) Stale: stock > 0 but the SKU dropped out of IC's catalog → set to 0
+  //       so we stop showing imaginary inventory.
+  //   (b) Uninitialized: stock IS NULL because the row was created before any
+  //       CSV import touched it (or its IC SKU has never been in a CSV) →
+  //       also set to 0 so the storefront stops treating those products as
+  //       "out of stock" in a UI sense (null) when they're really "in stock = 0
+  //       in IC's catalog at this moment". With `stock = 0` they hit the same
+  //       outofstock path as actually-zero inventory, but consistently.
   //
   // Guard: skip the sweep if the CSV looks suspiciously small, so a partial
   // or corrupted download can't wipe live data. Healthy IC stock CSVs carry
@@ -185,12 +191,12 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
          SET stock = 0, updated_at = NOW()
          WHERE ic_sku IS NOT NULL
            AND status = 'active'
-           AND stock > 0
+           AND (stock > 0 OR stock IS NULL)
            AND updated_at < $1::timestamptz`,
         sweepCutoff,
       );
       logger.info({ staleZeroed, sweepCutoff: sweepCutoff.toISOString() },
-        "Stale-stock sweep: zeroed rows whose ic_sku is not in today's CSV");
+        "Stale-stock sweep: zeroed rows whose ic_sku is not in today's CSV (incl. NULL)");
     } catch (err) {
       logger.warn({ err }, "Stale-stock sweep failed (non-fatal)");
     }
