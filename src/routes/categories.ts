@@ -17,6 +17,7 @@ const updateCategorySchema = z.object({
   code: z.string().min(1).max(100).optional(),
   parentId: z.number().int().nullable().optional(),
   description: z.string().max(10_000).nullable().optional(),
+  seoDescription: z.string().max(20_000).nullable().optional(),
   position: z.number().int().min(0).optional(),
 });
 
@@ -446,6 +447,7 @@ export async function categoryRoutes(app: FastifyInstance) {
       code: z.string().min(1).max(100).optional(),
       parentId: z.number().int().nullable().optional(),
       description: z.string().max(10_000).nullable().optional(),
+      seoDescription: z.string().max(20_000).nullable().optional(),
     });
 
     const body = schema.parse(request.body);
@@ -494,6 +496,7 @@ export async function categoryRoutes(app: FastifyInstance) {
         level,
         position,
         description: body.description ?? null,
+        seoDescription: body.seoDescription ?? null,
       },
     });
 

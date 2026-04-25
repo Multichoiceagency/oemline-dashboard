@@ -629,6 +629,7 @@ export interface Category {
   level: number;
   position: number;
   description: string | null;
+  seoDescription: string | null;
   createdAt: string;
   updatedAt: string;
   _count?: { products: number; children: number };
@@ -656,7 +657,7 @@ export const getCategories = (params?: { page?: number; limit?: number; parentId
 export const getCategory = (id: number) =>
   apiFetch<Category & { parent: { id: number; name: string; code: string } | null; products: Product[] }>(`/api/categories/${id}`);
 
-export const createCategory = (data: { name: string; code?: string; parentId?: number | null; description?: string | null }) =>
+export const createCategory = (data: { name: string; code?: string; parentId?: number | null; description?: string | null; seoDescription?: string | null }) =>
   apiFetch<Category>("/api/categories", {
     method: "POST",
     body: JSON.stringify(data),
@@ -672,6 +673,7 @@ export const updateCategory = (
     code?: string;
     parentId?: number | null;
     description?: string | null;
+    seoDescription?: string | null;
     position?: number;
   },
 ) =>

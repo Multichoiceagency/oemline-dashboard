@@ -287,9 +287,12 @@ export async function ensureCategoryExtraColumns(): Promise<void> {
       `ALTER TABLE categories ADD COLUMN IF NOT EXISTS description TEXT`,
     );
     await prisma.$executeRawUnsafe(
+      `ALTER TABLE categories ADD COLUMN IF NOT EXISTS seo_description TEXT`,
+    );
+    await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS categories_parent_position_idx ON categories(parent_id, position)`,
     );
-    logger.info("categories.position + .description ensured");
+    logger.info("categories.position + .description + .seo_description ensured");
   } catch (err) {
     logger.warn({ err }, "ensureCategoryExtraColumns failed (non-critical)");
   }

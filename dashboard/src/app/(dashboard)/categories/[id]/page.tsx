@@ -23,7 +23,7 @@ export default function EditCategoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [form, setForm] = useState({ name: "", code: "", parentId: "none", description: "" });
+  const [form, setForm] = useState({ name: "", code: "", parentId: "none", description: "", seoDescription: "" });
 
   useEffect(() => {
     if (!id || isNaN(id)) { setError("Ongeldig categorie-ID"); setLoading(false); return; }
@@ -39,6 +39,7 @@ export default function EditCategoryPage() {
           code: cat.code,
           parentId: cat.parentId ? String(cat.parentId) : "none",
           description: cat.description ?? "",
+          seoDescription: cat.seoDescription ?? "",
         });
         setAllCategories((cats.items ?? []).filter((c: Category) => c.id !== id));
       })
@@ -55,6 +56,7 @@ export default function EditCategoryPage() {
         code: form.code,
         parentId: form.parentId === "none" ? null : Number(form.parentId),
         description: form.description.trim() || null,
+        seoDescription: form.seoDescription.trim() || null,
       });
       router.push("/categories");
     } catch (err) {
@@ -153,13 +155,25 @@ export default function EditCategoryPage() {
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">
-                Beschrijving <span className="text-muted-foreground font-normal">(optioneel — wordt op de storefront getoond)</span>
+                Beschrijving <span className="text-muted-foreground font-normal">(optioneel — boven productenlijst op storefront)</span>
               </label>
               <textarea
                 value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
                 placeholder="Korte introductie boven de productenlijst…"
                 rows={4}
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">
+                SEO-tekst (kenteken-zoeker) <span className="text-muted-foreground font-normal">(optioneel — onderaan de pagina bij kenteken-zoekresultaten)</span>
+              </label>
+              <textarea
+                value={form.seoDescription}
+                onChange={(e) => setForm({ ...form, seoDescription: e.target.value })}
+                placeholder="SEO-tekst die getoond wordt onderaan de categoriepagina wanneer een bezoeker via kenteken zoekt."
+                rows={6}
                 className="w-full rounded-md border bg-background px-3 py-2 text-sm"
               />
             </div>
