@@ -102,6 +102,18 @@ export async function stockLocationRoutes(app: FastifyInstance) {
       sortOrder: loc.sortOrder,
       quantity: byLocation.get(loc.id) ?? 0,
     }));
+
+    // Fallback: if no admin has touched per-location stock for this product
+    // yet but product_maps.stock has an aggregate (from the IC CSV pipeline
+    // or a direct supplier feed), attribute that aggregate to the default
+    // (lowest sortOrder) location so the storefront has something to show
+    // out of the box. Once an admin saves any per-location override on
+    // /finalized/:id, that override naturally wins.
+    const hasManualAlloc = existing.length > 0;
+    if (!hasManualAlloc && product.stock && product.stock > 0 && items.length > 0) {
+      items[0] = { ...items[0], quantity: product.stock };
+    }
+
     const total = items.reduce((s, i) => s + i.quantity, 0);
     return { product: { id: product.id, articleNo: product.articleNo, sku: product.sku }, items, total };
   });
