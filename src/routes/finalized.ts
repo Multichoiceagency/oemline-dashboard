@@ -427,12 +427,32 @@ export async function finalizedRoutes(app: FastifyInstance) {
         brand: { select: { id: true, name: true, code: true, logoUrl: true } },
         category: { select: { id: true, name: true, code: true } },
         supplier: { select: { id: true, name: true, code: true } },
+        stockByLoc: {
+          include: {
+            location: {
+              select: { id: true, code: true, name: true, country: true, sortOrder: true, active: true },
+            },
+          },
+        },
       },
     });
 
     if (!product) {
       return reply.code(404).send({ error: "Product not found" });
     }
+
+    // Reshape per-location stock for the storefront — only active locations,
+    // sorted, missing combinations omitted (storefront treats absence as 0).
+    const stockByLocation = product.stockByLoc
+      .filter((s) => s.location.active)
+      .sort((a, b) => a.location.sortOrder - b.location.sortOrder || a.location.name.localeCompare(b.location.name))
+      .map((s) => ({
+        locationId: s.location.id,
+        code: s.location.code,
+        name: s.location.name,
+        country: s.location.country,
+        quantity: s.quantity,
+      }));
 
     // Fetch IC mapping via raw SQL
     let icMapping = null;
@@ -520,6 +540,7 @@ export async function finalizedRoutes(app: FastifyInstance) {
       priceWithTax,
       currency: product.currency,
       stock: product.stock,
+      stockByLocation,
       weight: product.weight,
       status: product.status,
       brand: product.brand,

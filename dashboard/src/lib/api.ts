@@ -896,7 +896,81 @@ export interface FinalizedStats {
 
 export interface FinalizedDetail extends Omit<FinalizedProduct, 'icMapping'> {
   icMapping: IcMappingDetail[] | null;
+  stockByLocation?: Array<{
+    locationId: number;
+    code: string;
+    name: string;
+    country: string;
+    quantity: number;
+  }>;
 }
+
+// Stock locations (admin-managed warehouses / dropship sources)
+export interface StockLocation {
+  id: number;
+  code: string;
+  name: string;
+  country: string;
+  address: string | null;
+  sortOrder: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const getStockLocations = () =>
+  apiFetch<{ items: StockLocation[]; total: number }>("/api/locations");
+
+export const createStockLocation = (data: {
+  code: string;
+  name: string;
+  country?: string;
+  address?: string | null;
+  sortOrder?: number;
+  active?: boolean;
+}) =>
+  apiFetch<StockLocation>("/api/locations", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const updateStockLocation = (id: number, data: Partial<{
+  code: string;
+  name: string;
+  country: string;
+  address: string | null;
+  sortOrder: number;
+  active: boolean;
+}>) =>
+  apiFetch<StockLocation>(`/api/locations/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+
+export const deleteStockLocation = (id: number) =>
+  apiFetch<{ success: boolean }>(`/api/locations/${id}`, { method: "DELETE" });
+
+export interface ProductStockBreakdown {
+  product: { id: number; articleNo: string; sku: string };
+  items: Array<{
+    locationId: number;
+    code: string;
+    name: string;
+    country: string;
+    sortOrder: number;
+    quantity: number;
+  }>;
+  total: number;
+}
+
+export const getProductStockLocations = (productId: number) =>
+  apiFetch<ProductStockBreakdown>(`/api/finalized/${productId}/stock-locations`);
+
+export const setProductStockLocations = (productId: number, items: Array<{ locationId: number; quantity: number }>) =>
+  apiFetch<{ success: boolean; total: number }>(`/api/finalized/${productId}/stock-locations`, {
+    method: "PUT",
+    body: JSON.stringify({ items }),
+  });
 
 export const getFinalized = (params?: {
   page?: number;

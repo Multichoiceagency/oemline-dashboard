@@ -6,7 +6,7 @@ import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
 import { config } from "./config.js";
 import { logger } from "./lib/logger.js";
-import { disconnectPrisma, validateConnection, ensureNormalizedIndexes, ensureTasksTable, ensureOrdersTable, ensureCategoryExtraColumns } from "./lib/prisma.js";
+import { disconnectPrisma, validateConnection, ensureNormalizedIndexes, ensureTasksTable, ensureOrdersTable, ensureCategoryExtraColumns, ensureStockLocations } from "./lib/prisma.js";
 import { disconnectRedis, redis } from "./lib/redis.js";
 import { ensureProductsIndex } from "./lib/meilisearch.js";
 import { healthRoutes } from "./routes/health.js";
@@ -18,6 +18,7 @@ import { tecdocRoutes } from "./routes/tecdoc.js";
 import { productRoutes } from "./routes/products.js";
 import { brandRoutes } from "./routes/brands.js";
 import { categoryRoutes } from "./routes/categories.js";
+import { stockLocationRoutes } from "./routes/stock-locations.js";
 import { jobRoutes } from "./routes/jobs.js";
 import { storefrontRoutes } from "./routes/storefront.js";
 import { intercarsRoutes } from "./routes/intercars-mapping.js";
@@ -117,6 +118,7 @@ await app.register(taskRoutes, { prefix: "/api" });
 await app.register(pricingAdminRoutes, { prefix: "/api" });
 await app.register(kentekenRoutes, { prefix: "/api" });
 await app.register(orderRoutes, { prefix: "/api" });
+await app.register(stockLocationRoutes, { prefix: "/api" });
 
 app.setErrorHandler((error: Error & { statusCode?: number; issues?: unknown; validation?: unknown }, request, reply) => {
   // Zod validation errors → 400
@@ -204,6 +206,13 @@ try {
     new Promise((_, reject) => setTimeout(() => reject(new Error("ensureCategoryExtraColumns timeout")), 5_000)),
   ]).catch((err) => {
     logger.warn({ err }, "Category extra columns ensure failed or timed out — reorder/description may degrade");
+  });
+
+  await Promise.race([
+    ensureStockLocations(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("ensureStockLocations timeout")), 5_000)),
+  ]).catch((err) => {
+    logger.warn({ err }, "Stock locations ensure failed or timed out — locations feature may degrade");
   });
 
   await ensureBucket().catch((err) => {

@@ -298,6 +298,55 @@ export async function ensureCategoryExtraColumns(): Promise<void> {
   }
 }
 
+/**
+ * Ensure stock_locations + product_stock tables exist. Boot fallback for the
+ * 30s prisma db push window (same pattern as ensureTasksTable). Idempotent —
+ * also seeds two default locations the storefront can render against on first
+ * boot, so the feature works without an admin manually creating rows first.
+ */
+export async function ensureStockLocations(): Promise<void> {
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS stock_locations (
+        id          SERIAL PRIMARY KEY,
+        code        TEXT NOT NULL UNIQUE,
+        name        TEXT NOT NULL,
+        country     TEXT NOT NULL DEFAULT 'NL',
+        address     TEXT,
+        sort_order  INTEGER NOT NULL DEFAULT 0,
+        active      BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS product_stock (
+        id              SERIAL PRIMARY KEY,
+        product_map_id  INTEGER NOT NULL REFERENCES product_maps(id) ON DELETE CASCADE,
+        location_id     INTEGER NOT NULL REFERENCES stock_locations(id) ON DELETE CASCADE,
+        quantity        INTEGER NOT NULL DEFAULT 0,
+        updated_at      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (product_map_id, location_id)
+      )
+    `);
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS product_stock_location_idx ON product_stock(location_id)`,
+    );
+
+    // Seed defaults — only insert if the row is missing.
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO stock_locations (code, name, country, sort_order)
+      VALUES
+        ('nl-warehouse', 'NL — Centraal magazijn', 'NL', 0),
+        ('ic-dropship',   'InterCars — Dropshipping', 'PL', 100)
+      ON CONFLICT (code) DO NOTHING
+    `);
+    logger.info("stock_locations + product_stock ensured");
+  } catch (err) {
+    logger.warn({ err }, "ensureStockLocations failed (non-critical)");
+  }
+}
+
 export async function disconnectPrisma(): Promise<void> {
   await prisma.$disconnect();
 }

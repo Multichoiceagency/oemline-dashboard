@@ -54,6 +54,37 @@ model Brand {
   @@map("brands")
 }
 
+model StockLocation {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique
+  name      String
+  country   String   @default("NL")
+  address   String?
+  sortOrder Int      @default(0) @map("sort_order")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  productStocks ProductStock[]
+
+  @@map("stock_locations")
+}
+
+model ProductStock {
+  id           Int      @id @default(autoincrement())
+  productMapId Int      @map("product_map_id")
+  locationId   Int      @map("location_id")
+  quantity     Int      @default(0)
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  productMap ProductMap    @relation(fields: [productMapId], references: [id], onDelete: Cascade)
+  location   StockLocation @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([productMapId, locationId])
+  @@index([locationId])
+  @@map("product_stock")
+}
+
 model Category {
   id          Int      @id @default(autoincrement())
   name        String
@@ -126,7 +157,8 @@ model ProductMap {
 
   supplier Supplier  @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   brand    Brand     @relation(fields: [brandId], references: [id], onDelete: Cascade)
-  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  category   Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  stockByLoc ProductStock[]
 
   @@unique([supplierId, sku])
   @@index([supplierId, ean])

@@ -10,6 +10,7 @@ import {
   getTecDocLinkagesByNumber,
 } from "@/lib/api";
 import type { FinalizedDetail, VehicleLinkage } from "@/lib/api";
+import StockLocationsEditor from "@/components/stock-locations-editor";
 import { useTranslation } from "@/lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -799,6 +800,19 @@ export default function FinalizedDetailPage() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Per-location stock editor — refetches the parent product so the
+              header stock badge stays in sync after a save. */}
+          <StockLocationsEditor
+            productId={product.id}
+            apiUrl={process.env.NEXT_PUBLIC_API_URL || ""}
+            onSaved={async () => {
+              try {
+                const fresh = await getFinalizedProduct(product.id);
+                setProduct(fresh);
+              } catch { /* non-fatal — local state is already correct */ }
+            }}
+          />
 
           {/* Metadata */}
           <Card>
