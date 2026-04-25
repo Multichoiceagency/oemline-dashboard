@@ -780,12 +780,41 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
         });
 
         if (!quoteResp.ok) {
+          // Capture body for diagnostics — IC returns structured errors
+          // ([{code, details, errorId}]) that we previously discarded.
+          const errBody = await quoteResp.text().catch(() => "");
+          let errCode: string | undefined;
+          let errDetails: string | undefined;
+          try {
+            const parsed = JSON.parse(errBody);
+            const first = Array.isArray(parsed) ? parsed[0] : parsed;
+            errCode = first?.code;
+            errDetails = first?.details;
+          } catch { /* non-JSON body */ }
+
           if (quoteResp.status === 429) {
             const delay = 30_000 * attempt; // 30s, 60s, 90s
             logger.warn({ attempt, delayMs: delay, supplier: this.code }, "IC inventory/quote rate limited (429), backing off");
             await new Promise((r) => setTimeout(r, delay));
+          } else {
+            // Sample first few SKUs so we can correlate the failing batch with our DB.
+            const skuSample = skus.slice(0, 5);
+            logger.warn(
+              {
+                supplier: this.code,
+                status: quoteResp.status,
+                errCode,
+                errDetails,
+                bodySnippet: errBody.slice(0, 400),
+                skuSample,
+                batchSize: skus.length,
+              },
+              "IC inventory/quote returned non-2xx",
+            );
           }
-          throw new Error(`IC inventory/quote returned ${quoteResp.status}`);
+          throw new Error(
+            `IC inventory/quote returned ${quoteResp.status}${errCode ? ` (${errCode}: ${errDetails ?? ""})` : ""}`,
+          );
         }
 
         const quoteData = (await quoteResp.json()) as Array<{

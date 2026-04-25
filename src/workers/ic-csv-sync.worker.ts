@@ -131,6 +131,12 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
   const tokArray = Array.from(allToks);
   let totalUpdated = 0;
 
+  // Cut-off used for the post-loop "zero stale stock" sweep below: any IC-
+  // mapped row not touched after this instant is no longer in today's CSV
+  // (i.e. IC discontinued / out-of-stock'd it). We capture it before the
+  // loop so any clock skew during the long batch run can't exclude rows.
+  const sweepCutoff = new Date();
+
   const BATCH = 500;
   for (let i = 0; i < tokArray.length; i += BATCH) {
     const batch = tokArray.slice(i, i + BATCH);
@@ -162,8 +168,42 @@ export async function processIcCsvSyncJob(job: Job<IcCsvSyncJobData>): Promise<v
     }
   }
 
+  // ── Step 5: Zero stale stock for SKUs no longer in today's CSV ─────────
+  // Without this, products that IC discontinued (or that simply dropped out
+  // of stock everywhere) keep showing their last-known stock value forever
+  // because the targeted UPDATE above only touches SKUs *present* in the CSV.
+  //
+  // Guard: skip the sweep if the CSV looks suspiciously small, so a partial
+  // or corrupted download can't wipe live data. Healthy IC stock CSVs carry
+  // ~480K SKUs; we require at least 100K before zeroing anything out.
+  let staleZeroed = 0;
+  const HEALTHY_MIN_TOKENS = 100_000;
+  if (tokArray.length >= HEALTHY_MIN_TOKENS) {
+    try {
+      staleZeroed = await prisma.$executeRawUnsafe(
+        `UPDATE product_maps
+         SET stock = 0, updated_at = NOW()
+         WHERE ic_sku IS NOT NULL
+           AND status = 'active'
+           AND stock > 0
+           AND updated_at < $1::timestamptz`,
+        sweepCutoff,
+      );
+      logger.info({ staleZeroed, sweepCutoff: sweepCutoff.toISOString() },
+        "Stale-stock sweep: zeroed rows whose ic_sku is not in today's CSV");
+    } catch (err) {
+      logger.warn({ err }, "Stale-stock sweep failed (non-fatal)");
+    }
+  } else {
+    logger.warn(
+      { tokens: tokArray.length, threshold: HEALTHY_MIN_TOKENS },
+      "Skipping stale-stock sweep: CSV too small (likely partial/corrupt)",
+    );
+  }
+
   logger.info({
     totalUpdated,
+    staleZeroed,
     prices: priceMap.size,
     stockProducts: stockMap.size,
     productRows: productRows.length,
