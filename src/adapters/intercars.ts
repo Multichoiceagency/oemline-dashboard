@@ -53,6 +53,12 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
   private accessToken: string | null = null;
   private tokenExpiresAt = 0;
 
+  // SKUs IC has confirmed are no longer valid (ICF201). Populated lazily by
+  // fetchQuoteBatch via binary-split isolation; future calls filter these out
+  // before hitting the API. Cleared on worker restart, which is fine — they
+  // get rediscovered in one round if they're still in our DB.
+  private knownBadSkus = new Set<string>();
+
   constructor(apiUrl: string, apiKey: string, timeout = 30000) {
     super(apiUrl, apiKey, timeout);
 
@@ -759,10 +765,33 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
 
   /**
    * Fetch price/stock for a batch of IC SKUs via /inventory/quote.
-   * Retries up to 3 times: 429 rate-limit waits 30s before retry; other
-   * transient errors (network, timeout, 5xx) wait 5s/10s before retry.
+   *
+   * Retries up to 3× for transient failures (429, 5xx, network). When IC
+   * returns ICF201 ("Valid SKU is required") — meaning at least one SKU in
+   * the batch is no longer in IC's catalog — we binary-split the batch to
+   * isolate the offender(s), cache them in `knownBadSkus`, and return
+   * partial results for the rest. Future calls skip cached-bad SKUs before
+   * even hitting the API, so the 400-storm self-extinguishes after one
+   * pricing-worker pass.
    */
   async fetchQuoteBatch(skus: string[]): Promise<Map<string, { price: number | null; currency: string; stock: number }>> {
+    // Filter out SKUs IC has already told us are invalid this process lifetime.
+    const filtered = skus.filter((s) => !this.knownBadSkus.has(s));
+    const skipped = skus.length - filtered.length;
+    if (skipped > 0) {
+      logger.debug(
+        { supplier: this.code, total: skus.length, sent: filtered.length, skipped },
+        "IC quote: skipped previously-confirmed-bad SKUs",
+      );
+    }
+    if (filtered.length === 0) {
+      return new Map();
+    }
+
+    return this.fetchQuoteBatchInternal(filtered);
+  }
+
+  private async fetchQuoteBatchInternal(skus: string[]): Promise<Map<string, { price: number | null; currency: string; stock: number }>> {
     const lines = skus.map((sku) => ({ sku, quantity: 1 }));
     const quoteUrl = `${this.apiUrl}/inventory/quote`;
 
@@ -796,22 +825,40 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
             const delay = 30_000 * attempt; // 30s, 60s, 90s
             logger.warn({ attempt, delayMs: delay, supplier: this.code }, "IC inventory/quote rate limited (429), backing off");
             await new Promise((r) => setTimeout(r, delay));
-          } else {
-            // Sample first few SKUs so we can correlate the failing batch with our DB.
-            const skuSample = skus.slice(0, 5);
+            throw new Error(`IC inventory/quote returned 429`);
+          }
+
+          // ICF201 = "Valid SKU is required" — at least one SKU in the batch
+          // is no longer in IC's catalog. Skip the retry-the-whole-batch loop
+          // and binary-split to isolate the offender(s).
+          if (errCode === "ICF201") {
             logger.warn(
               {
                 supplier: this.code,
                 status: quoteResp.status,
                 errCode,
                 errDetails,
-                bodySnippet: errBody.slice(0, 400),
-                skuSample,
+                skuSample: skus.slice(0, 5),
                 batchSize: skus.length,
               },
-              "IC inventory/quote returned non-2xx",
+              "IC inventory/quote returned non-2xx (ICF201) — splitting to isolate",
             );
+            return this.splitAndRetry(skus);
           }
+
+          // Other 4xx/5xx — log and let the outer loop retry.
+          logger.warn(
+            {
+              supplier: this.code,
+              status: quoteResp.status,
+              errCode,
+              errDetails,
+              bodySnippet: errBody.slice(0, 400),
+              skuSample: skus.slice(0, 5),
+              batchSize: skus.length,
+            },
+            "IC inventory/quote returned non-2xx",
+          );
           throw new Error(
             `IC inventory/quote returned ${quoteResp.status}${errCode ? ` (${errCode}: ${errDetails ?? ""})` : ""}`,
           );
@@ -868,5 +915,38 @@ export class IntercarsAdapter extends BaseSupplierAdapter {
     }
 
     throw lastErr!;
+  }
+
+  /**
+   * Binary-split a batch that returned ICF201 to isolate the bad SKU(s).
+   * Single-SKU batch that 400s → cache it as known-bad and return empty.
+   * Otherwise → split in half, recurse on each, merge results.
+   */
+  private async splitAndRetry(skus: string[]): Promise<Map<string, { price: number | null; currency: string; stock: number }>> {
+    if (skus.length === 1) {
+      const bad = skus[0];
+      this.knownBadSkus.add(bad);
+      logger.info(
+        { supplier: this.code, sku: bad, knownBadCount: this.knownBadSkus.size },
+        "IC quote: cached confirmed-bad SKU (won't be sent to /inventory/quote again)",
+      );
+      return new Map();
+    }
+    const mid = Math.floor(skus.length / 2);
+    const [left, right] = [skus.slice(0, mid), skus.slice(mid)];
+    // Recurse via internal (skip the knownBadSkus filter — already filtered upstream).
+    const [leftResult, rightResult] = await Promise.all([
+      this.fetchQuoteBatchInternal(left).catch((err) => {
+        logger.warn({ supplier: this.code, err: err.message, half: "left" }, "Split half failed irrecoverably");
+        return new Map<string, { price: number | null; currency: string; stock: number }>();
+      }),
+      this.fetchQuoteBatchInternal(right).catch((err) => {
+        logger.warn({ supplier: this.code, err: err.message, half: "right" }, "Split half failed irrecoverably");
+        return new Map<string, { price: number | null; currency: string; stock: number }>();
+      }),
+    ]);
+    const merged = new Map(leftResult);
+    for (const [k, v] of rightResult) merged.set(k, v);
+    return merged;
   }
 }
