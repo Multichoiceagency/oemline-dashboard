@@ -249,7 +249,7 @@ export async function brandRoutes(app: FastifyInstance) {
 
     // Step 3: Load existing brands and build lookup maps
     const existingBrands = await prisma.brand.findMany({
-      select: { id: true, name: true, code: true, tecdocId: true },
+      select: { id: true, name: true, code: true, tecdocId: true, logoUrl: true },
     });
 
     const existingByTecdocId = new Map<number, (typeof existingBrands)[0]>();
@@ -272,9 +272,14 @@ export async function brandRoutes(app: FastifyInstance) {
       let existing = existingByTecdocId.get(dataSupplierId) ?? existingByName.get(name.toUpperCase());
 
       if (existing) {
-        // Update logo and tecdocId if needed
+        // Update logo and tecdocId if needed. Don't touch a logoUrl that an
+        // admin uploaded manually (i.e. one that doesn't live on TecDoc's
+        // CDN) — those should win over the TecDoc default for that brand.
         const updates: Record<string, unknown> = {};
-        if (logoUrl) updates.logoUrl = logoUrl;
+        const adminUploaded =
+          existing.logoUrl != null &&
+          !existing.logoUrl.includes("digital-assets.tecalliance.services");
+        if (logoUrl && !adminUploaded) updates.logoUrl = logoUrl;
         if (!existing.tecdocId) updates.tecdocId = dataSupplierId;
 
         if (Object.keys(updates).length > 0) {
@@ -306,16 +311,24 @@ export async function brandRoutes(app: FastifyInstance) {
       }
     }
 
-    // Also update logos for brands not in TecDoc's brand list (match by name)
+    // Also update logos for brands not in TecDoc's brand list (match by name).
+    // Manually-uploaded logos live on MinIO — those should win over TecDoc's
+    // because an admin chose them on purpose. Detect by URL host (a TecDoc
+    // logo lives at digital-assets.tecalliance.services).
+    const isManualLogo = (url: string | null) =>
+      !!url && !url.includes("digital-assets.tecalliance.services");
     for (const brand of existingBrands) {
       if (brand.name === "Unknown") continue;
       const match = nameLogoMap.get(brand.name.toUpperCase());
       if (match?.logoUrl && !existingByTecdocId.has(brand.tecdocId ?? -1)) {
         try {
-          const updates: Record<string, unknown> = { logoUrl: match.logoUrl };
+          const updates: Record<string, unknown> = {};
+          if (!isManualLogo(brand.logoUrl)) updates.logoUrl = match.logoUrl;
           if (!brand.tecdocId) updates.tecdocId = match.dataSupplierId;
-          await prisma.brand.update({ where: { id: brand.id }, data: updates });
-          updated++;
+          if (Object.keys(updates).length > 0) {
+            await prisma.brand.update({ where: { id: brand.id }, data: updates });
+            updated++;
+          }
         } catch {
           // skip
         }
