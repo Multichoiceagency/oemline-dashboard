@@ -1011,6 +1011,8 @@ export const pushAllFinalized = (supplierCode?: string) =>
 export interface PricingSettings {
   taxRate: number;
   marginPercentage: number;
+  /** Global discount applied AFTER margin and BEFORE tax. 0 = disabled. */
+  discountPercentage: number;
   currency: string;
   outputApiUrl: string;
   outputApiKey: string;
@@ -1018,13 +1020,14 @@ export interface PricingSettings {
 }
 
 export interface PricingPreview {
-  settings: { taxRate: number; marginPercentage: number };
+  settings: { taxRate: number; marginPercentage: number; discountPercentage: number };
   preview: Array<{
     articleNo: string;
     brand: string;
     description: string;
     basePrice: number;
     withMargin: number;
+    afterDiscount: number;
     withTax: number;
     currency: string;
   }>;

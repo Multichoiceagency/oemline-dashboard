@@ -93,7 +93,11 @@ export async function finalizedRoutes(app: FastifyInstance) {
       const s = await getAllSettings();
       const marginPct = parseFloat(s.margin_percentage ?? "0") / 100;
       const taxRate = parseFloat(s.tax_rate ?? "21") / 100;
-      const multiplier = (1 + marginPct) * (1 + taxRate);
+      const discountPct = parseFloat(s.discount_percentage ?? "0") / 100;
+      // Storefront filter is on retail price (incl. margin, discount, tax),
+      // but the SQL filters on the raw wholesale base — invert the same
+      // pipeline so the cap matches what the user sees.
+      const multiplier = (1 + marginPct) * (1 - discountPct) * (1 + taxRate);
       baseCap = multiplier > 0 ? maxPrice / multiplier : maxPrice;
     }
 
@@ -232,6 +236,7 @@ export async function finalizedRoutes(app: FastifyInstance) {
     const settings = await getAllSettings();
     const taxRate = parseFloat(settings.tax_rate ?? "21") / 100;
     const marginPct = parseFloat(settings.margin_percentage ?? "0") / 100;
+    const discountPct = parseFloat(settings.discount_percentage ?? "0") / 100;
 
     const finalizedItems = items.map((p) => {
       const ic = icMappings.get(p.id);
@@ -239,7 +244,10 @@ export async function finalizedRoutes(app: FastifyInstance) {
       let priceWithMargin: number | null = null;
       let priceWithTax: number | null = null;
       if (basePrice != null) {
-        priceWithMargin = Math.round(basePrice * (1 + marginPct) * 100) / 100;
+        // Pipeline: base × (1 + margin) × (1 - discount) × (1 + tax). The
+        // priceWithMargin field continues to mean "what the customer pays
+        // ex-VAT" so callers don't need to add a separate discount step.
+        priceWithMargin = Math.round(basePrice * (1 + marginPct) * (1 - discountPct) * 100) / 100;
         priceWithTax = Math.round(priceWithMargin * (1 + taxRate) * 100) / 100;
       }
 
@@ -510,16 +518,17 @@ export async function finalizedRoutes(app: FastifyInstance) {
       logger.warn({ err, productId }, "Failed to fetch IC mapping for finalized product");
     }
 
-    // Calculate prices with margin and tax
+    // Calculate prices with margin, global discount, and tax
     const settings = await getAllSettings();
     const taxRate = parseFloat(settings.tax_rate ?? "21") / 100;
     const marginPct = parseFloat(settings.margin_percentage ?? "0") / 100;
+    const discountPct = parseFloat(settings.discount_percentage ?? "0") / 100;
 
     const basePrice = product.price;
     let priceWithMargin: number | null = null;
     let priceWithTax: number | null = null;
     if (basePrice != null) {
-      priceWithMargin = Math.round(basePrice * (1 + marginPct) * 100) / 100;
+      priceWithMargin = Math.round(basePrice * (1 + marginPct) * (1 - discountPct) * 100) / 100;
       priceWithTax = Math.round(priceWithMargin * (1 + taxRate) * 100) / 100;
     }
 

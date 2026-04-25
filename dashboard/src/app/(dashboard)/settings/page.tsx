@@ -25,6 +25,7 @@ export default function SettingsPage() {
 
   const [taxRate, setTaxRate] = useState("");
   const [marginPercentage, setMarginPercentage] = useState("");
+  const [discountPercentage, setDiscountPercentage] = useState("");
   const [currency, setCurrency] = useState("");
   const [outputApiUrl, setOutputApiUrl] = useState("");
   const [outputApiKey, setOutputApiKey] = useState("");
@@ -36,6 +37,7 @@ export default function SettingsPage() {
     if (settings) {
       setTaxRate(String(settings.taxRate));
       setMarginPercentage(String(settings.marginPercentage));
+      setDiscountPercentage(String(settings.discountPercentage ?? 0));
       setCurrency(settings.currency);
       setOutputApiUrl(settings.outputApiUrl ?? "");
       setOutputApiKey(settings.outputApiKey ?? "");
@@ -50,6 +52,7 @@ export default function SettingsPage() {
       await updateSettings({
         taxRate: parseFloat(taxRate) || 0,
         marginPercentage: parseFloat(marginPercentage) || 0,
+        discountPercentage: parseFloat(discountPercentage) || 0,
         currency: currency || "EUR",
         outputApiUrl,
         outputApiKey,
@@ -70,8 +73,10 @@ export default function SettingsPage() {
   const basePriceExample = 10;
   const marginPct = parseFloat(marginPercentage) || 0;
   const taxPct = parseFloat(taxRate) || 0;
+  const discountPct = parseFloat(discountPercentage) || 0;
   const withMargin = basePriceExample * (1 + marginPct / 100);
-  const withTax = withMargin * (1 + taxPct / 100);
+  const afterDiscount = withMargin * (1 - discountPct / 100);
+  const withTax = afterDiscount * (1 + taxPct / 100);
 
   if (loading) {
     return (
@@ -140,6 +145,30 @@ export default function SettingsPage() {
               </div>
             </div>
 
+            {/* Global discount — applies to every finalized product, after
+                margin and before VAT. Set to 0 to disable. */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium flex items-center gap-2">
+                <Percent className="h-4 w-4 text-muted-foreground" />
+                Globale korting
+              </label>
+              <p className="text-xs text-muted-foreground">
+                Procentuele korting op alle finalized producten (na marge, voor BTW). Stel op 0 om uit te schakelen.
+              </p>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  value={discountPercentage}
+                  onChange={(e) => setDiscountPercentage(e.target.value)}
+                  min={0}
+                  max={99}
+                  step={0.5}
+                  className="w-32"
+                />
+                <span className="text-sm text-muted-foreground">%</span>
+              </div>
+            </div>
+
             {/* Currency */}
             <div className="space-y-2">
               <label className="text-sm font-medium">{t("settings.currency")}</label>
@@ -187,6 +216,18 @@ export default function SettingsPage() {
                 <Badge variant="secondary">{t("settings.withMargin")}</Badge>
                 <span className="font-mono">{currency} {withMargin.toFixed(2)}</span>
               </div>
+              {discountPct > 0 && (
+                <>
+                  <div className="flex items-center gap-2 text-sm">
+                    <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-muted-foreground">− {discountPct}% globale korting</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm">
+                    <Badge variant="secondary">Na korting</Badge>
+                    <span className="font-mono">{currency} {afterDiscount.toFixed(2)}</span>
+                  </div>
+                </>
+              )}
               <div className="flex items-center gap-2 text-sm">
                 <ArrowRight className="h-4 w-4 text-muted-foreground" />
                 <span className="text-muted-foreground">+ {taxPct}% BTW</span>
