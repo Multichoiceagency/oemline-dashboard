@@ -33,6 +33,7 @@ import {
   Car,
   Receipt,
   Warehouse,
+  Boxes,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useTranslation } from "@/lib/i18n";
@@ -60,6 +61,7 @@ const navItems: NavItem[] = [
   { href: "/unmatched", labelKey: "nav.unmatched", icon: AlertTriangle },
   { href: "/tasks", labelKey: "nav.tasks", icon: KanbanSquare, badge: "openBugs" as const },
   { href: "/finalized", labelKey: "nav.finalized", icon: ShoppingCart },
+  { href: "/voorraad", labelKey: "nav.stockManagement", icon: Boxes },
   { href: "/locations", labelKey: "nav.locations", icon: Warehouse },
   { href: "/analytics", labelKey: "nav.analytics", icon: BarChart3 },
   { href: "/storage", labelKey: "nav.storage", icon: HardDrive },

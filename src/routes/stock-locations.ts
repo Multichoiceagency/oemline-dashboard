@@ -24,6 +24,25 @@ const setStockSchema = z.object({
   })).max(100),
 });
 
+const stockListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  q: z.string().optional(),
+  brand: z.string().optional(),
+  filter: z.enum(["all", "low", "out", "in", "unset"]).default("all"),
+  // Sort: total (default), article, brand, updated. asc/desc via sortDir.
+  sortBy: z.enum(["total", "article", "brand", "updated"]).default("total"),
+  sortDir: z.enum(["asc", "desc"]).default("desc"),
+});
+
+const stockBulkSchema = z.object({
+  updates: z.array(z.object({
+    productMapId: z.number().int(),
+    locationId: z.number().int(),
+    quantity: z.number().int().min(0).max(1_000_000),
+  })).min(1).max(500),
+});
+
 export async function stockLocationRoutes(app: FastifyInstance) {
   // ── Locations CRUD ─────────────────────────────────────────────────────
 
@@ -163,6 +182,175 @@ export async function stockLocationRoutes(app: FastifyInstance) {
 
     logger.info({ productId, locations: body.items.length, total }, "Per-location stock updated");
     return { success: true, total };
+  });
+
+  // ── Stock management overview (all products) ──────────────────────────
+
+  /**
+   * Bulk-list endpoint for the stock management page. Returns products with
+   * an `items` array of per-location quantities (every active location is
+   * always present, missing rows surface as 0). Caller filters server-side
+   * on stock state ("low", "out", "in", "unset") and pages the results.
+   */
+  app.get("/stock", async (request) => {
+    const q = stockListQuerySchema.parse(request.query);
+
+    // Pull active locations once — every product row is reshaped against
+    // this list so the UI sees a stable column order.
+    const locations = await prisma.stockLocation.findMany({
+      where: { active: true },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      select: { id: true, code: true, name: true, country: true, sortOrder: true },
+    });
+
+    // Build the product-side filter. We always require status=active so
+    // soft-deleted rows don't bloat counts.
+    const where: Record<string, unknown> = { status: "active" };
+    if (q.brand) where.brand = { code: q.brand };
+    if (q.q) {
+      const term = q.q.trim();
+      if (term) {
+        where.OR = [
+          { articleNo: { contains: term, mode: "insensitive" } },
+          { sku: { contains: term, mode: "insensitive" } },
+          { ean: { contains: term, mode: "insensitive" } },
+          { description: { contains: term, mode: "insensitive" } },
+        ];
+      }
+    }
+    if (q.filter === "low") where.stock = { gt: 0, lte: 5 };
+    else if (q.filter === "out") where.stock = { lte: 0 };
+    else if (q.filter === "in") where.stock = { gt: 0 };
+    else if (q.filter === "unset") where.stockByLoc = { none: {} };
+
+    const orderBy: Record<string, "asc" | "desc">[] =
+      q.sortBy === "article" ? [{ articleNo: q.sortDir }] :
+      q.sortBy === "brand"   ? [{ brandId: q.sortDir }] :
+      q.sortBy === "updated" ? [{ updatedAt: q.sortDir }] :
+                                [{ stock: q.sortDir }];
+
+    const skip = (q.page - 1) * q.limit;
+    const [items, total] = await Promise.all([
+      prisma.productMap.findMany({
+        where,
+        skip,
+        take: q.limit,
+        orderBy,
+        include: {
+          brand: { select: { id: true, name: true, code: true } },
+          stockByLoc: { select: { locationId: true, quantity: true } },
+        },
+      }),
+      prisma.productMap.count({ where }),
+    ]);
+
+    const result = items.map((p) => {
+      const byLoc = new Map(p.stockByLoc.map((s) => [s.locationId, s.quantity]));
+      const hasManual = p.stockByLoc.length > 0;
+      // Mirror the same fallback the per-product GET applies: when no manual
+      // allocation exists, attribute the aggregate to the lowest-sortOrder
+      // location. Keeps the table consistent with the per-product editor.
+      const locItems = locations.map((loc) => ({
+        locationId: loc.id,
+        code: loc.code,
+        name: loc.name,
+        country: loc.country,
+        quantity: byLoc.get(loc.id) ?? 0,
+      }));
+      if (!hasManual && p.stock && p.stock > 0 && locItems.length > 0) {
+        locItems[0] = { ...locItems[0], quantity: p.stock };
+      }
+      const computedTotal = locItems.reduce((s, i) => s + i.quantity, 0);
+      return {
+        id: p.id,
+        articleNo: p.articleNo,
+        sku: p.sku,
+        description: p.description,
+        imageUrl: p.imageUrl,
+        ean: p.ean,
+        aggregateStock: p.stock,
+        hasManualAllocation: hasManual,
+        computedTotal,
+        brand: p.brand,
+        locations: locItems,
+        updatedAt: p.updatedAt,
+      };
+    });
+
+    return {
+      items: result,
+      locations,
+      total,
+      page: q.page,
+      limit: q.limit,
+      totalPages: Math.max(1, Math.ceil(total / q.limit)),
+    };
+  });
+
+  /**
+   * Bulk update per-location stock across many products in one round-trip.
+   * Each update upserts a (productMapId, locationId) row; after all upserts
+   * we recompute and write the per-product aggregate stock so listings,
+   * search and the storefront stay in sync.
+   */
+  app.post("/stock/bulk", async (request) => {
+    const body = stockBulkSchema.parse(request.body);
+
+    // Collect distinct product/location pairs and per-product totals to
+    // recompute aggregates without re-querying every row in the DB.
+    const productIds = [...new Set(body.updates.map((u) => u.productMapId))];
+    const locationIds = [...new Set(body.updates.map((u) => u.locationId))];
+
+    const [products, locations] = await Promise.all([
+      prisma.productMap.findMany({
+        where: { id: { in: productIds } },
+        select: { id: true },
+      }),
+      prisma.stockLocation.findMany({
+        where: { id: { in: locationIds } },
+        select: { id: true },
+      }),
+    ]);
+    const validProducts = new Set(products.map((p) => p.id));
+    const validLocations = new Set(locations.map((l) => l.id));
+    const invalid = body.updates.filter(
+      (u) => !validProducts.has(u.productMapId) || !validLocations.has(u.locationId),
+    );
+    if (invalid.length > 0) {
+      return { error: "Invalid productMapId or locationId in updates", invalid };
+    }
+
+    const upserts = body.updates.map((u) =>
+      prisma.productStock.upsert({
+        where: { productMapId_locationId: { productMapId: u.productMapId, locationId: u.locationId } },
+        create: { productMapId: u.productMapId, locationId: u.locationId, quantity: u.quantity },
+        update: { quantity: u.quantity },
+      }),
+    );
+    await prisma.$transaction(upserts);
+
+    // Recompute aggregates for every touched product. A single SQL is faster
+    // than per-row updates when many rows change at once.
+    if (productIds.length > 0) {
+      const placeholders = productIds.map((_, i) => `$${i + 1}::int`).join(",");
+      await prisma.$executeRawUnsafe(
+        `UPDATE product_maps pm
+         SET stock = COALESCE((
+           SELECT SUM(ps.quantity)::int
+           FROM product_stock ps
+           WHERE ps.product_map_id = pm.id
+         ), 0),
+             updated_at = NOW()
+         WHERE pm.id IN (${placeholders})`,
+        ...productIds,
+      );
+    }
+
+    logger.info(
+      { products: productIds.length, locations: locationIds.length, rows: body.updates.length },
+      "Stock bulk update applied",
+    );
+    return { success: true, rowsTouched: body.updates.length, productsRecalculated: productIds.length };
   });
 
   /**

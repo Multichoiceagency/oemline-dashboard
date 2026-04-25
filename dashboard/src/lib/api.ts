@@ -972,6 +972,63 @@ export const setProductStockLocations = (productId: number, items: Array<{ locat
     body: JSON.stringify({ items }),
   });
 
+// Bulk stock-management overview (all products × locations)
+export interface StockManagementRow {
+  id: number;
+  articleNo: string;
+  sku: string;
+  description: string;
+  imageUrl: string | null;
+  ean: string | null;
+  aggregateStock: number | null;
+  hasManualAllocation: boolean;
+  computedTotal: number;
+  brand: { id: number; name: string; code: string } | null;
+  locations: Array<{
+    locationId: number;
+    code: string;
+    name: string;
+    country: string;
+    quantity: number;
+  }>;
+  updatedAt: string;
+}
+
+export interface StockManagementResponse {
+  items: StockManagementRow[];
+  locations: Array<{ id: number; code: string; name: string; country: string; sortOrder: number }>;
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export const getStockManagement = (params?: {
+  page?: number;
+  limit?: number;
+  q?: string;
+  brand?: string;
+  filter?: "all" | "low" | "out" | "in" | "unset";
+  sortBy?: "total" | "article" | "brand" | "updated";
+  sortDir?: "asc" | "desc";
+}) => {
+  const qs = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") qs.set(k, String(v));
+    });
+  }
+  return apiFetch<StockManagementResponse>(`/api/stock?${qs}`);
+};
+
+export const bulkUpdateStock = (
+  updates: Array<{ productMapId: number; locationId: number; quantity: number }>,
+) =>
+  apiFetch<{ success: boolean; rowsTouched: number; productsRecalculated: number }>("/api/stock/bulk", {
+    method: "POST",
+    body: JSON.stringify({ updates }),
+  });
+
 export const getFinalized = (params?: {
   page?: number;
   limit?: number;
