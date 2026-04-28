@@ -290,6 +290,29 @@ export default function BrandDetailPage() {
                       <Tag className="h-12 w-12 text-muted-foreground/30" />
                     </div>
                   )}
+                  {/* Inline upload — saves a click vs entering edit mode */}
+                  <input
+                    ref={logoFileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleLogoUpload}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-3 gap-2"
+                    onClick={() => logoFileRef.current?.click()}
+                    disabled={uploading}
+                  >
+                    {uploading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4" />
+                    )}
+                    {brand.logoUrl ? "Vervang logo" : "Upload logo"}
+                  </Button>
                 </div>
               )}
             </CardContent>

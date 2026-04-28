@@ -282,6 +282,29 @@ export default function ProductDetailPage() {
                       ))}
                     </div>
                   )}
+                  {/* Inline upload — saves a click vs entering edit mode */}
+                  <input
+                    ref={imageFileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleImageUpload}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-3 gap-2"
+                    onClick={() => imageFileRef.current?.click()}
+                    disabled={uploading}
+                  >
+                    {uploading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4" />
+                    )}
+                    {product.imageUrl ? "Vervang afbeelding" : "Upload afbeelding"}
+                  </Button>
                 </div>
               )}
             </CardContent>
