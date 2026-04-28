@@ -104,19 +104,24 @@ export async function uploadRoutes(app: FastifyInstance) {
     const objectName = generateObjectName("products", file.filename);
     const url = await uploadFile(buffer, objectName, file.mimetype);
 
-    // Update product: add to images array and set as primary if none exists
+    // Add the new upload to the gallery and promote it to primary —
+    // the dashboard upload button sits on the main image preview, so
+    // users expect the visible image to change after clicking Upload.
+    // Older behaviour kept the previous imageUrl when one existed,
+    // which made the optimistic frontend update silently revert on
+    // the next page-load.
     const currentImages = (product.images as string[] | null) ?? [];
-    const updatedImages = [...currentImages, url];
+    const updatedImages = currentImages.includes(url) ? currentImages : [...currentImages, url];
 
     await prisma.productMap.update({
       where: { id: productId },
       data: {
         images: updatedImages,
-        imageUrl: product.imageUrl || url,
+        imageUrl: url,
       },
     });
 
-    return { url, objectName, images: updatedImages };
+    return { url, objectName, images: updatedImages, imageUrl: url };
   });
 
   // Upload a brand logo

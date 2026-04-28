@@ -18,6 +18,21 @@ const manualItemSchema = z.object({
   image: z.string().optional(),
 });
 
+/**
+ * Optional vehicle snapshot captured from the dashboard's RDW kenteken
+ * lookup. Only the plate is required — the rest mirrors KentekenResponse
+ * but is sent collapsed so we can persist it on the WC meta + order
+ * note without re-fetching RDW server-side.
+ */
+const manualVehicleSchema = z.object({
+  plate: z.string().min(1).max(20),
+  brand: z.string().max(200).optional().nullable(),
+  model: z.string().max(200).optional().nullable(),
+  year: z.number().int().nullable().optional(),
+  fuel: z.string().max(100).optional().nullable(),
+  cc: z.number().int().nullable().optional(),
+}).optional();
+
 const manualOrderSchema = z.object({
   customer: z.object({
     firstName: z.string().min(1).max(100),
@@ -31,7 +46,21 @@ const manualOrderSchema = z.object({
   }),
   items: z.array(manualItemSchema).min(1).max(100),
   note: z.string().max(1000).optional(),
+  vehicle: manualVehicleSchema,
 });
+
+function formatVehicleSummary(v: NonNullable<z.infer<typeof manualVehicleSchema>>): string {
+  const parts: string[] = [];
+  if (v.brand) parts.push(v.brand);
+  if (v.model) parts.push(v.model);
+  const meta: string[] = [];
+  if (v.year != null) meta.push(String(v.year));
+  if (v.fuel) meta.push(v.fuel);
+  if (v.cc != null) meta.push(`${v.cc}cc`);
+  const head = parts.join(" ").trim();
+  const tail = meta.length ? ` (${meta.join(", ")})` : "";
+  return `${v.plate}${head ? ` — ${head}${tail}` : ""}`;
+}
 
 const checkoutSchema = z.object({
   cartKey: z.string().min(1),
@@ -208,6 +237,14 @@ export async function orderRoutes(app: FastifyInstance) {
 
     const total = body.items.reduce((s, i) => s + i.price * i.quantity, 0);
 
+    // Prepend the vehicle line to the customer note when the operator
+    // captured a kenteken — keeps it visible to whoever picks the order
+    // without needing to dig into meta_data.
+    const vehicleSummary = body.vehicle ? formatVehicleSummary(body.vehicle) : null;
+    const composedNote = vehicleSummary
+      ? `Kenteken: ${vehicleSummary}${body.note ? `\n\n${body.note}` : ""}`
+      : body.note;
+
     const order = await prisma.order.create({
       data: {
         cartKey: null,
@@ -233,7 +270,7 @@ export async function orderRoutes(app: FastifyInstance) {
           sku: i.sku,
           image: i.image,
         })) as unknown as object,
-        note: body.note,
+        note: composedNote,
       },
     });
 
@@ -269,10 +306,16 @@ export async function orderRoutes(app: FastifyInstance) {
             { key: "articleNo", value: i.articleNo },
           ],
         })),
-        customer_note: body.note,
+        customer_note: composedNote,
         meta_data: [
           { key: "dashboard_order_id", value: String(order.id) },
           { key: "source", value: "manual-dashboard" },
+          ...(body.vehicle
+            ? [
+                { key: "kenteken", value: body.vehicle.plate },
+                { key: "vehicle", value: JSON.stringify(body.vehicle) },
+              ]
+            : []),
         ],
       });
 

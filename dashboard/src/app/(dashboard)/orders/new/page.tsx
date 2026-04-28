@@ -188,7 +188,25 @@ export default function ManualOrderPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const res = await createManualOrder({ customer, items, note: note || undefined });
+      // Capture the kenteken snapshot when the operator looked one up,
+      // so the WC order carries the plate + vehicle info both in the
+      // customer note prefix and in meta_data.
+      const vehiclePayload = vehicle
+        ? {
+            plate: vehicle.plate,
+            brand: vehicle.vehicle.merk || null,
+            model: vehicle.vehicle.handelsbenaming || null,
+            year: vehicle.vehicle.year ?? null,
+            fuel: vehicle.fuel?.brandstof ?? null,
+            cc: vehicle.vehicle.cilinderinhoud ?? null,
+          }
+        : undefined;
+      const res = await createManualOrder({
+        customer,
+        items,
+        note: note || undefined,
+        vehicle: vehiclePayload,
+      });
       setResult({
         orderId: res.orderId,
         wcOrderId: res.wcOrderId,

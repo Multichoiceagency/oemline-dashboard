@@ -1535,10 +1535,20 @@ export interface ManualOrderItem {
   image?: string;
 }
 
+export interface ManualOrderVehicle {
+  plate: string;
+  brand?: string | null;
+  model?: string | null;
+  year?: number | null;
+  fuel?: string | null;
+  cc?: number | null;
+}
+
 export const createManualOrder = (data: {
   customer: OrderCustomer;
   items: ManualOrderItem[];
   note?: string;
+  vehicle?: ManualOrderVehicle;
 }) =>
   apiFetch<{
     ok: boolean; orderId: number; wcOrderId: number;
