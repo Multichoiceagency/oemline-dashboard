@@ -11,6 +11,8 @@ import {
   Flag,
   Link as LinkIcon,
   User,
+  FileDown,
+  Download,
 } from "lucide-react";
 import {
   getTasks,
@@ -50,6 +52,132 @@ const PRIORITY_COLOR: Record<TaskPriority, string> = {
   HIGH: "text-orange-400",
   CRITICAL: "text-red-500",
 };
+
+const TYPE_LABEL: Record<TaskType, string> = {
+  BUG: "Bug",
+  FEATURE: "Feature request",
+  TASK: "Taak",
+};
+
+const STATUS_LABEL: Record<TaskStatus, string> = {
+  OPEN: "Open",
+  IN_PROGRESS: "In behandeling",
+  BLOCKED: "Geblokkeerd",
+  DONE: "Afgerond",
+};
+
+const PRIORITY_LABEL: Record<TaskPriority, string> = {
+  LOW: "Laag",
+  MEDIUM: "Normaal",
+  HIGH: "Hoog",
+  CRITICAL: "Kritiek",
+};
+
+function slugify(input: string): string {
+  return input
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60) || "taak";
+}
+
+function taskToMarkdown(task: Task): string {
+  const created = new Date(task.createdAt).toISOString().slice(0, 10);
+  const updated = new Date(task.updatedAt).toISOString().slice(0, 10);
+  const labels = task.labels.length ? task.labels.map((l) => `\`${l}\``).join(", ") : "_(geen)_";
+  const description = (task.description ?? "").trim() || "_(geen omschrijving toegevoegd)_";
+  const isBug = task.type === "BUG";
+
+  const lines = [
+    `# [${TYPE_LABEL[task.type]}] ${task.title}`,
+    "",
+    "## Metadata",
+    "",
+    `- **Task ID:** #${task.id}`,
+    `- **Type:** ${TYPE_LABEL[task.type]}`,
+    `- **Status:** ${STATUS_LABEL[task.status]}`,
+    `- **Prioriteit:** ${PRIORITY_LABEL[task.priority]}`,
+    `- **Assignee:** ${task.assignee ?? "_(niet toegewezen)_"}`,
+    `- **Reporter:** ${task.reporter ?? "_(onbekend)_"}`,
+    `- **Labels:** ${labels}`,
+    `- **Gerelateerde URL / pad:** ${task.relatedUrl ? `\`${task.relatedUrl}\`` : "_(geen)_"}`,
+    `- **Aangemaakt:** ${created}`,
+    `- **Laatst gewijzigd:** ${updated}`,
+    "",
+    "## Omschrijving",
+    "",
+    description,
+    "",
+    "## Fix-plan voor Claude Code",
+    "",
+    "> Plak dit bestand in Claude Code en vraag om het probleem te fixen. Vul onderstaande punten waar mogelijk aan voordat je start.",
+    "",
+    isBug ? "### Reproductiestappen" : "### Context",
+    "",
+    isBug
+      ? "1. ...\n2. ...\n3. ..."
+      : "Beschrijf het doel en de scope van deze wijziging.",
+    "",
+    isBug ? "### Verwacht gedrag" : "### Gewenst resultaat",
+    "",
+    "_(beschrijven)_",
+    "",
+    isBug ? "### Daadwerkelijk gedrag" : "### Acceptatiecriteria",
+    "",
+    isBug ? "_(beschrijven)_" : "- [ ] ...\n- [ ] ...",
+    "",
+    "### Vermoedelijke oorzaak / aanpak",
+    "",
+    "_(optioneel — eerste hypothese)_",
+    "",
+    "### Te wijzigen bestanden",
+    "",
+    "- `path/naar/bestand.ts` — _(reden)_",
+    "",
+    "### Verificatie",
+    "",
+    "- [ ] `npm run build` slaagt",
+    "- [ ] `npm test` slaagt",
+    "- [ ] Handmatig getest in de UI",
+    "",
+  ];
+
+  return lines.join("\n");
+}
+
+function downloadFile(filename: string, content: string, mime = "text/markdown;charset=utf-8") {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadTaskMarkdown(task: Task) {
+  const filename = `task-${task.id}-${slugify(task.title)}.md`;
+  downloadFile(filename, taskToMarkdown(task));
+}
+
+function downloadAllTasksMarkdown(tasks: Task[]) {
+  if (tasks.length === 0) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const header = [
+    `# Taken export — ${today}`,
+    "",
+    `Totaal: **${tasks.length}** taken`,
+    "",
+    "---",
+    "",
+  ].join("\n");
+  const body = tasks.map(taskToMarkdown).join("\n\n---\n\n");
+  downloadFile(`taken-export-${today}.md`, header + body);
+}
 
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -137,9 +265,21 @@ export default function TasksPage() {
             Kanban board voor bugs, feature requests en taken — sleep een kaart naar een andere kolom om status te wijzigen.
           </p>
         </div>
-        <Button onClick={() => setShowCreate(true)} className="gap-2">
-          <Plus className="h-4 w-4" /> Nieuwe taak
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => downloadAllTasksMarkdown(filtered)}
+            disabled={filtered.length === 0}
+            className="gap-2"
+            title="Genereer één .md met alle (gefilterde) taken"
+          >
+            <FileDown className="h-4 w-4" /> Alle taken als .md
+          </Button>
+          <Button onClick={() => setShowCreate(true)} className="gap-2">
+            <Plus className="h-4 w-4" /> Nieuwe taak
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -233,16 +373,29 @@ export default function TasksPage() {
                           )}
                           {task.relatedUrl && <LinkIcon className="h-3 w-3 shrink-0" />}
                         </div>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(task.id);
-                          }}
-                          className="opacity-0 group-hover:opacity-100 hover:text-destructive"
-                          aria-label="Verwijder taak"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              downloadTaskMarkdown(task);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 hover:text-primary"
+                            aria-label="Download taak als .md"
+                            title="Download als .md voor Claude Code"
+                          >
+                            <Download className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDelete(task.id);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 hover:text-destructive"
+                            aria-label="Verwijder taak"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -451,11 +604,26 @@ function TaskDialog({
             </div>
           )}
 
-          <div className="flex items-center justify-end gap-2 pt-2">
-            <Button type="button" variant="ghost" onClick={onClose}>Annuleren</Button>
-            <Button type="submit" disabled={saving}>
-              {saving ? "Opslaan..." : isEdit ? "Opslaan" : "Aanmaken"}
-            </Button>
+          <div className="flex items-center justify-between gap-2 pt-2">
+            <div>
+              {isEdit && task && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => downloadTaskMarkdown(task)}
+                  className="gap-2"
+                  title="Genereer .md voor Claude Code om dit probleem te fixen"
+                >
+                  <Download className="h-4 w-4" /> Download .md
+                </Button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="ghost" onClick={onClose}>Annuleren</Button>
+              <Button type="submit" disabled={saving}>
+                {saving ? "Opslaan..." : isEdit ? "Opslaan" : "Aanmaken"}
+              </Button>
+            </div>
           </div>
         </form>
       </div>
