@@ -256,6 +256,28 @@ function parseArticleInformationResponse(
       }
     }
 
+    // Diederichs DVSE returns Quantity/Value as a *stock-class indicator*
+    // not as an exact count: 1, 10, 100, 1000, 10000, 100000, 1000000 are
+    // category buckets meaning "≥ that many in stock". A live sample of
+    // 800 Diederichs rows showed 99.9% land on a pure power of 10 — which
+    // is statistically impossible for real inventory.
+    //
+    // Treat the supplier feed as a binary in-stock signal:
+    //   - totalStock === 0   → 0 (out of stock, trustworthy)
+    //   - totalStock ≥ 10 and is a power of 10 → 1 (in stock, exact unknown)
+    //   - any other value (e.g. 4, 7, 23) → keep as-is — those are the
+    //     real warehouse quantities that occasionally slip through.
+    // The downstream UI shows "X op voorraad" only when X > 1, so a
+    // value of 1 reads as a generic "Op voorraad" badge without
+    // misrepresenting the real count.
+    const looksLikeStockClass =
+      totalStock >= 10 &&
+      Number.isInteger(totalStock) &&
+      Math.pow(10, Math.round(Math.log10(totalStock))) === totalStock;
+    if (looksLikeStockClass) {
+      totalStock = 1;
+    }
+
     // Extract best price from Prices array
     // PriceCode meanings vary per supplier; pick the first price with a positive Value
     let bestPrice: number | null = null;
