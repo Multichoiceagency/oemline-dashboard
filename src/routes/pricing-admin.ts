@@ -706,4 +706,42 @@ export async function pricingAdminRoutes(app: FastifyInstance) {
       })),
     };
   });
+
+  /**
+   * One-shot cleanup: clamp Diederichs stock-class indicators (pure
+   * powers of 10 ≥ 10) to a binary in-stock value of 1. The DVSE feed
+   * returns "≥ N in stock" buckets, not literal counts, but the SOAP
+   * adapter trusted them as exact quantities. The src/adapters/diederichs.ts
+   * fix prevents future writes; this endpoint cleans up the rows already
+   * written. Idempotent — re-runs no-op once data is fixed.
+   */
+  app.post("/admin/migrations/clamp-diederichs-stock", async () => {
+    const start = Date.now();
+    const beforeRow = await prisma.$queryRaw<{ pow10_count: bigint }[]>`
+      SELECT COUNT(*)::bigint AS pow10_count
+      FROM product_maps pm
+      JOIN suppliers s ON s.id = pm.supplier_id
+      WHERE LOWER(s.code) = 'diederichs'
+        AND pm.stock IS NOT NULL
+        AND pm.stock >= 10
+        AND pm.stock = POWER(10, ROUND(LOG(pm.stock)::numeric)::integer)
+    `;
+    const before = Number(beforeRow[0]?.pow10_count ?? 0);
+
+    const result = await prisma.$executeRawUnsafe(`
+      UPDATE product_maps
+      SET stock = 1
+      WHERE supplier_id IN (SELECT id FROM suppliers WHERE LOWER(code) = 'diederichs')
+        AND stock IS NOT NULL
+        AND stock >= 10
+        AND stock = POWER(10, ROUND(LOG(stock)::numeric)::integer)
+    `);
+
+    return {
+      ok: true,
+      suspectRowsBefore: before,
+      rowsUpdated: result,
+      durationMs: Date.now() - start,
+    };
+  });
 }

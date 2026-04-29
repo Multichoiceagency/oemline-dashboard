@@ -11,9 +11,9 @@
 --
 -- Real low-volume inventory values (4, 7, 23, etc.) fall through unchanged.
 
-UPDATE "ProductMap"
+UPDATE product_maps
 SET stock = 1
-WHERE supplier_id IN (SELECT id FROM "Supplier" WHERE LOWER(code) = 'diederichs')
+WHERE supplier_id IN (SELECT id FROM suppliers WHERE LOWER(code) = 'diederichs')
   AND stock IS NOT NULL
   AND stock >= 10
   AND stock = POWER(10, ROUND(LOG(stock)::numeric)::integer);
